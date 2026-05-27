@@ -1,0 +1,12 @@
+[tools]
+go = "1.25"
+"go:github.com/ynny-github/agent-sandbox/agent-sandbox" = "v0.1.0"
+node = "22.19"
+python = "3.12"
+usage = "2.2.2"
+uv = "0.8"
+yarn = "1.22"
+
+[env]
+_.path = ['{{config_root}}/node_modules/.bin', '{{config_root}}/bin']
+_.python.venv = { path = ".venv", create = true }

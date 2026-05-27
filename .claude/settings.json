@@ -1,0 +1,50 @@
+{
+  "attribution": {
+    "commit": ""
+  },
+  "permissions": {
+    "defaultMode": "default",
+    "allow": [
+      "Agent",
+      "AskUserQuestion",
+      "CronCreate",
+      "CronDelete",
+      "CronList",
+      "Edit",
+      "EnterPlanMode",
+      "EnterWorktree",
+      "ExitPlanMode",
+      "ExitWorktree",
+      "Glob",
+      "Grep",
+      "ListMcpResourcesTool",
+      "LSP",
+      "NotebookEdit",
+      "PowerShell",
+      "Read",
+      "ReadMcpResourceTool",
+      "SendMessage",
+      "Skill",
+      "TaskCreate",
+      "TaskGet",
+      "TaskList",
+      "TaskOutput",
+      "TaskStop",
+      "TaskUpdate",
+      "TeamCreate",
+      "TeamDelete",
+      "TodoWrite",
+      "ToolSearch",
+      "WebFetch",
+      "WebSearch",
+      "Write"
+    ]
+  },
+  "enableMcpJsonServers": ["agent-sandbox"],
+  "env": {
+    "GIT_AUTHOR_NAME": "Claude Code",
+    "GIT_COMMITTER_NAME": "Claude Code",
+    "GIT_AUTHOR_EMAIL": "noreply@anthropic.com",
+    "GIT_COMMITTER_EMAIL": "noreply@anthropic.com"
+  }
+}

@@ -1,0 +1,16 @@
+# common
+tmp/
+
+# python
+.venv/
+.pytest_cache/
+
+# javascript / typescript
+node_modules/
+
+# claude
+.claude/settings.local.json
+
+# nono
+nono.json
+nono-yolo.json

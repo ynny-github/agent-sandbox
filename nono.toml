@@ -1,0 +1,56 @@
+extends = "default"
+
+[meta]
+name = "interactive"
+
+[workdir]
+access = "read"
+
+[groups]
+include = [
+  "claude_code_macos",
+  "claude_code_linux",
+  "user_caches_macos",
+  "claude_cache_linux",
+  "node_runtime",
+  "rust_runtime",
+  "python_runtime",
+  "vscode_macos",
+  "vscode_linux",
+  "nix_runtime",
+  "git_config",
+  "unlink_protection",
+]
+
+[filesystem]
+allow = [
+  "~/go",
+  "~/.claude",
+  "~/.local/share/claude",
+  "~/.local/state/claude",
+  "~/.local/state/mise",
+  "~/.local/share/mise",
+  "~/Library/Application Support",
+  "~/.docker"
+]
+allow_file = [
+  "~/.claude.json",
+  "~/.claude.lock",
+  "~/.claude.json.lock",
+]
+
+read = [
+    "~/.orbstack"
+]
+
+[environment]
+allow_vars = [
+  "PATH",
+  "HOME",
+  "TERM",
+  "LANG",
+  "LC_ALL",
+  "USER",
+  "__MISE*",
+  "MISE*",
+]

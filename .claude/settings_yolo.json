@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "defaultMode": "bypassPermissions",
+    "deny": ["Bash", "Monitor"]
+  },
+  "env": {
+    "YOLO_MODE": 1
+  }
+}

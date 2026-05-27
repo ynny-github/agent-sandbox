@@ -1,0 +1,32 @@
+  [server]
+  output_dir = "./tmp/agent-sandbox"
+
+  [sandbox]
+  build_context = "./docker/sandbox"
+  dockerfile = "Dockerfile"
+  image = "sandbox:0.1.0"
+  proxy_config = "./docker/3proxy/3proxy.cfg"
+
+  [allow_patterns]
+  patterns = [
+    "git *",
+    "go *",
+  ]
+
+  [deny_patterns]
+  patterns = [
+    "go run *",
+  ]
+
+  [container]
+  env_passthrough = [
+    "YOLO_MODE"
+  ]
+
+  [nono]
+  config      = "nono.toml"
+  yolo_config = "nono-yolo.toml"
+  output_dir  = ""
+
+  [claude]
+  yolo_settings = ".claude/settings_yolo.json"

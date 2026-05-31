@@ -67,16 +67,6 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return runLightweightServe(cfg)
 	}
 
-	if cfg.Nono.Config == "" {
-		return fmt.Errorf("[nono] config not set in agent-sandbox.toml")
-	}
-
-	nonoProfile := nonoProfileName(cfg.Nono.Config)
-	nonoYoloProfile := nonoProfile
-	if cfg.Nono.YoloConfig != "" {
-		nonoYoloProfile = nonoProfileName(cfg.Nono.YoloConfig)
-	}
-
 	dockerCli, err := command.NewDockerCli(
 		command.WithOutputStream(os.Stderr),
 		command.WithErrorStream(os.Stderr),
@@ -114,7 +104,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("sandbox project: %w", err)
 	}
 
-	composeExecutor := executor.NewComposeExecutor(dockerCli, project, nonoProfile, nonoYoloProfile)
+	composeExecutor := executor.NewComposeExecutor(dockerCli, project)
 
 	server := newCommandRouterServer(cfg, serveDependencies{
 		containerRunner: composeExecutor,

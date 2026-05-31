@@ -39,7 +39,7 @@ func runSandboxPrune(cmd *cobra.Command, args []string) error {
 	}
 
 	// nil project: CleanStale only uses dockerCLI, not the project.
-	ex := executor.NewComposeExecutor(dockerCli, nil, "", "")
+	ex := executor.NewComposeExecutor(dockerCli, nil)
 
 	cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cleanCancel()

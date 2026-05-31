@@ -387,22 +387,14 @@ output_dir = "/tmp/out"
 func TestLoad_Nono_Loaded(t *testing.T) {
 	path := writeToml(t, validBase+`
 [nono]
-config      = "nono.toml"
-yolo_config = "nono-yolo.toml"
-output_dir  = "/tmp/nono-out"
+profile = "nono.json"
 `)
 	cfg, err := config.Load(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Nono.Config != "nono.toml" {
-		t.Errorf("Nono.Config = %q, want nono.toml", cfg.Nono.Config)
-	}
-	if cfg.Nono.YoloConfig != "nono-yolo.toml" {
-		t.Errorf("Nono.YoloConfig = %q, want nono-yolo.toml", cfg.Nono.YoloConfig)
-	}
-	if cfg.Nono.OutputDir != "/tmp/nono-out" {
-		t.Errorf("Nono.OutputDir = %q, want /tmp/nono-out", cfg.Nono.OutputDir)
+	if cfg.Nono.Profile != "nono.json" {
+		t.Errorf("Nono.Profile = %q, want nono.json", cfg.Nono.Profile)
 	}
 }
 
@@ -412,38 +404,7 @@ func TestLoad_Nono_OmittedIsEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Nono.Config != "" {
-		t.Errorf("Nono.Config = %q, want empty", cfg.Nono.Config)
-	}
-	if cfg.Nono.YoloConfig != "" {
-		t.Errorf("Nono.YoloConfig = %q, want empty", cfg.Nono.YoloConfig)
-	}
-	if cfg.Nono.OutputDir != "" {
-		t.Errorf("Nono.OutputDir = %q, want empty", cfg.Nono.OutputDir)
-	}
-}
-
-func TestLoad_Claude_Loaded(t *testing.T) {
-	path := writeToml(t, validBase+`
-[claude]
-yolo_settings = ".claude/settings_yolo.json"
-`)
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.Claude.YoloSettings != ".claude/settings_yolo.json" {
-		t.Errorf("Claude.YoloSettings = %q, want .claude/settings_yolo.json", cfg.Claude.YoloSettings)
-	}
-}
-
-func TestLoad_Claude_OmittedIsEmpty(t *testing.T) {
-	path := writeToml(t, validBase)
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.Claude.YoloSettings != "" {
-		t.Errorf("Claude.YoloSettings = %q, want empty", cfg.Claude.YoloSettings)
+	if cfg.Nono.Profile != "" {
+		t.Errorf("Nono.Profile = %q, want empty", cfg.Nono.Profile)
 	}
 }

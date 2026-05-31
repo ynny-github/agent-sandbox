@@ -1,0 +1,26 @@
+{
+  "environment": {
+    "allow_vars": [
+      "PATH",
+      "HOME",
+      "TERM",
+      "LANG",
+      "LC_ALL",
+      "USER",
+      "__MISE*",
+      "MISE*"
+    ]
+  },
+  "extends": "claude",
+  "filesystem": {
+    "allow": ["~/.docker"],
+    "read": ["~/.orbstack", "~/.taskgate"],
+    "deny": ["./secrets"]
+  },
+  "meta": {
+    "name": "custom claude"
+  },
+  "groups": {
+    "include": ["go_runtime"]
+  }
+}

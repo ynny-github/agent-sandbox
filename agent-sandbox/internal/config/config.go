@@ -15,7 +15,6 @@ type Config struct {
 	DenyPatterns  DenyPatternsConfig  `toml:"deny_patterns"`
 	Container     ContainerConfig     `toml:"container"`
 	Nono          NonoConfig          `toml:"nono"`
-	Claude        ClaudeConfig        `toml:"claude"`
 }
 
 type ServerConfig struct {
@@ -44,13 +43,7 @@ type DenyPatternsConfig struct {
 }
 
 type NonoConfig struct {
-	Config     string `toml:"config"`
-	YoloConfig string `toml:"yolo_config"`
-	OutputDir  string `toml:"output_dir"`
-}
-
-type ClaudeConfig struct {
-	YoloSettings string `toml:"yolo_settings"`
+	Profile string `toml:"profile"`
 }
 
 func Load(path string) (*Config, error) {

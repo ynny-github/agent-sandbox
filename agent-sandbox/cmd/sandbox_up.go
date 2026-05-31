@@ -69,7 +69,7 @@ func runSandboxUp(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("sandbox project: %w", err)
 	}
 
-	composeExecutor := executor.NewComposeExecutor(dockerCli, project, "", "")
+	composeExecutor := executor.NewComposeExecutor(dockerCli, project)
 
 	checkCtx, checkCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer checkCancel()

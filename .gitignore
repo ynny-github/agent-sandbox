@@ -10,7 +10,3 @@ node_modules/
 
 # claude
 .claude/settings.local.json
-
-# nono
-nono.json
-nono-yolo.json

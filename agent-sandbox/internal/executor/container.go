@@ -6,9 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strconv"
 	"strings"
-	"time"
 
 	composetypes "github.com/compose-spec/compose-go/v2/types"
 	"github.com/docker/cli/cli"
@@ -28,20 +26,16 @@ type CleanResult struct {
 }
 
 type ComposeExecutor struct {
-	dockerCLI       command.Cli
-	project         *composetypes.Project
-	nonoProfile     string
-	nonoYoloProfile string
-	readyCh         chan struct{}
-	readyErr        error
+	dockerCLI command.Cli
+	project   *composetypes.Project
+	readyCh   chan struct{}
+	readyErr  error
 }
 
-func NewComposeExecutor(dockerCLI command.Cli, project *composetypes.Project, nonoProfile, nonoYoloProfile string) *ComposeExecutor {
+func NewComposeExecutor(dockerCLI command.Cli, project *composetypes.Project) *ComposeExecutor {
 	return &ComposeExecutor{
-		dockerCLI:       dockerCLI,
-		project:         project,
-		nonoProfile:     nonoProfile,
-		nonoYoloProfile: nonoYoloProfile,
+		dockerCLI: dockerCLI,
+		project:   project,
 	}
 }
 
@@ -177,18 +171,11 @@ func (e *ComposeExecutor) ApplyNetworkPolicy(ctx context.Context) error {
 }
 
 func (e *ComposeExecutor) RunContainer(ctx context.Context, serviceName, cmd string, env []string, stdout, stderr io.Writer) (int, error) {
-	return e.runContainerCommand(ctx, serviceName, buildNonoCommand(ctx, cmd, e.activeNonoProfile()), env, stdout, stderr)
+	return e.runContainerCommand(ctx, serviceName, strings.Fields(cmd), env, stdout, stderr)
 }
 
 func (e *ComposeExecutor) RunContainerDirect(ctx context.Context, serviceName, cmd string, env []string, stdout, stderr io.Writer) (int, error) {
 	return e.runContainerCommand(ctx, serviceName, strings.Fields(cmd), env, stdout, stderr)
-}
-
-func (e *ComposeExecutor) activeNonoProfile() string {
-	if os.Getenv("YOLO_MODE") == "1" {
-		return e.nonoYoloProfile
-	}
-	return e.nonoProfile
 }
 
 func (e *ComposeExecutor) runContainerCommand(ctx context.Context, serviceName string, commandTokens []string, env []string, stdout, stderr io.Writer) (int, error) {
@@ -224,17 +211,3 @@ func (e *ComposeExecutor) runContainerCommand(ctx context.Context, serviceName s
 	return exitCode, nil
 }
 
-func buildNonoCommand(ctx context.Context, cmd, profile string) []string {
-	tokens := strings.Fields(cmd)
-	nonoTokens := append([]string{"nono", "-s", "run", "--profile", profile, "--allow-cwd", "--"}, tokens...)
-
-	deadline, ok := ctx.Deadline()
-	if !ok {
-		return nonoTokens
-	}
-	secs := int(time.Until(deadline).Seconds()) - 1
-	if secs < 1 {
-		secs = 1
-	}
-	return append([]string{"timeout", strconv.Itoa(secs)}, nonoTokens...)
-}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/gitutil"
 )
 
 var claudeCmd = &cobra.Command{
@@ -56,7 +57,14 @@ func runClaude(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("nono not found in PATH: %w", err)
 	}
 
-	nonoArgs := append([]string{"nono", "run", "--profile", cfg.Nono.Profile, "claude", "--disallowed-tools", "Bash,Monitor"}, claudeArgs...)
+	nonoArgs := []string{"nono", "run", "--profile", cfg.Nono.Profile}
+	if cwd, err := os.Getwd(); err == nil {
+		if mainGit, ok := gitutil.DetectWorktreeGitDir(cwd); ok {
+			nonoArgs = append(nonoArgs, "--allow", mainGit)
+		}
+	}
+	nonoArgs = append(nonoArgs, "claude", "--disallowed-tools", "Bash,Monitor")
+	nonoArgs = append(nonoArgs, claudeArgs...)
 
 	if err := syscall.Exec(nonoPath, nonoArgs, os.Environ()); err != nil {
 		return fmt.Errorf("exec nono: %w", err)

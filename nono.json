@@ -8,14 +8,20 @@
       "LC_ALL",
       "USER",
       "__MISE*",
-      "MISE*"
+      "MISE*",
+      "GITHUB_MCP_ACCESS_TOKEN"
     ]
   },
   "extends": "claude",
   "filesystem": {
-    "allow": ["~/.docker"],
-    "read": ["~/.orbstack", "~/.taskgate"],
-    "deny": ["./secrets"]
+    "bypass_protection": ["~/.docker", "~/.ssh"],
+    "read": [
+      "~/.orbstack",
+      "~/.taskgate",
+      "~/.docker",
+      "~/.local/share/mise",
+      "~/.ssh"
+    ]
   },
   "meta": {
     "name": "custom claude"

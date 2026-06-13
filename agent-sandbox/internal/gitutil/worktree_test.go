@@ -91,6 +91,34 @@ func TestDetectWorktreeGitDir_NoDotGit(t *testing.T) {
 	}
 }
 
+func TestDetectWorktreeGitDir_Subdirectory(t *testing.T) {
+	base := t.TempDir()
+	mainGit := filepath.Join(base, "repo", ".git")
+	if err := os.MkdirAll(mainGit, 0755); err != nil {
+		t.Fatal(err)
+	}
+	gitdir := filepath.Join(mainGit, "worktrees", "feat")
+
+	worktreeDir := filepath.Join(base, "worktree")
+	subDir := filepath.Join(worktreeDir, "src", "pkg")
+	if err := os.MkdirAll(subDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	content := "gitdir: " + gitdir + "\n"
+	if err := os.WriteFile(filepath.Join(worktreeDir, ".git"), []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Run detection from two levels deep inside the worktree
+	got, ok := gitutil.DetectWorktreeGitDir(subDir)
+	if !ok {
+		t.Fatal("ok = false, want true")
+	}
+	if got != mainGit {
+		t.Errorf("got = %q, want %q", got, mainGit)
+	}
+}
+
 func TestDetectWorktreeGitDir_ShallowGitdir(t *testing.T) {
 	dir := t.TempDir()
 	// gitdir = "/foo" → filepath.Dir(filepath.Dir("/foo")) = "/"  → must return false

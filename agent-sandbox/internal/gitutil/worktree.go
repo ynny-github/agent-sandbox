@@ -6,14 +6,29 @@ import (
 	"strings"
 )
 
-// DetectWorktreeGitDir returns the main .git directory path when cwd is a
-// git worktree, and ("", false) otherwise or on any error.
+// DetectWorktreeGitDir returns the main .git directory path when cwd (or any
+// of its ancestors) is a git worktree, and ("", false) otherwise or on any error.
 func DetectWorktreeGitDir(cwd string) (string, bool) {
-	dotGit := filepath.Join(cwd, ".git")
-	fi, err := os.Stat(dotGit)
-	if err != nil || !fi.Mode().IsRegular() {
-		return "", false
+	dir := cwd
+	for {
+		dotGit := filepath.Join(dir, ".git")
+		fi, err := os.Stat(dotGit)
+		if err == nil {
+			if !fi.Mode().IsRegular() {
+				// .git is a directory → ordinary repo, not a worktree
+				return "", false
+			}
+			return parseWorktreeGitFile(dotGit, dir)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false
+		}
+		dir = parent
 	}
+}
+
+func parseWorktreeGitFile(dotGit, dir string) (string, bool) {
 	data, err := os.ReadFile(dotGit)
 	if err != nil {
 		return "", false
@@ -25,14 +40,11 @@ func DetectWorktreeGitDir(cwd string) (string, bool) {
 	}
 	gitdir := strings.TrimSpace(line[len(prefix):])
 	if !filepath.IsAbs(gitdir) {
-		gitdir = filepath.Join(cwd, gitdir)
+		gitdir = filepath.Join(dir, gitdir)
 	}
 	// gitdir = <main>/.git/worktrees/<name> → up 2 levels = <main>/.git
 	mainGit := filepath.Dir(filepath.Dir(filepath.Clean(gitdir)))
 	if mainGit == "." || mainGit == "/" {
-		return "", false
-	}
-	if si, err := os.Stat(mainGit); err != nil || !si.IsDir() {
 		return "", false
 	}
 	return mainGit, true

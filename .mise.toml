@@ -1,6 +1,6 @@
 [tools]
 go = "1.25"
-"go:github.com/ynny-github/agent-sandbox/agent-sandbox" = "v0.1.0"
+"go:github.com/ynny-github/agent-sandbox/agent-sandbox" = "v0.5.2"
 node = "22.19"
 python = "3.12"
 usage = "2.2.2"

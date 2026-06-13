@@ -21,7 +21,7 @@ func Route(cmd string, allowPatterns, denyPatterns []string) string {
 
 func matchPattern(pattern, cmd string) bool {
 	var b strings.Builder
-	b.WriteString("^")
+	b.WriteString("(?s)^")
 	for _, r := range pattern {
 		if r == '*' {
 			b.WriteString(".*")

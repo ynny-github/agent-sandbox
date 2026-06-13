@@ -107,3 +107,11 @@ func TestRoute_EmptyDenyPatterns_BehaviorUnchanged(t *testing.T) {
 		t.Errorf("got %q, want host", got)
 	}
 }
+
+func TestRoute_MultilineCommitMessage_MatchesHost(t *testing.T) {
+	// git commit -m with embedded newlines must still route to host
+	cmd := "git commit -m \"fix bug\n\nMore details here\""
+	if got := router.Route(cmd, []string{"git *"}, nil); got != "host" {
+		t.Errorf("got %q, want host", got)
+	}
+}

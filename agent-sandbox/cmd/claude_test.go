@@ -51,3 +51,13 @@ func TestBuildNonoArgs_NonoNotInPath(t *testing.T) {
 		t.Fatal("expected error when nono not in PATH, got nil")
 	}
 }
+
+func TestRunDebug_MissingConfig(t *testing.T) {
+	orig := configPath
+	configPath = "/nonexistent/path.toml"
+	t.Cleanup(func() { configPath = orig })
+	err := runDebug(debugCmd, nil)
+	if err == nil {
+		t.Fatal("expected config error, got nil")
+	}
+}

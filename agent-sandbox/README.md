@@ -52,6 +52,14 @@ agent-sandbox sandbox-prune
 
 `sandbox-prune` is destructive. It removes every container labeled `cr.managed=true` and every Docker network whose name starts with `cr-sandbox-`.
 
+Check whether external dependencies are usable on this host:
+
+```bash
+agent-sandbox doctor
+```
+
+`doctor` verifies that `nono` is on `PATH`, that `docker compose version` works (which also accepts compatible CLIs like colima or podman that alias `docker`), and that the Docker daemon is reachable. Exits 0 when all checks pass, 1 otherwise.
+
 Register as an MCP tool in your Claude Code settings.
 
 ## How It Works

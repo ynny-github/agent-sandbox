@@ -453,6 +453,21 @@ profile = "nono.json"
 	}
 }
 
+func TestLoad_Nono_SubcommandWhitespace(t *testing.T) {
+	path := writeToml(t, validBase+`
+[nono]
+profile = "nono.json"
+subcommand = " wrap "
+`)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Nono.Subcommand != "wrap" {
+		t.Errorf("Nono.Subcommand = %q, want \"wrap\" (trimmed)", cfg.Nono.Subcommand)
+	}
+}
+
 func TestLoad_Nono_SubcommandInvalid(t *testing.T) {
 	path := writeToml(t, validBase+`
 [nono]

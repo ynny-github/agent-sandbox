@@ -71,6 +71,7 @@ func Load(path string) (*Config, error) {
 	if strings.TrimSpace(cfg.Sandbox.Image) == "" {
 		return nil, ErrMissingSandboxImage
 	}
+	cfg.Nono.Subcommand = strings.TrimSpace(cfg.Nono.Subcommand)
 	if sub := cfg.Nono.Subcommand; sub != "" && sub != "run" && sub != "wrap" {
 		return nil, fmt.Errorf("%w: got %q", ErrInvalidNonoSubcommand, sub)
 	}

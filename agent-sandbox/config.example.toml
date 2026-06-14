@@ -28,3 +28,7 @@ env_passthrough = [
   # "AWS_PROFILE",
   # "HOME",
 ]
+
+[nono]
+# profile = "nono.json"        # nono profile name to use
+# subcommand = "run"           # "run" or "wrap", default: "run"

@@ -166,7 +166,10 @@ func stubRunCommand(t *testing.T, rc func(context.Context, string, ...string) ([
 }
 
 func TestCheckDockerCompose_Fails(t *testing.T) {
-	stubRunCommand(t, func(context.Context, string, ...string) ([]byte, error) {
+	stubRunCommand(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name != "docker" || len(args) < 2 || args[0] != "compose" || args[1] != "version" {
+			t.Errorf("unexpected invocation: %s %v", name, args)
+		}
 		return []byte("docker: command not found"), errors.New("exec: \"docker\": executable file not found in $PATH")
 	})
 

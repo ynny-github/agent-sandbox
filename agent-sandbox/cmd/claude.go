@@ -41,7 +41,11 @@ func buildNonoArgs(cfg *config.Config) (string, []string, error) {
 	if err != nil {
 		return "", nil, fmt.Errorf("nono not found in PATH: %w", err)
 	}
-	args := []string{"nono", "run", "--profile", cfg.Nono.Profile}
+	sub := cfg.Nono.Subcommand
+	if sub == "" {
+		sub = "run"
+	}
+	args := []string{"nono", sub, "--profile", cfg.Nono.Profile}
 	if cwd, err := os.Getwd(); err == nil {
 		if mainGit, ok := gitutil.DetectWorktreeGitDir(cwd); ok {
 			args = append(args, "--allow", mainGit)

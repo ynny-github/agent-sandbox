@@ -72,7 +72,10 @@ func TestBuildNonoArgs_DefaultSubcommandIsRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(args) < 2 || args[1] != "run" {
+	if len(args) < 2 {
+		t.Fatalf("expected at least 2 args, got %v", args)
+	}
+	if args[1] != "run" {
 		t.Errorf("args[1] = %q, want \"run\"; full args: %v", args[1], args)
 	}
 }
@@ -84,7 +87,10 @@ func TestBuildNonoArgs_SubcommandWrap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(args) < 2 || args[1] != "wrap" {
+	if len(args) < 2 {
+		t.Fatalf("expected at least 2 args, got %v", args)
+	}
+	if args[1] != "wrap" {
 		t.Errorf("args[1] = %q, want \"wrap\"; full args: %v", args[1], args)
 	}
 }
@@ -96,7 +102,10 @@ func TestBuildNonoArgs_SubcommandRunExplicit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(args) < 2 || args[1] != "run" {
+	if len(args) < 2 {
+		t.Fatalf("expected at least 2 args, got %v", args)
+	}
+	if args[1] != "run" {
 		t.Errorf("args[1] = %q, want \"run\"; full args: %v", args[1], args)
 	}
 }

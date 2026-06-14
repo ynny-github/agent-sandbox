@@ -19,3 +19,4 @@
 
   [nono]
   profile = "nono.json"
+  subcommand = "wrap"

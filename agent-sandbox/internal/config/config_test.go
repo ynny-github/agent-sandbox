@@ -408,3 +408,59 @@ func TestLoad_Nono_OmittedIsEmpty(t *testing.T) {
 		t.Errorf("Nono.Profile = %q, want empty", cfg.Nono.Profile)
 	}
 }
+
+func TestLoad_Nono_SubcommandWrap(t *testing.T) {
+	path := writeToml(t, validBase+`
+[nono]
+profile = "nono.json"
+subcommand = "wrap"
+`)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Nono.Subcommand != "wrap" {
+		t.Errorf("Nono.Subcommand = %q, want \"wrap\"", cfg.Nono.Subcommand)
+	}
+}
+
+func TestLoad_Nono_SubcommandRun(t *testing.T) {
+	path := writeToml(t, validBase+`
+[nono]
+profile = "nono.json"
+subcommand = "run"
+`)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Nono.Subcommand != "run" {
+		t.Errorf("Nono.Subcommand = %q, want \"run\"", cfg.Nono.Subcommand)
+	}
+}
+
+func TestLoad_Nono_SubcommandOmitted(t *testing.T) {
+	path := writeToml(t, validBase+`
+[nono]
+profile = "nono.json"
+`)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Nono.Subcommand != "" {
+		t.Errorf("Nono.Subcommand = %q, want \"\"", cfg.Nono.Subcommand)
+	}
+}
+
+func TestLoad_Nono_SubcommandInvalid(t *testing.T) {
+	path := writeToml(t, validBase+`
+[nono]
+profile = "nono.json"
+subcommand = "exec"
+`)
+	_, err := config.Load(path)
+	if err == nil {
+		t.Fatal("expected error for invalid subcommand, got nil")
+	}
+}

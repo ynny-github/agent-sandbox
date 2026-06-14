@@ -43,7 +43,8 @@ type DenyPatternsConfig struct {
 }
 
 type NonoConfig struct {
-	Profile string `toml:"profile"`
+	Profile    string `toml:"profile"`
+	Subcommand string `toml:"subcommand"`
 }
 
 func Load(path string) (*Config, error) {
@@ -69,6 +70,9 @@ func Load(path string) (*Config, error) {
 	}
 	if strings.TrimSpace(cfg.Sandbox.Image) == "" {
 		return nil, ErrMissingSandboxImage
+	}
+	if sub := cfg.Nono.Subcommand; sub != "" && sub != "run" && sub != "wrap" {
+		return nil, fmt.Errorf("nono.subcommand must be \"run\" or \"wrap\", got %q", sub)
 	}
 	return &cfg, nil
 }

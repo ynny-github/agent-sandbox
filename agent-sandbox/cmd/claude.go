@@ -33,6 +33,24 @@ func validateClaudePassthrough(args []string) error {
 	return nil
 }
 
+func buildNonoArgs(cfg *config.Config) (string, []string, error) {
+	if cfg.Nono.Profile == "" {
+		return "", nil, fmt.Errorf("[nono] profile not set in agent-sandbox.toml")
+	}
+	nonoPath, err := exec.LookPath("nono")
+	if err != nil {
+		return "", nil, fmt.Errorf("nono not found in PATH: %w", err)
+	}
+	args := []string{"nono", "run", "--profile", cfg.Nono.Profile}
+	if cwd, err := os.Getwd(); err == nil {
+		if mainGit, ok := gitutil.DetectWorktreeGitDir(cwd); ok {
+			args = append(args, "--allow", mainGit)
+		}
+	}
+	args = append(args, "claude", "--disallowed-tools", "Bash,Monitor")
+	return nonoPath, args, nil
+}
+
 func runClaude(cmd *cobra.Command, args []string) error {
 	var claudeArgs []string
 	if dashIdx := cmd.ArgsLenAtDash(); dashIdx >= 0 {
@@ -48,22 +66,10 @@ func runClaude(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("config error: %w", err)
 	}
 
-	if cfg.Nono.Profile == "" {
-		return fmt.Errorf("[nono] profile not set in agent-sandbox.toml")
-	}
-
-	nonoPath, err := exec.LookPath("nono")
+	nonoPath, nonoArgs, err := buildNonoArgs(cfg)
 	if err != nil {
-		return fmt.Errorf("nono not found in PATH: %w", err)
+		return err
 	}
-
-	nonoArgs := []string{"nono", "run", "--profile", cfg.Nono.Profile}
-	if cwd, err := os.Getwd(); err == nil {
-		if mainGit, ok := gitutil.DetectWorktreeGitDir(cwd); ok {
-			nonoArgs = append(nonoArgs, "--allow", mainGit)
-		}
-	}
-	nonoArgs = append(nonoArgs, "claude", "--disallowed-tools", "Bash,Monitor")
 	nonoArgs = append(nonoArgs, claudeArgs...)
 
 	if err := syscall.Exec(nonoPath, nonoArgs, os.Environ()); err != nil {

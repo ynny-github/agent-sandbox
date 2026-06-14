@@ -50,6 +50,45 @@ func TestCheckNono_VersionFails(t *testing.T) {
 	}
 }
 
+func stubRunCommand(t *testing.T, rc func(context.Context, string, ...string) ([]byte, error)) {
+	t.Helper()
+	orig := runCommand
+	runCommand = rc
+	t.Cleanup(func() { runCommand = orig })
+}
+
+func TestCheckDockerCompose_Fails(t *testing.T) {
+	stubRunCommand(t, func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("docker: command not found"), errors.New("exec: \"docker\": executable file not found in $PATH")
+	})
+
+	r := checkDockerCompose(context.Background())
+	if r.ok {
+		t.Fatal("expected NG when docker compose version fails")
+	}
+	if r.hint == "" {
+		t.Error("expected hint on NG")
+	}
+}
+
+func TestCheckDockerCompose_OK(t *testing.T) {
+	stubRunCommand(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name != "docker" || len(args) < 2 || args[0] != "compose" || args[1] != "version" {
+			t.Errorf("unexpected invocation: %s %v", name, args)
+		}
+		return []byte("Docker Compose version v2.27.0\n"), nil
+	})
+
+	r := checkDockerCompose(context.Background())
+	if !r.ok {
+		t.Fatal("expected OK")
+	}
+	joined := strings.Join(r.details, "\n")
+	if !strings.Contains(joined, "Docker Compose version v2.27.0") {
+		t.Errorf("details missing version line: %v", r.details)
+	}
+}
+
 func TestCheckNono_OK(t *testing.T) {
 	stubNonoSeams(t,
 		func(string) (string, error) { return "/usr/bin/nono", nil },

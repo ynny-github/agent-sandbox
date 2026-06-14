@@ -62,6 +62,28 @@ func checkNono(ctx context.Context) checkResult {
 	}
 }
 
+func checkDockerCompose(ctx context.Context) checkResult {
+	const name = "docker compose"
+	out, err := runCommand(ctx, "docker", "compose", "version")
+	if err != nil {
+		details := []string{fmt.Sprintf("error: \"docker compose version\" failed: %v", err)}
+		if trimmed := strings.TrimSpace(string(out)); trimmed != "" {
+			details = append(details, fmt.Sprintf("output: %s", firstLine(trimmed)))
+		}
+		return checkResult{
+			name:    name,
+			ok:      false,
+			details: details,
+			hint:    "install Docker (or a compatible CLI like colima/podman) so that \"docker compose version\" succeeds",
+		}
+	}
+	return checkResult{
+		name:    name,
+		ok:      true,
+		details: []string{firstLine(string(out))},
+	}
+}
+
 func renderResults(w io.Writer, results []checkResult) {
 	failed := 0
 	for _, r := range results {

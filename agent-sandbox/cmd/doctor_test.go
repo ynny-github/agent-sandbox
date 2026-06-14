@@ -50,6 +50,42 @@ func TestCheckNono_VersionFails(t *testing.T) {
 	}
 }
 
+func stubPingDocker(t *testing.T, fn func(context.Context) (string, error)) {
+	t.Helper()
+	orig := pingDockerDaemon
+	pingDockerDaemon = fn
+	t.Cleanup(func() { pingDockerDaemon = orig })
+}
+
+func TestCheckDockerDaemon_Fails(t *testing.T) {
+	stubPingDocker(t, func(context.Context) (string, error) {
+		return "", errors.New("Cannot connect to the Docker daemon")
+	})
+
+	r := checkDockerDaemon(context.Background())
+	if r.ok {
+		t.Fatal("expected NG when ping fails")
+	}
+	if r.hint == "" {
+		t.Error("expected hint on NG")
+	}
+}
+
+func TestCheckDockerDaemon_OK(t *testing.T) {
+	stubPingDocker(t, func(context.Context) (string, error) {
+		return "reachable", nil
+	})
+
+	r := checkDockerDaemon(context.Background())
+	if !r.ok {
+		t.Fatal("expected OK")
+	}
+	joined := strings.Join(r.details, "\n")
+	if !strings.Contains(joined, "reachable") {
+		t.Errorf("details missing 'reachable': %v", r.details)
+	}
+}
+
 func stubRunCommand(t *testing.T, rc func(context.Context, string, ...string) ([]byte, error)) {
 	t.Helper()
 	orig := runCommand

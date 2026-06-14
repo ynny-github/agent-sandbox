@@ -8,6 +8,9 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/docker/cli/cli/command"
+	cliflags "github.com/docker/cli/cli/flags"
 )
 
 type checkResult struct {
@@ -18,14 +21,32 @@ type checkResult struct {
 }
 
 var (
-	lookPath   = exec.LookPath
-	runCommand = defaultRunCommand
+	lookPath         = exec.LookPath
+	runCommand       = defaultRunCommand
+	pingDockerDaemon = defaultPingDockerDaemon
 )
 
 func defaultRunCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+}
+
+func defaultPingDockerDaemon(ctx context.Context) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	cli, err := command.NewDockerCli()
+	if err != nil {
+		return "", err
+	}
+	if err := cli.Initialize(cliflags.NewClientOptions()); err != nil {
+		return "", err
+	}
+	defer cli.Client().Close()
+	if _, err := cli.Client().Ping(ctx); err != nil {
+		return "", err
+	}
+	return "reachable", nil
 }
 
 func firstLine(s string) string {
@@ -81,6 +102,24 @@ func checkDockerCompose(ctx context.Context) checkResult {
 		name:    name,
 		ok:      true,
 		details: []string{firstLine(string(out))},
+	}
+}
+
+func checkDockerDaemon(ctx context.Context) checkResult {
+	const name = "docker daemon"
+	detail, err := pingDockerDaemon(ctx)
+	if err != nil {
+		return checkResult{
+			name:    name,
+			ok:      false,
+			details: []string{fmt.Sprintf("error: %v", err)},
+			hint:    "start the Docker daemon (e.g. open Docker Desktop, or \"colima start\")",
+		}
+	}
+	return checkResult{
+		name:    name,
+		ok:      true,
+		details: []string{detail},
 	}
 }
 

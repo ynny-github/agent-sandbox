@@ -3,8 +3,73 @@ package cmd
 
 import (
 	"bytes"
+	"context"
+	"errors"
+	"strings"
 	"testing"
 )
+
+func stubNonoSeams(t *testing.T, lp func(string) (string, error), rc func(context.Context, string, ...string) ([]byte, error)) {
+	t.Helper()
+	origLookPath := lookPath
+	origRun := runCommand
+	lookPath = lp
+	runCommand = rc
+	t.Cleanup(func() {
+		lookPath = origLookPath
+		runCommand = origRun
+	})
+}
+
+func TestCheckNono_NotInPath(t *testing.T) {
+	stubNonoSeams(t,
+		func(string) (string, error) { return "", errors.New("not found") },
+		func(context.Context, string, ...string) ([]byte, error) { return nil, nil },
+	)
+
+	r := checkNono(context.Background())
+	if r.ok {
+		t.Fatal("expected NG, got OK")
+	}
+	if r.hint == "" {
+		t.Error("expected hint to be set on NG")
+	}
+}
+
+func TestCheckNono_VersionFails(t *testing.T) {
+	stubNonoSeams(t,
+		func(string) (string, error) { return "/usr/bin/nono", nil },
+		func(context.Context, string, ...string) ([]byte, error) {
+			return []byte("boom"), errors.New("exit status 1")
+		},
+	)
+
+	r := checkNono(context.Background())
+	if r.ok {
+		t.Fatal("expected NG when --version fails")
+	}
+}
+
+func TestCheckNono_OK(t *testing.T) {
+	stubNonoSeams(t,
+		func(string) (string, error) { return "/usr/bin/nono", nil },
+		func(context.Context, string, ...string) ([]byte, error) {
+			return []byte("nono 0.4.2\n"), nil
+		},
+	)
+
+	r := checkNono(context.Background())
+	if !r.ok {
+		t.Fatal("expected OK")
+	}
+	joined := strings.Join(r.details, "\n")
+	if !strings.Contains(joined, "path: /usr/bin/nono") {
+		t.Errorf("details missing path: %v", r.details)
+	}
+	if !strings.Contains(joined, "version: nono 0.4.2") {
+		t.Errorf("details missing version: %v", r.details)
+	}
+}
 
 func TestRenderResults_AllOK(t *testing.T) {
 	var buf bytes.Buffer

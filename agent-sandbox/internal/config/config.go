@@ -72,7 +72,7 @@ func Load(path string) (*Config, error) {
 		return nil, ErrMissingSandboxImage
 	}
 	if sub := cfg.Nono.Subcommand; sub != "" && sub != "run" && sub != "wrap" {
-		return nil, fmt.Errorf("nono.subcommand must be \"run\" or \"wrap\", got %q", sub)
+		return nil, fmt.Errorf("%w: got %q", ErrInvalidNonoSubcommand, sub)
 	}
 	return &cfg, nil
 }

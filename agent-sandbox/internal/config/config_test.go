@@ -460,7 +460,7 @@ profile = "nono.json"
 subcommand = "exec"
 `)
 	_, err := config.Load(path)
-	if err == nil {
-		t.Fatal("expected error for invalid subcommand, got nil")
+	if !errors.Is(err, config.ErrInvalidNonoSubcommand) {
+		t.Errorf("err = %v, want ErrInvalidNonoSubcommand", err)
 	}
 }

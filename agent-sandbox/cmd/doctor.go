@@ -3,6 +3,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -11,7 +12,40 @@ import (
 
 	"github.com/docker/cli/cli/command"
 	cliflags "github.com/docker/cli/cli/flags"
+	"github.com/spf13/cobra"
 )
+
+var errDoctorChecksFailed = errors.New("doctor: checks failed")
+
+var doctorCmd = &cobra.Command{
+	Use:           "doctor",
+	Short:         "Check whether agent-sandbox's external dependencies are usable",
+	SilenceErrors: true, // suppress cobra's automatic "Error: ..." print; rootCmd already silences usage
+	RunE:          runDoctor,
+}
+
+func init() {
+	rootCmd.AddCommand(doctorCmd)
+}
+
+func runDoctor(cmd *cobra.Command, args []string) error {
+	ctx := cmd.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	results := []checkResult{
+		checkNono(ctx),
+		checkDockerCompose(ctx),
+		checkDockerDaemon(ctx),
+	}
+	renderResults(cmd.OutOrStdout(), results)
+	for _, r := range results {
+		if !r.ok {
+			return errDoctorChecksFailed
+		}
+	}
+	return nil
+}
 
 type checkResult struct {
 	name    string

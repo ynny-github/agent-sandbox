@@ -50,6 +50,78 @@ func TestCheckNono_VersionFails(t *testing.T) {
 	}
 }
 
+func stubAllSeamsOK(t *testing.T) {
+	t.Helper()
+	stubNonoSeams(t,
+		func(string) (string, error) { return "/usr/bin/nono", nil },
+		func(context.Context, string, ...string) ([]byte, error) { return []byte("nono 0.4.2\n"), nil },
+	)
+	stubPingDocker(t, func(context.Context) (string, error) { return "reachable", nil })
+}
+
+func TestDoctorCmd_Registered(t *testing.T) {
+	for _, c := range rootCmd.Commands() {
+		if c.Name() == "doctor" {
+			return
+		}
+	}
+	t.Fatal("doctor command not registered on rootCmd")
+}
+
+func TestRunDoctor_AllOK(t *testing.T) {
+	stubAllSeamsOK(t)
+
+	var buf bytes.Buffer
+	doctorCmd.SetOut(&buf)
+	t.Cleanup(func() { doctorCmd.SetOut(nil) })
+
+	if err := runDoctor(doctorCmd, nil); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if !strings.Contains(buf.String(), "doctor: all checks passed") {
+		t.Errorf("missing summary in output:\n%s", buf.String())
+	}
+}
+
+func TestRunDoctor_NonoNG(t *testing.T) {
+	stubNonoSeams(t,
+		func(string) (string, error) { return "", errors.New("not found") },
+		func(context.Context, string, ...string) ([]byte, error) { return nil, nil },
+	)
+	stubPingDocker(t, func(context.Context) (string, error) { return "reachable", nil })
+
+	var buf bytes.Buffer
+	doctorCmd.SetOut(&buf)
+	t.Cleanup(func() { doctorCmd.SetOut(nil) })
+
+	err := runDoctor(doctorCmd, nil)
+	if !errors.Is(err, errDoctorChecksFailed) {
+		t.Fatalf("expected errDoctorChecksFailed, got %v", err)
+	}
+	if !strings.Contains(buf.String(), "checks failed") {
+		t.Errorf("missing failure summary:\n%s", buf.String())
+	}
+}
+
+func TestRunDoctor_RunsAllChecksEvenOnEarlyFailure(t *testing.T) {
+	stubNonoSeams(t,
+		func(string) (string, error) { return "", errors.New("not found") },
+		func(context.Context, string, ...string) ([]byte, error) { return []byte("Docker Compose version v2.27.0\n"), nil },
+	)
+	stubPingDocker(t, func(context.Context) (string, error) { return "reachable", nil })
+
+	var buf bytes.Buffer
+	doctorCmd.SetOut(&buf)
+	t.Cleanup(func() { doctorCmd.SetOut(nil) })
+
+	_ = runDoctor(doctorCmd, nil)
+	for _, want := range []string{"nono", "docker compose", "docker daemon"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("output missing section %q:\n%s", want, buf.String())
+		}
+	}
+}
+
 func stubPingDocker(t *testing.T, fn func(context.Context) (string, error)) {
 	t.Helper()
 	orig := pingDockerDaemon

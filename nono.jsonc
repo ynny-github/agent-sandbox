@@ -9,8 +9,9 @@
       "USER",
       "__MISE*",
       "MISE*",
-      "GITHUB_MCP_ACCESS_TOKEN"
-    ]
+      "GOMODCACHE",
+      "UV_CACHE_DIR",
+    ],
   },
   "extends": "claude",
   "filesystem": {
@@ -20,13 +21,12 @@
       "~/.taskgate",
       "~/.docker",
       "~/.local/share/mise",
-      "~/.ssh"
-    ]
+      "~/.ssh",
+      "~/.config/gh",
+    ],
+    "allow_file": ["/dev/null", "~/.ssh/known_hosts"],
   },
   "meta": {
-    "name": "custom claude"
+    "name": "custom claude",
   },
-  "groups": {
-    "include": ["go_runtime"]
-  }
 }

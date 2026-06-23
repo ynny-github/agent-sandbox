@@ -2,10 +2,7 @@
   "mcpServers": {
     "agent-sandbox": {
       "command": "agent-sandbox",
-      "args": ["command-router"],
-      "env": {
-        "YOLO_MODE": "${YOLO_MODE:-0}"
-      }
+      "args": ["command-router"]
     }
   }
 }

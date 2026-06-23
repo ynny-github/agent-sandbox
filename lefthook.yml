@@ -1,0 +1,4 @@
+commit-msg:
+  commands:
+    validate-title:
+      run: bash .lefthook/commit-msg/validate-title.sh {1}

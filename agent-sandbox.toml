@@ -96,4 +96,3 @@
 
   [nono]
   profile = "nono.jsonc"
-  subcommand = "wrap"

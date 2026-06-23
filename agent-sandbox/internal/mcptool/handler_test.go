@@ -459,6 +459,85 @@ func TestRunCommand_DenyPatternOverridesAllow_RoutesToContainer(t *testing.T) {
 	}
 }
 
+func TestRunCommand_DropPattern_WritesStderrAndExits1(t *testing.T) {
+	dir := t.TempDir()
+	cfg := mcptool.HandlerConfig{
+		OutputDir:    dir,
+		DropPatterns: []string{"rm -rf *"},
+	}
+	session := setupServerWithConfig(t, cfg)
+
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "run_command",
+		Arguments: map[string]any{"command": "rm -rf /tmp/anything"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %v", res.Content)
+	}
+
+	result := parseToolResult(t, res)
+	if result.ExitCode != 1 {
+		t.Errorf("exit_code = %d, want 1", result.ExitCode)
+	}
+	if result.StdoutPath != "" {
+		t.Errorf("stdout_path should be empty, got %q", result.StdoutPath)
+	}
+	if result.StderrPath == "" {
+		t.Fatal("stderr_path should be non-empty for drop")
+	}
+
+	data, readErr := os.ReadFile(result.StderrPath)
+	if readErr != nil {
+		t.Fatalf("read stderr file: %v", readErr)
+	}
+	want := "dropped: command matches drop pattern \"rm -rf *\"\n"
+	if string(data) != want {
+		t.Errorf("stderr file = %q, want %q", string(data), want)
+	}
+}
+
+func TestRunCommand_DropPattern_DoesNotCallContainerRunner(t *testing.T) {
+	dir := t.TempDir()
+	// If the runner is invoked it will write the contamination strings below
+	// to stdout/stderr; the assertions afterwards confirm those strings never
+	// appear, proving the drop branch skipped the runner entirely.
+	runner := &mockRunner{exitCode: 0, stdout: "container ran\n", stderr: "container err\n"}
+	cfg := mcptool.HandlerConfig{
+		OutputDir:       dir,
+		DropPatterns:    []string{"rm -rf *"},
+		ContainerRunner: runner,
+	}
+	session := setupServerWithConfig(t, cfg)
+
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "run_command",
+		Arguments: map[string]any{"command": "rm -rf /tmp/anything"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool error: %v", err)
+	}
+
+	result := parseToolResult(t, res)
+	if result.ExitCode != 1 {
+		t.Errorf("exit_code = %d, want 1", result.ExitCode)
+	}
+	if result.StdoutPath != "" {
+		t.Errorf("stdout_path should be empty (container must not run), got %q", result.StdoutPath)
+	}
+
+	data, readErr := os.ReadFile(result.StderrPath)
+	if readErr != nil {
+		t.Fatalf("read stderr file: %v", readErr)
+	}
+	want := "dropped: command matches drop pattern \"rm -rf *\"\n"
+	if string(data) != want {
+		t.Errorf("stderr file = %q, want %q (container runner must not contribute output)", string(data), want)
+	}
+}
+
 func TestRunCommand_ContainerEnvPassthrough_PassesResolvedEnvToRunner(t *testing.T) {
 	t.Setenv("CR_HANDLER_TEST_VAR", "passedvalue")
 

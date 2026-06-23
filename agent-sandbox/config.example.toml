@@ -22,6 +22,12 @@ patterns = [
   # "go generate *",
 ]
 
+[drop_patterns]
+patterns = [
+  # "rm -rf *",
+  # "sudo *",
+]
+
 [container]
 # shell = "bash"
 env_passthrough = [

@@ -13,6 +13,7 @@ type Config struct {
 	Sandbox       SandboxConfig       `toml:"sandbox"`
 	AllowPatterns AllowPatternsConfig `toml:"allow_patterns"`
 	DenyPatterns  DenyPatternsConfig  `toml:"deny_patterns"`
+	DropPatterns  DropPatternsConfig  `toml:"drop_patterns"`
 	Container     ContainerConfig     `toml:"container"`
 	Nono          NonoConfig          `toml:"nono"`
 }
@@ -39,6 +40,10 @@ type AllowPatternsConfig struct {
 }
 
 type DenyPatternsConfig struct {
+	Patterns []string `toml:"patterns"`
+}
+
+type DropPatternsConfig struct {
 	Patterns []string `toml:"patterns"`
 }
 

@@ -246,6 +246,34 @@ func TestLoad_DenyPatternsOmitted_IsEmpty(t *testing.T) {
 	}
 }
 
+func TestLoad_DropPatterns_Loaded(t *testing.T) {
+	path := writeToml(t, validBase+`
+[drop_patterns]
+patterns = ["rm -rf *", "sudo *"]
+`)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.DropPatterns.Patterns) != 2 {
+		t.Errorf("DropPatterns len = %d, want 2", len(cfg.DropPatterns.Patterns))
+	}
+	if cfg.DropPatterns.Patterns[0] != "rm -rf *" {
+		t.Errorf("DropPatterns[0] = %q, want \"rm -rf *\"", cfg.DropPatterns.Patterns[0])
+	}
+}
+
+func TestLoad_DropPatternsOmitted_IsEmpty(t *testing.T) {
+	path := writeToml(t, validBase)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.DropPatterns.Patterns) != 0 {
+		t.Errorf("DropPatterns = %v, want empty", cfg.DropPatterns.Patterns)
+	}
+}
+
 func TestLoad_Container_Loaded(t *testing.T) {
 	path := writeToml(t, validBase+`
 [container]

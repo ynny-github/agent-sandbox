@@ -21,6 +21,7 @@ type HandlerConfig struct {
 	OutputDir               string
 	AllowPatterns           []string
 	DenyPatterns            []string
+	DropPatterns            []string
 	ContainerRunner         ContainerRunner
 	ContainerEnvPassthrough []string
 }
@@ -40,7 +41,16 @@ func HandleRunCommand(ctx context.Context, cmd string, cfg HandlerConfig) (*mcp.
 	}
 	defer closeFiles()
 
-	if router.Route(cmd, cfg.AllowPatterns, cfg.DenyPatterns) == "container" {
+	decision, matched := router.Route(cmd, cfg.AllowPatterns, cfg.DenyPatterns, cfg.DropPatterns)
+	switch decision {
+	case "drop":
+		fmt.Fprintf(files.Stderr, "dropped: command matches drop pattern %q\n", matched)
+		if closeErr := closeFiles(); closeErr != nil {
+			return errorResult(fmt.Sprintf("output close: %v", closeErr)), nil, nil
+		}
+		return BuildResponse(1, files), nil, nil
+
+	case "container":
 		if cfg.ContainerRunner == nil {
 			fmt.Fprintln(files.Stderr, "no container configured: cannot route command to container")
 			if closeErr := closeFiles(); closeErr != nil {
@@ -68,25 +78,26 @@ func HandleRunCommand(ctx context.Context, cmd string, cfg HandlerConfig) (*mcp.
 			return errorResult(fmt.Sprintf("output close: %v", closeErr)), nil, nil
 		}
 		return BuildResponse(exitCode, files), nil, nil
-	}
 
-	if err := validator.Validate(cmd); err != nil {
-		fmt.Fprintf(files.Stderr, "rejected: %v\n", err)
-		if closeErr := closeFiles(); closeErr != nil {
+	default:
+		if err := validator.Validate(cmd); err != nil {
+			fmt.Fprintf(files.Stderr, "rejected: %v\n", err)
+			if closeErr := closeFiles(); closeErr != nil {
+				return errorResult(fmt.Sprintf("output close: %v", closeErr)), nil, nil
+			}
+			return BuildResponse(1, files), nil, nil
+		}
+
+		exitCode, runErr := executor.RunHost(ctx, cmd, files.Stdout, files.Stderr)
+		closeErr := closeFiles()
+		if runErr != nil {
+			return errorResult(fmt.Sprintf("executor: %v", runErr)), nil, nil
+		}
+		if closeErr != nil {
 			return errorResult(fmt.Sprintf("output close: %v", closeErr)), nil, nil
 		}
-		return BuildResponse(1, files), nil, nil
+		return BuildResponse(exitCode, files), nil, nil
 	}
-
-	exitCode, runErr := executor.RunHost(ctx, cmd, files.Stdout, files.Stderr)
-	closeErr := closeFiles()
-	if runErr != nil {
-		return errorResult(fmt.Sprintf("executor: %v", runErr)), nil, nil
-	}
-	if closeErr != nil {
-		return errorResult(fmt.Sprintf("output close: %v", closeErr)), nil, nil
-	}
-	return BuildResponse(exitCode, files), nil, nil
 }
 
 func resolveEnv(keys []string) []string {

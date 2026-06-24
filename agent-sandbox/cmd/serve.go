@@ -42,6 +42,7 @@ func newCommandRouterServer(cfg *config.Config, deps serveDependencies) *mcp.Ser
 		OutputDir:               cfg.Server.OutputDir,
 		AllowPatterns:           cfg.AllowPatterns.Patterns,
 		DenyPatterns:            cfg.DenyPatterns.Patterns,
+		DropPatterns:            cfg.DropPatterns.Patterns,
 		ContainerRunner:         deps.containerRunner,
 		ContainerEnvPassthrough: cfg.Container.EnvPassthrough,
 	})

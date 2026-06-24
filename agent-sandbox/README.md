@@ -64,6 +64,8 @@ Register as an MCP tool in your Claude Code settings.
 
 ## How It Works
 
-- Commands matching an allow pattern are executed on the **host** (after shell-safety validation)
-- All other commands are routed to the configured **Docker Compose service**
-- Output is always written to separate stdout/stderr files; the MCP response returns file paths and exit code only
+- Commands matching a drop pattern are **refused** — neither the host nor the container runs them; the MCP response carries exit code 1 and a stderr file containing `dropped: command matches drop pattern "<pattern>"`.
+- Commands matching an allow pattern are executed on the **host** (after shell-safety validation).
+- Commands matching a deny pattern, or commands matching nothing, are routed to the configured **Docker Compose service**.
+- Drop wins over deny wins over allow.
+- Output is always written to separate stdout/stderr files; the MCP response returns file paths and exit code only.

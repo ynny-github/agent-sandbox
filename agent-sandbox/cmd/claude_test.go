@@ -65,7 +65,7 @@ func makeFakeNono(t *testing.T) string {
 	return path
 }
 
-func TestBuildNonoArgs_DefaultSubcommandIsRun(t *testing.T) {
+func TestBuildNonoArgs_AlwaysUsesWrap(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{Nono: config.NonoConfig{Profile: "test-profile"}}
 	_, args, err := buildNonoArgs(cfg)
@@ -75,38 +75,11 @@ func TestBuildNonoArgs_DefaultSubcommandIsRun(t *testing.T) {
 	if len(args) < 2 {
 		t.Fatalf("expected at least 2 args, got %v", args)
 	}
-	if args[1] != "run" {
-		t.Errorf("args[1] = %q, want \"run\"; full args: %v", args[1], args)
-	}
-}
-
-func TestBuildNonoArgs_SubcommandWrap(t *testing.T) {
-	makeFakeNono(t)
-	cfg := &config.Config{Nono: config.NonoConfig{Profile: "test-profile", Subcommand: "wrap"}}
-	_, args, err := buildNonoArgs(cfg)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(args) < 2 {
-		t.Fatalf("expected at least 2 args, got %v", args)
+	if args[0] != "nono" {
+		t.Errorf("args[0] = %q, want \"nono\"; full args: %v", args[0], args)
 	}
 	if args[1] != "wrap" {
 		t.Errorf("args[1] = %q, want \"wrap\"; full args: %v", args[1], args)
-	}
-}
-
-func TestBuildNonoArgs_SubcommandRunExplicit(t *testing.T) {
-	makeFakeNono(t)
-	cfg := &config.Config{Nono: config.NonoConfig{Profile: "test-profile", Subcommand: "run"}}
-	_, args, err := buildNonoArgs(cfg)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(args) < 2 {
-		t.Fatalf("expected at least 2 args, got %v", args)
-	}
-	if args[1] != "run" {
-		t.Errorf("args[1] = %q, want \"run\"; full args: %v", args[1], args)
 	}
 }
 

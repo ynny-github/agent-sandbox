@@ -48,8 +48,7 @@ type DropPatternsConfig struct {
 }
 
 type NonoConfig struct {
-	Profile    string `toml:"profile"`
-	Subcommand string `toml:"subcommand"`
+	Profile string `toml:"profile"`
 }
 
 func Load(path string) (*Config, error) {
@@ -75,10 +74,6 @@ func Load(path string) (*Config, error) {
 	}
 	if strings.TrimSpace(cfg.Sandbox.Image) == "" {
 		return nil, ErrMissingSandboxImage
-	}
-	cfg.Nono.Subcommand = strings.TrimSpace(cfg.Nono.Subcommand)
-	if sub := cfg.Nono.Subcommand; sub != "" && sub != "run" && sub != "wrap" {
-		return nil, fmt.Errorf("%w: got %q", ErrInvalidNonoSubcommand, sub)
 	}
 	return &cfg, nil
 }

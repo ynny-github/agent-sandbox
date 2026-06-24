@@ -437,22 +437,8 @@ func TestLoad_Nono_OmittedIsEmpty(t *testing.T) {
 	}
 }
 
-func TestLoad_Nono_SubcommandWrap(t *testing.T) {
-	path := writeToml(t, validBase+`
-[nono]
-profile = "nono.json"
-subcommand = "wrap"
-`)
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.Nono.Subcommand != "wrap" {
-		t.Errorf("Nono.Subcommand = %q, want \"wrap\"", cfg.Nono.Subcommand)
-	}
-}
 
-func TestLoad_Nono_SubcommandRun(t *testing.T) {
+func TestLoad_Nono_LegacySubcommandIgnored(t *testing.T) {
 	path := writeToml(t, validBase+`
 [nono]
 profile = "nono.json"
@@ -462,48 +448,7 @@ subcommand = "run"
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Nono.Subcommand != "run" {
-		t.Errorf("Nono.Subcommand = %q, want \"run\"", cfg.Nono.Subcommand)
-	}
-}
-
-func TestLoad_Nono_SubcommandOmitted(t *testing.T) {
-	path := writeToml(t, validBase+`
-[nono]
-profile = "nono.json"
-`)
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.Nono.Subcommand != "" {
-		t.Errorf("Nono.Subcommand = %q, want \"\"", cfg.Nono.Subcommand)
-	}
-}
-
-func TestLoad_Nono_SubcommandWhitespace(t *testing.T) {
-	path := writeToml(t, validBase+`
-[nono]
-profile = "nono.json"
-subcommand = " wrap "
-`)
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.Nono.Subcommand != "wrap" {
-		t.Errorf("Nono.Subcommand = %q, want \"wrap\" (trimmed)", cfg.Nono.Subcommand)
-	}
-}
-
-func TestLoad_Nono_SubcommandInvalid(t *testing.T) {
-	path := writeToml(t, validBase+`
-[nono]
-profile = "nono.json"
-subcommand = "exec"
-`)
-	_, err := config.Load(path)
-	if !errors.Is(err, config.ErrInvalidNonoSubcommand) {
-		t.Errorf("err = %v, want ErrInvalidNonoSubcommand", err)
+	if cfg.Nono.Profile != "nono.json" {
+		t.Errorf("Profile = %q, want \"nono.json\"", cfg.Nono.Profile)
 	}
 }

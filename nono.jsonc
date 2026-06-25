@@ -8,9 +8,7 @@
       "LC_ALL",
       "USER",
       "__MISE*",
-      "MISE*",
-      "GOMODCACHE",
-      "UV_CACHE_DIR",
+      "MISE*"
     ],
   },
   "extends": "claude",
@@ -29,4 +27,11 @@
   "meta": {
     "name": "custom claude",
   },
+  "groups": {
+    "include": [
+      "go_runtime",
+      "python_runtime"
+    ]
+  }
 }
+

@@ -1,13 +1,13 @@
-  [server]
-  output_dir = "./tmp/agent-sandbox/command-router"
+  [mcp]
+  command_output_dir = "./tmp/agent-sandbox/command-router"
 
-  [sandbox]
+  [sandbox.container]
   build_context = "./docker/sandbox"
   dockerfile = "Dockerfile"
   image = "sandbox:0.1.0"
 
-  [allow_patterns]
-  patterns = [
+  [sandbox.command]
+  allow = [
     "git *",
     "taskgate ai *",
     # gh CLI — restricted to the operations the github MCP exposes:
@@ -26,11 +26,10 @@
     "go *"
   ]
 
-  # Patterns matched here override allow_patterns and route the command to the
-  # sandboxed container instead of the host, so the host working tree / refs /
-  # remotes are not affected by destructive git invocations.
-  [deny_patterns]
-  patterns = [
+  # Patterns matched here are refused — neither the host nor the sandbox runs
+  # them. Use this to block destructive git invocations that the broader
+  # "git *" allow rule would otherwise permit.
+  drop = [
     # Force push — rewrites remote history
     "git push --force*",
     "git push * --force*",

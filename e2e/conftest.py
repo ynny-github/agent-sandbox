@@ -51,24 +51,22 @@ def lightweight_config(tmp_path: Path, output_dir: Path) -> Path:
     config = tmp_path / "agent-sandbox.toml"
     config.write_text(
         f"""
-[server]
-output_dir = {toml_string(output_dir)}
+[mcp]
+command_output_dir = {toml_string(output_dir)}
 
-[sandbox]
+[sandbox.network]
+allow_cidrs = []
+allow_hosts = []
+
+[sandbox.command]
+allow = ["echo *", "printf *"]
+drop = []
+
+[sandbox.container]
 build_context = {toml_string("./docker/sandbox")}
 dockerfile = "Dockerfile"
 image = "e2e"
-allow_cidrs = []
-allow_hosts = []
 external_network = ""
-
-[allow_patterns]
-patterns = ["echo *", "printf *"]
-
-[deny_patterns]
-patterns = []
-
-[container]
 env_passthrough = []
 """.strip()
         + "\n",
@@ -85,24 +83,22 @@ def docker_config(tmp_path: Path, output_dir: Path) -> Path:
     config = tmp_path / "agent-sandbox.toml"
     config.write_text(
         f"""
-[server]
-output_dir = {toml_string(output_dir)}
+[mcp]
+command_output_dir = {toml_string(output_dir)}
 
-[sandbox]
+[sandbox.network]
+allow_cidrs = []
+allow_hosts = []
+
+[sandbox.command]
+allow = ["echo host-*"]
+drop = []
+
+[sandbox.container]
 build_context = {toml_string(REPO_ROOT / "docker" / "sandbox")}
 dockerfile = "Dockerfile"
 image = "e2e"
-allow_cidrs = []
-allow_hosts = []
 external_network = ""
-
-[allow_patterns]
-patterns = ["echo host-*"]
-
-[deny_patterns]
-patterns = []
-
-[container]
 env_passthrough = []
 
 [nono]

@@ -9,42 +9,37 @@ import (
 )
 
 type Config struct {
-	Server        ServerConfig        `toml:"server"`
-	Sandbox       SandboxConfig       `toml:"sandbox"`
-	AllowPatterns AllowPatternsConfig `toml:"allow_patterns"`
-	DenyPatterns  DenyPatternsConfig  `toml:"deny_patterns"`
-	DropPatterns  DropPatternsConfig  `toml:"drop_patterns"`
-	Container     ContainerConfig     `toml:"container"`
-	Nono          NonoConfig          `toml:"nono"`
+	MCP     MCPConfig     `toml:"mcp"`
+	Sandbox SandboxConfig `toml:"sandbox"`
+	Nono    NonoConfig    `toml:"nono"`
 }
 
-type ServerConfig struct {
-	OutputDir string `toml:"output_dir"`
+type MCPConfig struct {
+	CommandOutputDir string `toml:"command_output_dir"`
 }
 
 type SandboxConfig struct {
-	BuildContext    string   `toml:"build_context"`
-	Dockerfile      string   `toml:"dockerfile"`
-	Image           string   `toml:"image"`
-	AllowCIDRs      []string `toml:"allow_cidrs"`
-	AllowHosts      []string `toml:"allow_hosts"`
-	ExternalNetwork string   `toml:"external_network"`
+	Network   NetworkConfig   `toml:"network"`
+	Command   CommandConfig   `toml:"command"`
+	Container ContainerConfig `toml:"container"`
+}
+
+type NetworkConfig struct {
+	AllowCIDRs []string `toml:"allow_cidrs"`
+	AllowHosts []string `toml:"allow_hosts"`
+}
+
+type CommandConfig struct {
+	Allow []string `toml:"allow"`
+	Drop  []string `toml:"drop"`
 }
 
 type ContainerConfig struct {
-	EnvPassthrough []string `toml:"env_passthrough"`
-}
-
-type AllowPatternsConfig struct {
-	Patterns []string `toml:"patterns"`
-}
-
-type DenyPatternsConfig struct {
-	Patterns []string `toml:"patterns"`
-}
-
-type DropPatternsConfig struct {
-	Patterns []string `toml:"patterns"`
+	BuildContext    string   `toml:"build_context"`
+	Dockerfile      string   `toml:"dockerfile"`
+	Image           string   `toml:"image"`
+	ExternalNetwork string   `toml:"external_network"`
+	EnvPassthrough  []string `toml:"env_passthrough"`
 }
 
 type NonoConfig struct {
@@ -63,17 +58,17 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("config: %w", err)
 	}
 
-	if strings.TrimSpace(cfg.Server.OutputDir) == "" {
-		return nil, ErrMissingOutputDir
+	if strings.TrimSpace(cfg.MCP.CommandOutputDir) == "" {
+		return nil, ErrMissingMCPCommandOutputDir
 	}
-	if strings.TrimSpace(cfg.Sandbox.BuildContext) == "" {
-		return nil, ErrMissingSandboxBuildContext
+	if strings.TrimSpace(cfg.Sandbox.Container.BuildContext) == "" {
+		return nil, ErrMissingContainerBuildContext
 	}
-	if strings.TrimSpace(cfg.Sandbox.Dockerfile) == "" {
-		return nil, ErrMissingSandboxDockerfile
+	if strings.TrimSpace(cfg.Sandbox.Container.Dockerfile) == "" {
+		return nil, ErrMissingContainerDockerfile
 	}
-	if strings.TrimSpace(cfg.Sandbox.Image) == "" {
-		return nil, ErrMissingSandboxImage
+	if strings.TrimSpace(cfg.Sandbox.Container.Image) == "" {
+		return nil, ErrMissingContainerImage
 	}
 	return &cfg, nil
 }

@@ -2,7 +2,7 @@ package config
 
 import "errors"
 
-var ErrMissingOutputDir = errors.New("missing required field: server.output_dir")
-var ErrMissingSandboxBuildContext = errors.New("missing required field: sandbox.build_context")
-var ErrMissingSandboxDockerfile = errors.New("missing required field: sandbox.dockerfile")
-var ErrMissingSandboxImage = errors.New("missing required field: sandbox.image")
+var ErrMissingMCPCommandOutputDir = errors.New("missing required field: mcp.command_output_dir")
+var ErrMissingContainerBuildContext = errors.New("missing required field: sandbox.container.build_context")
+var ErrMissingContainerDockerfile = errors.New("missing required field: sandbox.container.dockerfile")
+var ErrMissingContainerImage = errors.New("missing required field: sandbox.container.image")

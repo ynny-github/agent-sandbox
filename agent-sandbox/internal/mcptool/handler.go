@@ -20,7 +20,6 @@ type ContainerRunner interface {
 type HandlerConfig struct {
 	OutputDir               string
 	AllowPatterns           []string
-	DenyPatterns            []string
 	DropPatterns            []string
 	ContainerRunner         ContainerRunner
 	ContainerEnvPassthrough []string
@@ -41,7 +40,7 @@ func HandleRunCommand(ctx context.Context, cmd string, cfg HandlerConfig) (*mcp.
 	}
 	defer closeFiles()
 
-	decision, matched := router.Route(cmd, cfg.AllowPatterns, cfg.DenyPatterns, cfg.DropPatterns)
+	decision, matched := router.Route(cmd, cfg.AllowPatterns, cfg.DropPatterns)
 	switch decision {
 	case "drop":
 		fmt.Fprintf(files.Stderr, "dropped: command matches drop pattern %q\n", matched)

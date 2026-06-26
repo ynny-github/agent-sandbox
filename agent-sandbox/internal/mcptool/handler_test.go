@@ -429,36 +429,6 @@ func TestRunCommand_WithoutTimeout_RunsNaturally(t *testing.T) {
 	}
 }
 
-func TestRunCommand_DenyPatternOverridesAllow_RoutesToContainer(t *testing.T) {
-	dir := t.TempDir()
-	cfg := mcptool.HandlerConfig{
-		OutputDir:       dir,
-		AllowPatterns:   []string{"go *"},
-		DenyPatterns:    []string{"go run *"},
-		ContainerRunner: &mockRunner{exitCode: 0, stdout: "ran in container\n"},
-	}
-	session := setupServerWithConfig(t, cfg)
-
-	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
-		Name:      "run_command",
-		Arguments: map[string]any{"command": "go run main.go"},
-	})
-	if err != nil {
-		t.Fatalf("CallTool error: %v", err)
-	}
-	if res.IsError {
-		t.Fatalf("unexpected tool error: %v", res.Content)
-	}
-
-	result := parseToolResult(t, res)
-	if result.ExitCode != 0 {
-		t.Errorf("exit_code = %d, want 0 (container ran successfully)", result.ExitCode)
-	}
-	if result.StdoutPath == "" {
-		t.Error("stdout_path should be non-empty (container wrote output)")
-	}
-}
-
 func TestRunCommand_DropPattern_WritesStderrAndExits1(t *testing.T) {
 	dir := t.TempDir()
 	cfg := mcptool.HandlerConfig{

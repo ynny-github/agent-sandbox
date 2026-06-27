@@ -89,6 +89,41 @@ func writeSettings(path string, settings map[string]any) error {
 	return nil
 }
 
+// hookInstalledInSettings reports whether, for every matcher in matchers, the
+// settings contain a PreToolUse entry whose hooks include one running command.
+func hookInstalledInSettings(settings map[string]any, command string, matchers []string) bool {
+	for _, matcher := range matchers {
+		if !matcherRunsCommand(settings, matcher, command) {
+			return false
+		}
+	}
+	return true
+}
+
+func matcherRunsCommand(settings map[string]any, matcher, command string) bool {
+	hooks, ok := settings["hooks"].(map[string]any)
+	if !ok {
+		return false
+	}
+	preToolUse, ok := hooks["PreToolUse"].([]any)
+	if !ok {
+		return false
+	}
+	for _, entry := range preToolUse {
+		e, ok := entry.(map[string]any)
+		if !ok || e["matcher"] != matcher {
+			continue
+		}
+		inner, _ := e["hooks"].([]any)
+		for _, h := range inner {
+			if hm, ok := h.(map[string]any); ok && hm["command"] == command {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // ensurePreToolUseHook adds a PreToolUse entry for matcher running command if
 // one is not already present. Returns true if it added an entry.
 func ensurePreToolUseHook(settings map[string]any, matcher, command string) bool {

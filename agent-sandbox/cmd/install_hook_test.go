@@ -77,6 +77,30 @@ func TestRunInstallHookIn_Idempotent(t *testing.T) {
 	}
 }
 
+func TestHookInstalledInSettings(t *testing.T) {
+	both := map[string]any{}
+	ensurePreToolUseHook(both, "Bash", hookCommand)
+	ensurePreToolUseHook(both, "Monitor", hookCommand)
+
+	onlyBash := map[string]any{}
+	ensurePreToolUseHook(onlyBash, "Bash", hookCommand)
+
+	required := []string{"Bash", "Monitor"}
+
+	if !hookInstalledInSettings(both, hookCommand, required) {
+		t.Error("both Bash and Monitor installed: want true")
+	}
+	if hookInstalledInSettings(onlyBash, hookCommand, required) {
+		t.Error("only Bash installed: want false")
+	}
+	if hookInstalledInSettings(map[string]any{}, hookCommand, required) {
+		t.Error("empty settings: want false")
+	}
+	if hookInstalledInSettings(both, "some-other-command", required) {
+		t.Error("different command: want false")
+	}
+}
+
 func TestRunInstallHookIn_PreservesExistingSettings(t *testing.T) {
 	dir := t.TempDir()
 	claudeDir := filepath.Join(dir, ".claude")

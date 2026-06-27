@@ -5,14 +5,10 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"time"
 
-	"github.com/docker/cli/cli/command"
-	cliflags "github.com/docker/cli/cli/flags"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/executor"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/mcptool"
 )
 
@@ -67,47 +63,14 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return runLightweightServe(cfg)
 	}
 
-	dockerCli, err := command.NewDockerCli(
-		command.WithOutputStream(os.Stderr),
-		command.WithErrorStream(os.Stderr),
-	)
+	runner, cleanup, err := newComposeContainerRunner(context.Background(), cfg)
 	if err != nil {
-		return fmt.Errorf("docker cli error: %w", err)
+		return err
 	}
-	if err := dockerCli.Initialize(cliflags.NewClientOptions()); err != nil {
-		return fmt.Errorf("docker cli initialize: %w", err)
-	}
-	defer dockerCli.Client().Close()
-
-	pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if _, err := dockerCli.Client().Ping(pingCtx); err != nil {
-		return fmt.Errorf("docker daemon error: %w", err)
-	}
-
-	detectCtx, detectCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer detectCancel()
-	externalNetwork := executor.DetectProjectNetwork(detectCtx, dockerCli, cfg.Sandbox.Container.ExternalNetwork)
-
-	project, err := executor.NewSandboxProject(
-		os.Getpid(),
-		os.Getuid(),
-		os.Getgid(),
-		cfg.Sandbox.Container.BuildContext,
-		cfg.Sandbox.Container.Dockerfile,
-		cfg.Sandbox.Container.Image,
-		cfg.Sandbox.Network.AllowCIDRs,
-		cfg.Sandbox.Network.AllowHosts,
-		externalNetwork,
-	)
-	if err != nil {
-		return fmt.Errorf("sandbox project: %w", err)
-	}
-
-	composeExecutor := executor.NewComposeExecutor(dockerCli, project)
+	defer cleanup()
 
 	server := newCommandRouterServer(cfg, serveDependencies{
-		containerRunner: composeExecutor,
+		containerRunner: runner,
 	})
 
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {

@@ -39,12 +39,11 @@ func newCommandRouterServer(cfg *config.Config, deps serveDependencies) *mcp.Ser
 	}, nil)
 
 	mcptool.Register(server, mcptool.HandlerConfig{
-		OutputDir:               cfg.Server.OutputDir,
-		AllowPatterns:           cfg.AllowPatterns.Patterns,
-		DenyPatterns:            cfg.DenyPatterns.Patterns,
-		DropPatterns:            cfg.DropPatterns.Patterns,
+		OutputDir:               cfg.MCP.CommandOutputDir,
+		AllowPatterns:           cfg.Sandbox.Command.Allow,
+		DropPatterns:            cfg.Sandbox.Command.Drop,
 		ContainerRunner:         deps.containerRunner,
-		ContainerEnvPassthrough: cfg.Container.EnvPassthrough,
+		ContainerEnvPassthrough: cfg.Sandbox.Container.EnvPassthrough,
 	})
 
 	return server
@@ -88,17 +87,17 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	detectCtx, detectCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer detectCancel()
-	externalNetwork := executor.DetectProjectNetwork(detectCtx, dockerCli, cfg.Sandbox.ExternalNetwork)
+	externalNetwork := executor.DetectProjectNetwork(detectCtx, dockerCli, cfg.Sandbox.Container.ExternalNetwork)
 
 	project, err := executor.NewSandboxProject(
 		os.Getpid(),
 		os.Getuid(),
 		os.Getgid(),
-		cfg.Sandbox.BuildContext,
-		cfg.Sandbox.Dockerfile,
-		cfg.Sandbox.Image,
-		cfg.Sandbox.AllowCIDRs,
-		cfg.Sandbox.AllowHosts,
+		cfg.Sandbox.Container.BuildContext,
+		cfg.Sandbox.Container.Dockerfile,
+		cfg.Sandbox.Container.Image,
+		cfg.Sandbox.Network.AllowCIDRs,
+		cfg.Sandbox.Network.AllowHosts,
 		externalNetwork,
 	)
 	if err != nil {

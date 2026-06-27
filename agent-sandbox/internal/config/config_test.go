@@ -19,10 +19,10 @@ func writeToml(t *testing.T, content string) string {
 }
 
 const validBase = `
-[server]
-output_dir = "/tmp/out"
+[mcp]
+command_output_dir = "/tmp/out"
 
-[sandbox]
+[sandbox.container]
 build_context = "./docker/sandbox"
 dockerfile = "Dockerfile"
 image = "mysandbox"
@@ -30,85 +30,85 @@ image = "mysandbox"
 
 func TestLoad_ValidConfig(t *testing.T) {
 	path := writeToml(t, validBase+`
-[allow_patterns]
-patterns = ["git *", "make *"]
+[sandbox.command]
+allow = ["git *", "make *"]
 `)
 	cfg, err := config.Load(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Server.OutputDir != "/tmp/out" {
-		t.Errorf("OutputDir = %q, want /tmp/out", cfg.Server.OutputDir)
+	if cfg.MCP.CommandOutputDir != "/tmp/out" {
+		t.Errorf("CommandOutputDir = %q, want /tmp/out", cfg.MCP.CommandOutputDir)
 	}
-	if cfg.Sandbox.BuildContext != "./docker/sandbox" {
-		t.Errorf("BuildContext = %q, want ./docker/sandbox", cfg.Sandbox.BuildContext)
+	if cfg.Sandbox.Container.BuildContext != "./docker/sandbox" {
+		t.Errorf("BuildContext = %q, want ./docker/sandbox", cfg.Sandbox.Container.BuildContext)
 	}
-	if cfg.Sandbox.Dockerfile != "Dockerfile" {
-		t.Errorf("Dockerfile = %q, want Dockerfile", cfg.Sandbox.Dockerfile)
+	if cfg.Sandbox.Container.Dockerfile != "Dockerfile" {
+		t.Errorf("Dockerfile = %q, want Dockerfile", cfg.Sandbox.Container.Dockerfile)
 	}
-	if cfg.Sandbox.Image != "mysandbox" {
-		t.Errorf("Image = %q, want mysandbox", cfg.Sandbox.Image)
+	if cfg.Sandbox.Container.Image != "mysandbox" {
+		t.Errorf("Image = %q, want mysandbox", cfg.Sandbox.Container.Image)
 	}
-	if len(cfg.AllowPatterns.Patterns) != 2 {
-		t.Errorf("Patterns len = %d, want 2", len(cfg.AllowPatterns.Patterns))
+	if len(cfg.Sandbox.Command.Allow) != 2 {
+		t.Errorf("Allow len = %d, want 2", len(cfg.Sandbox.Command.Allow))
 	}
 }
 
-func TestLoad_MissingOutputDir(t *testing.T) {
+func TestLoad_MissingMCPCommandOutputDir(t *testing.T) {
 	path := writeToml(t, `
-[sandbox]
+[sandbox.container]
 build_context = "./docker/sandbox"
 dockerfile = "Dockerfile"
 image = "mysandbox"
 `)
 	_, err := config.Load(path)
-	if !errors.Is(err, config.ErrMissingOutputDir) {
-		t.Errorf("err = %v, want ErrMissingOutputDir", err)
+	if !errors.Is(err, config.ErrMissingMCPCommandOutputDir) {
+		t.Errorf("err = %v, want ErrMissingMCPCommandOutputDir", err)
 	}
 }
 
-func TestLoad_MissingSandboxBuildContext(t *testing.T) {
+func TestLoad_MissingContainerBuildContext(t *testing.T) {
 	path := writeToml(t, `
-[server]
-output_dir = "/tmp/out"
+[mcp]
+command_output_dir = "/tmp/out"
 
-[sandbox]
+[sandbox.container]
 dockerfile = "Dockerfile"
 image = "mysandbox"
 `)
 	_, err := config.Load(path)
-	if !errors.Is(err, config.ErrMissingSandboxBuildContext) {
-		t.Errorf("err = %v, want ErrMissingSandboxBuildContext", err)
+	if !errors.Is(err, config.ErrMissingContainerBuildContext) {
+		t.Errorf("err = %v, want ErrMissingContainerBuildContext", err)
 	}
 }
 
-func TestLoad_MissingSandboxDockerfile(t *testing.T) {
+func TestLoad_MissingContainerDockerfile(t *testing.T) {
 	path := writeToml(t, `
-[server]
-output_dir = "/tmp/out"
+[mcp]
+command_output_dir = "/tmp/out"
 
-[sandbox]
+[sandbox.container]
 build_context = "./docker/sandbox"
 image = "mysandbox"
 `)
 	_, err := config.Load(path)
-	if !errors.Is(err, config.ErrMissingSandboxDockerfile) {
-		t.Errorf("err = %v, want ErrMissingSandboxDockerfile", err)
+	if !errors.Is(err, config.ErrMissingContainerDockerfile) {
+		t.Errorf("err = %v, want ErrMissingContainerDockerfile", err)
 	}
 }
 
-func TestLoad_MissingSandboxImage(t *testing.T) {
+func TestLoad_MissingContainerImage(t *testing.T) {
 	path := writeToml(t, `
-[server]
-output_dir = "/tmp/out"
+[mcp]
+command_output_dir = "/tmp/out"
 
-[sandbox]
+[sandbox.container]
 build_context = "./docker/sandbox"
 dockerfile = "Dockerfile"
 `)
 	_, err := config.Load(path)
-	if !errors.Is(err, config.ErrMissingSandboxImage) {
-		t.Errorf("err = %v, want ErrMissingSandboxImage", err)
+	if !errors.Is(err, config.ErrMissingContainerImage) {
+		t.Errorf("err = %v, want ErrMissingContainerImage", err)
 	}
 }
 
@@ -119,56 +119,56 @@ func TestLoad_BlankRequiredFields(t *testing.T) {
 		want    error
 	}{
 		{
-			name: "output_dir whitespace only",
+			name: "command_output_dir whitespace only",
 			content: `
-[server]
-output_dir = "   "
+[mcp]
+command_output_dir = "   "
 
-[sandbox]
+[sandbox.container]
 build_context = "./docker/sandbox"
 dockerfile = "Dockerfile"
 image = "mysandbox"
 `,
-			want: config.ErrMissingOutputDir,
+			want: config.ErrMissingMCPCommandOutputDir,
 		},
 		{
 			name: "build_context whitespace only",
 			content: `
-[server]
-output_dir = "/tmp/out"
+[mcp]
+command_output_dir = "/tmp/out"
 
-[sandbox]
+[sandbox.container]
 build_context = "  "
 dockerfile = "Dockerfile"
 image = "mysandbox"
 `,
-			want: config.ErrMissingSandboxBuildContext,
+			want: config.ErrMissingContainerBuildContext,
 		},
 		{
 			name: "dockerfile whitespace only",
 			content: `
-[server]
-output_dir = "/tmp/out"
+[mcp]
+command_output_dir = "/tmp/out"
 
-[sandbox]
+[sandbox.container]
 build_context = "./docker/sandbox"
 dockerfile = "	"
 image = "mysandbox"
 `,
-			want: config.ErrMissingSandboxDockerfile,
+			want: config.ErrMissingContainerDockerfile,
 		},
 		{
 			name: "image whitespace only",
 			content: `
-[server]
-output_dir = "/tmp/out"
+[mcp]
+command_output_dir = "/tmp/out"
 
-[sandbox]
+[sandbox.container]
 build_context = "./docker/sandbox"
 dockerfile = "Dockerfile"
 image = "  "
 `,
-			want: config.ErrMissingSandboxImage,
+			want: config.ErrMissingContainerImage,
 		},
 	}
 
@@ -183,17 +183,33 @@ image = "  "
 	}
 }
 
-func TestLoad_EmptyAllowPatterns(t *testing.T) {
+func TestLoad_OldKeysRejected(t *testing.T) {
+	path := writeToml(t, `
+[server]
+output_dir = "/tmp/out"
+
+[sandbox]
+build_context = "./docker/sandbox"
+dockerfile = "Dockerfile"
+image = "mysandbox"
+`)
+	_, err := config.Load(path)
+	if !errors.Is(err, config.ErrMissingMCPCommandOutputDir) {
+		t.Errorf("err = %v, want ErrMissingMCPCommandOutputDir (old keys must not satisfy required fields)", err)
+	}
+}
+
+func TestLoad_EmptyAllow(t *testing.T) {
 	path := writeToml(t, validBase+`
-[allow_patterns]
-patterns = []
+[sandbox.command]
+allow = []
 `)
 	cfg, err := config.Load(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(cfg.AllowPatterns.Patterns) != 0 {
-		t.Errorf("Patterns = %v, want empty slice", cfg.AllowPatterns.Patterns)
+	if len(cfg.Sandbox.Command.Allow) != 0 {
+		t.Errorf("Allow = %v, want empty slice", cfg.Sandbox.Command.Allow)
 	}
 }
 
@@ -207,144 +223,103 @@ func TestLoad_FileNotFound(t *testing.T) {
 	}
 }
 
-func TestLoad_AllowPatternsOmitted(t *testing.T) {
+func TestLoad_AllowOmitted(t *testing.T) {
 	path := writeToml(t, validBase)
 	cfg, err := config.Load(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.AllowPatterns.Patterns != nil && len(cfg.AllowPatterns.Patterns) != 0 {
-		t.Errorf("Patterns = %v, want nil or empty", cfg.AllowPatterns.Patterns)
+	if cfg.Sandbox.Command.Allow != nil && len(cfg.Sandbox.Command.Allow) != 0 {
+		t.Errorf("Allow = %v, want nil or empty", cfg.Sandbox.Command.Allow)
 	}
 }
 
-func TestLoad_DenyPatterns_Loaded(t *testing.T) {
+func TestLoad_Drop_Loaded(t *testing.T) {
 	path := writeToml(t, validBase+`
-[deny_patterns]
-patterns = ["go run *", "go generate *"]
+[sandbox.command]
+drop = ["rm -rf *", "sudo *"]
 `)
 	cfg, err := config.Load(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(cfg.DenyPatterns.Patterns) != 2 {
-		t.Errorf("DenyPatterns len = %d, want 2", len(cfg.DenyPatterns.Patterns))
+	if len(cfg.Sandbox.Command.Drop) != 2 {
+		t.Errorf("Drop len = %d, want 2", len(cfg.Sandbox.Command.Drop))
 	}
-	if cfg.DenyPatterns.Patterns[0] != "go run *" {
-		t.Errorf("DenyPatterns[0] = %q, want \"go run *\"", cfg.DenyPatterns.Patterns[0])
+	if cfg.Sandbox.Command.Drop[0] != "rm -rf *" {
+		t.Errorf("Drop[0] = %q, want \"rm -rf *\"", cfg.Sandbox.Command.Drop[0])
 	}
 }
 
-func TestLoad_DenyPatternsOmitted_IsEmpty(t *testing.T) {
+func TestLoad_DropOmitted_IsEmpty(t *testing.T) {
 	path := writeToml(t, validBase)
 	cfg, err := config.Load(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(cfg.DenyPatterns.Patterns) != 0 {
-		t.Errorf("DenyPatterns = %v, want empty", cfg.DenyPatterns.Patterns)
+	if len(cfg.Sandbox.Command.Drop) != 0 {
+		t.Errorf("Drop = %v, want empty", cfg.Sandbox.Command.Drop)
 	}
 }
 
-func TestLoad_DropPatterns_Loaded(t *testing.T) {
+func TestLoad_Container_EnvPassthrough_Loaded(t *testing.T) {
 	path := writeToml(t, validBase+`
-[drop_patterns]
-patterns = ["rm -rf *", "sudo *"]
-`)
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(cfg.DropPatterns.Patterns) != 2 {
-		t.Errorf("DropPatterns len = %d, want 2", len(cfg.DropPatterns.Patterns))
-	}
-	if cfg.DropPatterns.Patterns[0] != "rm -rf *" {
-		t.Errorf("DropPatterns[0] = %q, want \"rm -rf *\"", cfg.DropPatterns.Patterns[0])
-	}
-}
-
-func TestLoad_DropPatternsOmitted_IsEmpty(t *testing.T) {
-	path := writeToml(t, validBase)
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(cfg.DropPatterns.Patterns) != 0 {
-		t.Errorf("DropPatterns = %v, want empty", cfg.DropPatterns.Patterns)
-	}
-}
-
-func TestLoad_Container_Loaded(t *testing.T) {
-	path := writeToml(t, validBase+`
-[container]
 env_passthrough = ["AWS_PROFILE", "HOME"]
 `)
 	cfg, err := config.Load(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(cfg.Container.EnvPassthrough) != 2 {
-		t.Errorf("EnvPassthrough len = %d, want 2", len(cfg.Container.EnvPassthrough))
+	if len(cfg.Sandbox.Container.EnvPassthrough) != 2 {
+		t.Errorf("EnvPassthrough len = %d, want 2", len(cfg.Sandbox.Container.EnvPassthrough))
 	}
-	if cfg.Container.EnvPassthrough[0] != "AWS_PROFILE" {
-		t.Errorf("EnvPassthrough[0] = %q, want AWS_PROFILE", cfg.Container.EnvPassthrough[0])
+	if cfg.Sandbox.Container.EnvPassthrough[0] != "AWS_PROFILE" {
+		t.Errorf("EnvPassthrough[0] = %q, want AWS_PROFILE", cfg.Sandbox.Container.EnvPassthrough[0])
 	}
 }
 
-func TestLoad_ContainerOmitted_IsEmpty(t *testing.T) {
+func TestLoad_Container_EnvPassthroughOmitted_IsEmpty(t *testing.T) {
 	path := writeToml(t, validBase)
 	cfg, err := config.Load(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(cfg.Container.EnvPassthrough) != 0 {
-		t.Errorf("EnvPassthrough = %v, want empty", cfg.Container.EnvPassthrough)
+	if len(cfg.Sandbox.Container.EnvPassthrough) != 0 {
+		t.Errorf("EnvPassthrough = %v, want empty", cfg.Sandbox.Container.EnvPassthrough)
 	}
 }
 
 func TestLoad_AllowCIDRs_Loaded(t *testing.T) {
-	path := writeToml(t, `
-[server]
-output_dir = "/tmp/out"
-
-[sandbox]
-build_context = "./docker/sandbox"
-dockerfile = "Dockerfile"
-image = "mysandbox"
+	path := writeToml(t, validBase+`
+[sandbox.network]
 allow_cidrs = ["192.168.0.0/16", "10.0.0.0/8"]
 `)
 	cfg, err := config.Load(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(cfg.Sandbox.AllowCIDRs) != 2 {
-		t.Fatalf("AllowCIDRs len = %d, want 2", len(cfg.Sandbox.AllowCIDRs))
+	if len(cfg.Sandbox.Network.AllowCIDRs) != 2 {
+		t.Fatalf("AllowCIDRs len = %d, want 2", len(cfg.Sandbox.Network.AllowCIDRs))
 	}
-	if cfg.Sandbox.AllowCIDRs[0] != "192.168.0.0/16" {
-		t.Errorf("AllowCIDRs[0] = %q, want 192.168.0.0/16", cfg.Sandbox.AllowCIDRs[0])
+	if cfg.Sandbox.Network.AllowCIDRs[0] != "192.168.0.0/16" {
+		t.Errorf("AllowCIDRs[0] = %q, want 192.168.0.0/16", cfg.Sandbox.Network.AllowCIDRs[0])
 	}
 }
 
 func TestLoad_AllowHosts_Loaded(t *testing.T) {
-	path := writeToml(t, `
-[server]
-output_dir = "/tmp/out"
-
-[sandbox]
-build_context = "./docker/sandbox"
-dockerfile = "Dockerfile"
-image = "mysandbox"
+	path := writeToml(t, validBase+`
+[sandbox.network]
 allow_hosts = ["api.github.com", "registry.npmjs.org"]
 `)
 	cfg, err := config.Load(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(cfg.Sandbox.AllowHosts) != 2 {
-		t.Fatalf("AllowHosts len = %d, want 2", len(cfg.Sandbox.AllowHosts))
+	if len(cfg.Sandbox.Network.AllowHosts) != 2 {
+		t.Fatalf("AllowHosts len = %d, want 2", len(cfg.Sandbox.Network.AllowHosts))
 	}
-	if cfg.Sandbox.AllowHosts[0] != "api.github.com" {
-		t.Errorf("AllowHosts[0] = %q, want api.github.com", cfg.Sandbox.AllowHosts[0])
+	if cfg.Sandbox.Network.AllowHosts[0] != "api.github.com" {
+		t.Errorf("AllowHosts[0] = %q, want api.github.com", cfg.Sandbox.Network.AllowHosts[0])
 	}
 }
 
@@ -354,8 +329,8 @@ func TestLoad_AllowCIDRs_OmittedIsEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(cfg.Sandbox.AllowCIDRs) != 0 {
-		t.Errorf("AllowCIDRs = %v, want empty", cfg.Sandbox.AllowCIDRs)
+	if len(cfg.Sandbox.Network.AllowCIDRs) != 0 {
+		t.Errorf("AllowCIDRs = %v, want empty", cfg.Sandbox.Network.AllowCIDRs)
 	}
 }
 
@@ -365,17 +340,17 @@ func TestLoad_AllowHosts_OmittedIsEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(cfg.Sandbox.AllowHosts) != 0 {
-		t.Errorf("AllowHosts = %v, want empty", cfg.Sandbox.AllowHosts)
+	if len(cfg.Sandbox.Network.AllowHosts) != 0 {
+		t.Errorf("AllowHosts = %v, want empty", cfg.Sandbox.Network.AllowHosts)
 	}
 }
 
 func TestLoad_ExternalNetwork_Loaded(t *testing.T) {
 	path := writeToml(t, `
-[server]
-output_dir = "/tmp/out"
+[mcp]
+command_output_dir = "/tmp/out"
 
-[sandbox]
+[sandbox.container]
 build_context = "./docker/sandbox"
 dockerfile = "Dockerfile"
 image = "mysandbox"
@@ -385,8 +360,8 @@ external_network = "backend"
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Sandbox.ExternalNetwork != "backend" {
-		t.Errorf("ExternalNetwork = %q, want \"backend\"", cfg.Sandbox.ExternalNetwork)
+	if cfg.Sandbox.Container.ExternalNetwork != "backend" {
+		t.Errorf("ExternalNetwork = %q, want \"backend\"", cfg.Sandbox.Container.ExternalNetwork)
 	}
 }
 
@@ -396,19 +371,19 @@ func TestLoad_ExternalNetwork_OmittedIsEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Sandbox.ExternalNetwork != "" {
-		t.Errorf("ExternalNetwork = %q, want empty", cfg.Sandbox.ExternalNetwork)
+	if cfg.Sandbox.Container.ExternalNetwork != "" {
+		t.Errorf("ExternalNetwork = %q, want empty", cfg.Sandbox.Container.ExternalNetwork)
 	}
 }
 
 func TestLoad_MissingSandboxSection_ErrorsOnBuildContext(t *testing.T) {
 	path := writeToml(t, `
-[server]
-output_dir = "/tmp/out"
+[mcp]
+command_output_dir = "/tmp/out"
 `)
 	_, err := config.Load(path)
-	if !errors.Is(err, config.ErrMissingSandboxBuildContext) {
-		t.Errorf("err = %v, want ErrMissingSandboxBuildContext", err)
+	if !errors.Is(err, config.ErrMissingContainerBuildContext) {
+		t.Errorf("err = %v, want ErrMissingContainerBuildContext", err)
 	}
 }
 
@@ -436,7 +411,6 @@ func TestLoad_Nono_OmittedIsEmpty(t *testing.T) {
 		t.Errorf("Nono.Profile = %q, want empty", cfg.Nono.Profile)
 	}
 }
-
 
 func TestLoad_Nono_LegacySubcommandIgnored(t *testing.T) {
 	path := writeToml(t, validBase+`

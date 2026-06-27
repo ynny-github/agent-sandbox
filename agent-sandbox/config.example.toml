@@ -1,35 +1,26 @@
-[server]
-output_dir = "/tmp/mcp-output"
+[mcp]
+command_output_dir = "/tmp/mcp-output"
 
-[sandbox]
-build_context = "./docker/sandbox"   # required: path to Docker build context
-dockerfile = "Dockerfile"            # required: Dockerfile name within build_context
-image = "myapp"                      # required: image name (actual tag: agent-sandbox/<image>)
+[sandbox.network]
 allow_cidrs = []                     # optional: allowed destination CIDRs (default deny all)
 allow_hosts = []                     # optional: allowed destination hostnames (default deny all)
-external_network = "default"         # optional: join this network from the workdir project
 
-[allow_patterns]
-patterns = [
+[sandbox.command]
+allow = [
   "git *",
   "make *",
   "npm run *",
 ]
-
-[deny_patterns]
-patterns = [
-  # "go run *",
-  # "go generate *",
-]
-
-[drop_patterns]
-patterns = [
+drop = [
   # "rm -rf *",
   # "sudo *",
 ]
 
-[container]
-# shell = "bash"
+[sandbox.container]
+build_context = "./docker/sandbox"   # required: path to Docker build context
+dockerfile = "Dockerfile"            # required: Dockerfile name within build_context
+image = "myapp"                      # required: image name (actual tag: agent-sandbox/<image>)
+external_network = "default"         # optional: join this network from the workdir project
 env_passthrough = [
   # "AWS_PROFILE",
   # "HOME",

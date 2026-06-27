@@ -13,12 +13,16 @@ go install github.com/ynagai/mcp-command-router@latest
 Copy `config.example.toml` to `config.toml` and edit:
 
 ```toml
-[server]
-output_dir = "/tmp/mcp-output"
-container_target = "app"
+[mcp]
+command_output_dir = "/tmp/mcp-output"
 
-[allow_patterns]
-patterns = [
+[sandbox.container]
+build_context = "./docker/sandbox"
+dockerfile = "Dockerfile"
+image = "myapp"
+
+[sandbox.command]
+allow = [
   "git *",
   "make *",
 ]
@@ -66,6 +70,27 @@ Register as an MCP tool in your Claude Code settings.
 
 - Commands matching a drop pattern are **refused** — neither the host nor the container runs them; the MCP response carries exit code 1 and a stderr file containing `dropped: command matches drop pattern "<pattern>"`.
 - Commands matching an allow pattern are executed on the **host** (after shell-safety validation).
-- Commands matching a deny pattern, or commands matching nothing, are routed to the configured **Docker Compose service**.
-- Drop wins over deny wins over allow.
+- All other commands are routed to the configured **Docker Compose service**.
+- Drop wins over allow.
 - Output is always written to separate stdout/stderr files; the MCP response returns file paths and exit code only.
+
+## Migrating from an older config
+
+The configuration was reorganized; old keys are no longer accepted.
+
+| Old | New |
+|---|---|
+| `server.output_dir` | `mcp.command_output_dir` |
+| `sandbox.build_context` | `sandbox.container.build_context` |
+| `sandbox.dockerfile` | `sandbox.container.dockerfile` |
+| `sandbox.image` | `sandbox.container.image` |
+| `sandbox.external_network` | `sandbox.container.external_network` |
+| `sandbox.allow_cidrs` | `sandbox.network.allow_cidrs` |
+| `sandbox.allow_hosts` | `sandbox.network.allow_hosts` |
+| `[allow_patterns] patterns` | `sandbox.command.allow` |
+| `[drop_patterns] patterns` | `sandbox.command.drop` |
+| `[deny_patterns] patterns` | removed — move destructive entries into `sandbox.command.drop` |
+| `[container] env_passthrough` | `sandbox.container.env_passthrough` |
+| `[nono] profile` | `nono.profile` (unchanged) |
+
+The `deny` routing axis is gone. Patterns that previously forced a host-allowed command into the sandbox now have two options: leave them out of `allow` (so they default to the sandbox), or add them to `drop` if they should be refused entirely.

@@ -14,7 +14,8 @@ const runCommandDescription = `Execute a shell command.
 
 Routing:
 - Commands matching allow-patterns run on the host.
-- Commands matching deny-patterns or unmatched commands run in the container.
+- Commands matching drop-patterns are refused.
+- All other commands run in the container.
 
 Host restrictions:
 - Shell operators (|, >, <, &, ;, ` + "`" + `, $(...)) are not allowed.

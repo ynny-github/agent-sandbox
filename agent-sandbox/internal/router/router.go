@@ -5,15 +5,10 @@ import (
 	"strings"
 )
 
-func Route(cmd string, allow, deny, drop []string) (decision, matched string) {
+func Route(cmd string, allow, drop []string) (decision, matched string) {
 	for _, pattern := range drop {
 		if matchPattern(pattern, cmd) {
 			return "drop", pattern
-		}
-	}
-	for _, pattern := range deny {
-		if matchPattern(pattern, cmd) {
-			return "container", pattern
 		}
 	}
 	for _, pattern := range allow {

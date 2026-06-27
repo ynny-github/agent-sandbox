@@ -46,17 +46,17 @@ func runSandboxDown(cmd *cobra.Command, args []string) error {
 
 	detectCtx, detectCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer detectCancel()
-	externalNetwork := executor.DetectProjectNetwork(detectCtx, dockerCli, cfg.Sandbox.ExternalNetwork)
+	externalNetwork := executor.DetectProjectNetwork(detectCtx, dockerCli, cfg.Sandbox.Container.ExternalNetwork)
 
 	project, err := executor.NewSandboxProject(
 		os.Getpid(),
 		os.Getuid(),
 		os.Getgid(),
-		cfg.Sandbox.BuildContext,
-		cfg.Sandbox.Dockerfile,
-		cfg.Sandbox.Image,
-		cfg.Sandbox.AllowCIDRs,
-		cfg.Sandbox.AllowHosts,
+		cfg.Sandbox.Container.BuildContext,
+		cfg.Sandbox.Container.Dockerfile,
+		cfg.Sandbox.Container.Image,
+		cfg.Sandbox.Network.AllowCIDRs,
+		cfg.Sandbox.Network.AllowHosts,
 		externalNetwork,
 	)
 	if err != nil {

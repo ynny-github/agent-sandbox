@@ -1,6 +1,6 @@
 [tools]
 go = "1.25"
-"go:github.com/ynny-github/agent-sandbox/agent-sandbox" = "v0.7.0"
+"go:github.com/ynny-github/agent-sandbox/agent-sandbox" = "v0.8.0"
 "go:github.com/ynny-github/taskgate/taskgate" = "v0.1.1"
 lefthook = "latest"
 

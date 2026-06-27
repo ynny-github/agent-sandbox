@@ -1,3 +1,7 @@
+  # Tool execution mode: "hook" routes the agent's Bash/Monitor commands through
+  # the PreToolUse hook (see .claude/settings.json) into `agent-sandbox exec`.
+  tool_mode = "hook"
+
   [mcp]
   command_output_dir = "./tmp/agent-sandbox/command-router"
 

@@ -2,6 +2,44 @@
   "attribution": {
     "commit": ""
   },
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Write(.claude/rules/*)",
+      "Edit(.claude/rules/*)"
+    ]
+  },
+  "enabledMcpjsonServers": [
+    "agent-sandbox"
+  ],
+  "env": {
+    "GIT_AUTHOR_EMAIL": "noreply@anthropic.com",
+    "GIT_AUTHOR_NAME": "Claude Code",
+    "GIT_COMMITTER_EMAIL": "noreply@anthropic.com",
+    "GIT_COMMITTER_NAME": "Claude Code"
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "agent-sandbox hook",
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
+      },
+      {
+        "hooks": [
+          {
+            "command": "agent-sandbox hook",
+            "type": "command"
+          }
+        ],
+        "matcher": "Monitor"
+      }
+    ]
+  },
   "permissions": {
     "defaultMode": "auto",
     "deny": [
@@ -17,15 +55,5 @@
       "Glob(~/.docker/**)",
       "Grep(~/.docker/**)"
     ]
-  },
-  "autoMode": {
-    "allow": ["$defaults", "Write(.claude/rules/*)", "Edit(.claude/rules/*)"]
-  },
-  "enabledMcpjsonServers": ["agent-sandbox"],
-  "env": {
-    "GIT_AUTHOR_NAME": "Claude Code",
-    "GIT_COMMITTER_NAME": "Claude Code",
-    "GIT_AUTHOR_EMAIL": "noreply@anthropic.com",
-    "GIT_COMMITTER_EMAIL": "noreply@anthropic.com"
   }
 }

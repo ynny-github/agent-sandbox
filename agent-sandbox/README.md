@@ -66,6 +66,36 @@ agent-sandbox doctor
 
 Register as an MCP tool in your Claude Code settings.
 
+Route a single command through the router from the shell (streams output live):
+
+```bash
+agent-sandbox exec --config agent-sandbox.toml -- git status
+```
+
+Install the Claude Code PreToolUse hook so Bash and Monitor commands route
+through the sandbox automatically:
+
+```bash
+agent-sandbox install-hook
+```
+
+This merges a PreToolUse hook into `.claude/settings.json` (matchers `Bash` and
+`Monitor`) that rewrites each command to `agent-sandbox exec -- <command>` via
+`agent-sandbox hook`. `agent-sandbox` must be on `PATH`.
+
+### Tool mode
+
+`tool_mode` in `agent-sandbox.toml` selects how the agent's commands reach the
+router:
+
+- `mcp` (default): the `claude` launcher disables the Bash and Monitor tools, and
+  the agent routes commands through the `run_command` MCP tool.
+- `hook`: the launcher leaves Bash and Monitor enabled, and the PreToolUse hook
+  rewrites each command to `agent-sandbox exec -- <command>`. This requires the
+  hook to be installed (`agent-sandbox install-hook`); `agent-sandbox claude`
+  refuses to start in `hook` mode if the hook is missing for either the `Bash` or
+  `Monitor` matcher.
+
 ## How It Works
 
 - Commands matching a drop pattern are **refused** — neither the host nor the container runs them; the MCP response carries exit code 1 and a stderr file containing `dropped: command matches drop pattern "<pattern>"`.

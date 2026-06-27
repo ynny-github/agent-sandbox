@@ -426,3 +426,33 @@ subcommand = "run"
 		t.Errorf("Profile = %q, want \"nono.json\"", cfg.Nono.Profile)
 	}
 }
+
+func TestLoad_ToolMode_DefaultsToMcp(t *testing.T) {
+	path := writeToml(t, validBase)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.ToolMode != "mcp" {
+		t.Errorf("ToolMode = %q, want \"mcp\" (default)", cfg.ToolMode)
+	}
+}
+
+func TestLoad_ToolMode_HookAccepted(t *testing.T) {
+	path := writeToml(t, "tool_mode = \"hook\"\n"+validBase)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.ToolMode != "hook" {
+		t.Errorf("ToolMode = %q, want \"hook\"", cfg.ToolMode)
+	}
+}
+
+func TestLoad_ToolMode_InvalidRejected(t *testing.T) {
+	path := writeToml(t, "tool_mode = \"bogus\"\n"+validBase)
+	_, err := config.Load(path)
+	if !errors.Is(err, config.ErrInvalidToolMode) {
+		t.Errorf("err = %v, want ErrInvalidToolMode", err)
+	}
+}

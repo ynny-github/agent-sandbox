@@ -9,9 +9,10 @@ import (
 )
 
 type Config struct {
-	MCP     MCPConfig     `toml:"mcp"`
-	Sandbox SandboxConfig `toml:"sandbox"`
-	Nono    NonoConfig    `toml:"nono"`
+	ToolMode string        `toml:"tool_mode"`
+	MCP      MCPConfig     `toml:"mcp"`
+	Sandbox  SandboxConfig `toml:"sandbox"`
+	Nono     NonoConfig    `toml:"nono"`
 }
 
 type MCPConfig struct {
@@ -69,6 +70,14 @@ func Load(path string) (*Config, error) {
 	}
 	if strings.TrimSpace(cfg.Sandbox.Container.Image) == "" {
 		return nil, ErrMissingContainerImage
+	}
+	switch cfg.ToolMode {
+	case "":
+		cfg.ToolMode = "mcp"
+	case "mcp", "hook":
+		// valid
+	default:
+		return nil, fmt.Errorf("%w: %q", ErrInvalidToolMode, cfg.ToolMode)
 	}
 	return &cfg, nil
 }

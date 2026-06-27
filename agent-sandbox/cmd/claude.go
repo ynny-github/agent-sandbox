@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -42,12 +43,29 @@ func buildNonoArgs(cfg *config.Config) (string, []string, error) {
 		return "", nil, fmt.Errorf("nono not found in PATH: %w", err)
 	}
 	args := []string{"nono", "wrap", "--profile", cfg.Nono.Profile}
-	if cwd, err := os.Getwd(); err == nil {
+	cwd, cwdErr := os.Getwd()
+	if cwdErr == nil {
 		if mainGit, ok := gitutil.DetectWorktreeGitDir(cwd); ok {
 			args = append(args, "--allow", mainGit)
 		}
 	}
-	args = append(args, "claude", "--disallowed-tools", "Bash,Monitor")
+	args = append(args, "claude")
+
+	if cfg.ToolMode == "hook" {
+		if cwdErr != nil {
+			return "", nil, fmt.Errorf("getwd: %w", cwdErr)
+		}
+		settings, err := readSettings(filepath.Join(cwd, ".claude", "settings.json"))
+		if err != nil {
+			return "", nil, err
+		}
+		if !hookInstalledInSettings(settings, hookCommand, []string{"Bash", "Monitor"}) {
+			return "", nil, fmt.Errorf(`hook mode requires the PreToolUse hook; run "agent-sandbox install-hook"`)
+		}
+	} else {
+		args = append(args, "--disallowed-tools", "Bash,Monitor")
+	}
+
 	return nonoPath, args, nil
 }
 

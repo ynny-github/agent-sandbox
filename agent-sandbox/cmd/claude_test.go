@@ -2,8 +2,10 @@
 package cmd
 
 import (
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
@@ -90,5 +92,59 @@ func TestRunDebug_MissingConfig(t *testing.T) {
 	err := runDebug(debugCmd, nil)
 	if err == nil {
 		t.Fatal("expected config error, got nil")
+	}
+}
+
+func argsContain(args []string, target string) bool {
+	for _, a := range args {
+		if a == target {
+			return true
+		}
+	}
+	return false
+}
+
+func TestBuildNonoArgs_McpMode_DisablesTools(t *testing.T) {
+	makeFakeNono(t)
+	cfg := &config.Config{ToolMode: "mcp", Nono: config.NonoConfig{Profile: "test-profile"}}
+
+	_, args, err := buildNonoArgs(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !argsContain(args, "--disallowed-tools") || !argsContain(args, "Bash,Monitor") {
+		t.Errorf("mcp mode should disable Bash,Monitor; got %v", args)
+	}
+}
+
+func TestBuildNonoArgs_HookMode_HookInstalled_NoDisallowedTools(t *testing.T) {
+	makeFakeNono(t)
+	dir := t.TempDir()
+	if err := runInstallHookIn(dir, io.Discard); err != nil {
+		t.Fatalf("install hook: %v", err)
+	}
+	t.Chdir(dir)
+
+	cfg := &config.Config{ToolMode: "hook", Nono: config.NonoConfig{Profile: "test-profile"}}
+	_, args, err := buildNonoArgs(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if argsContain(args, "--disallowed-tools") {
+		t.Errorf("hook mode should not disable tools; got %v", args)
+	}
+}
+
+func TestBuildNonoArgs_HookMode_HookMissing_Errors(t *testing.T) {
+	makeFakeNono(t)
+	t.Chdir(t.TempDir()) // empty dir, no .claude/settings.json
+
+	cfg := &config.Config{ToolMode: "hook", Nono: config.NonoConfig{Profile: "test-profile"}}
+	_, _, err := buildNonoArgs(cfg)
+	if err == nil {
+		t.Fatal("expected error when hook not installed in hook mode")
+	}
+	if !strings.Contains(err.Error(), "install-hook") {
+		t.Errorf("error should mention install-hook; got %v", err)
 	}
 }

@@ -1,3 +1,8 @@
+# Tool execution mode: "mcp" (agent uses the run_command MCP tool; Bash/Monitor
+# disabled) or "hook" (agent uses Bash/Monitor, routed via the PreToolUse hook —
+# requires `agent-sandbox install-hook`). Default: "mcp".
+tool_mode = "mcp"
+
 [mcp]
 command_output_dir = "/tmp/mcp-output"
 

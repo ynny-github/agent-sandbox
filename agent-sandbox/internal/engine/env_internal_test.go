@@ -1,4 +1,4 @@
-package mcptool
+package engine
 
 import (
 	"os"

@@ -425,6 +425,14 @@ func TestNewSandboxProject_NoExternalNetwork(t *testing.T) {
 	}
 }
 
+func TestProjectSandboxName_RelativeAndAbsoluteSamePathMatch(t *testing.T) {
+	abs := container.ProjectSandboxName(filepath.Join("/tmp", "proj"))
+	viaDotDot := container.ProjectSandboxName(filepath.Join("/tmp", "sub", "..", "proj"))
+	if abs != viaDotDot {
+		t.Fatalf("ProjectSandboxName should resolve equivalent paths to the same name: %q != %q", abs, viaDotDot)
+	}
+}
+
 func TestNewSandboxProject_WithExternalNetwork(t *testing.T) {
 	proj, err := container.NewSandboxProject(1, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "myproject_default")
 	if err != nil {

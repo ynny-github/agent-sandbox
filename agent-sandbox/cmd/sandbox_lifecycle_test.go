@@ -26,6 +26,12 @@ func TestSandboxParentHasSubcommands(t *testing.T) {
 	}
 }
 
+func TestSandboxDownHasPathFlag(t *testing.T) {
+	if sandboxDownCmd.Flags().Lookup("path") == nil {
+		t.Fatal("sandbox down missing --path flag")
+	}
+}
+
 func TestSandboxUpHasDetachFlag(t *testing.T) {
 	flag := sandboxUpCmd.Flags().Lookup("detach")
 	if flag == nil {

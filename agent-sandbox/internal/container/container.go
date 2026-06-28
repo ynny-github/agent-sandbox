@@ -86,6 +86,14 @@ func (e *ComposeExecutor) Down(ctx context.Context) error {
 	return svc.Down(ctx, e.project.Name, api.DownOptions{})
 }
 
+// DownProject stops and removes a compose project by name only.
+// It needs no build context or project spec, so it can tear down a
+// sandbox for any directory regardless of local config.
+func DownProject(ctx context.Context, dockerCLI command.Cli, projectName string) error {
+	svc := compose.NewComposeService(dockerCLI)
+	return svc.Down(ctx, projectName, api.DownOptions{})
+}
+
 func (e *ComposeExecutor) IsRunning(ctx context.Context) (bool, error) {
 	containers, err := e.dockerCLI.Client().ContainerList(ctx, dockercontainer.ListOptions{
 		Filters: filters.NewArgs(

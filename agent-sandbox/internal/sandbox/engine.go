@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 )
 
 // ContainerRunner executes an argv inside the sandbox container.
@@ -119,13 +120,7 @@ func runPipeline(ctx context.Context, req Request, pl PipelineNode, rs []routedS
 	case allContainer:
 		return runUniformContainer(ctx, req, pl, rs)
 	default:
-		// Interim: mixed host+container pipeline → run whole pipeline in container.
-		// Task 7 replaces this with real io.Pipe wiring between host and container.
-		if req.ContainerRunner == nil {
-			fmt.Fprintln(req.Stderr, "no container configured: cannot route command to container")
-			return 1, nil
-		}
-		return runContainerWhole(ctx, req, pl.Raw)
+		return runMixedPipeline(ctx, req, rs)
 	}
 }
 
@@ -197,6 +192,71 @@ func runContainerWhole(ctx context.Context, req Request, raw string) (int, error
 		return code, nil
 	}
 	return code, nil
+}
+
+// runMixedPipeline runs a pipeline whose segments span host and container,
+// wiring stdout→stdin between adjacent segments with io.Pipe. All segments run
+// concurrently; the exit code is that of the last segment.
+func runMixedPipeline(ctx context.Context, req Request, rs []routedSeg) (int, error) {
+	n := len(rs)
+	// stdin for each segment: first is nil, others read the previous pipe.
+	stdins := make([]io.Reader, n)
+	// stdout for each segment: last writes req.Stdout, others write a pipe.
+	stdouts := make([]io.Writer, n)
+	writeEnds := make([]*io.PipeWriter, n)
+
+	for i := 0; i < n-1; i++ {
+		pr, pw := io.Pipe()
+		stdouts[i] = pw
+		writeEnds[i] = pw
+		stdins[i+1] = pr
+	}
+	stdouts[n-1] = req.Stdout
+
+	exits := make([]int, n)
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := range rs {
+		go func(i int) {
+			defer wg.Done()
+			code, err := runSegment(ctx, req, rs[i], stdins[i], stdouts[i])
+			exits[i] = code
+			if err != nil {
+				fmt.Fprintf(req.Stderr, "pipeline segment: %v\n", err)
+				if exits[i] == 0 {
+					exits[i] = 1
+				}
+			}
+			// Close this segment's write end so the next segment sees EOF.
+			if writeEnds[i] != nil {
+				writeEnds[i].Close()
+			}
+		}(i)
+	}
+	wg.Wait()
+	return exits[n-1], nil
+}
+
+// runSegment runs a single routed segment with the given stdin/stdout. Its
+// stderr always goes to req.Stderr. Redirect-bearing segments run via bash -c.
+func runSegment(ctx context.Context, req Request, r routedSeg, stdin io.Reader, stdout io.Writer) (int, error) {
+	if r.decision == "container" {
+		argv := r.seg.Args
+		if r.seg.HasRedirect {
+			argv = []string{"bash", "-c", r.seg.Raw}
+		}
+		env := resolveEnv(req.ContainerEnvPassthrough)
+		return req.ContainerRunner.RunContainer(ctx, argv, env, stdin, stdout, req.Stderr)
+	}
+	// host
+	if r.seg.HasRedirect {
+		return RunHostShell(ctx, r.seg.Raw, stdin, stdout, req.Stderr)
+	}
+	if len(r.seg.Args) == 0 {
+		fmt.Fprintln(req.Stderr, "rejected: empty command")
+		return 1, nil
+	}
+	return RunHost(ctx, r.seg.Args, stdin, stdout, req.Stderr)
 }
 
 func resolveEnv(keys []string) []string {

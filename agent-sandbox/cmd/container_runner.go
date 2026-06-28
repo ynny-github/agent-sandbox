@@ -10,7 +10,7 @@ import (
 	cliflags "github.com/docker/cli/cli/flags"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/engine"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/executor"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/container"
 )
 
 // newComposeContainerRunner builds a Docker-Compose-backed container runner.
@@ -38,9 +38,9 @@ func newComposeContainerRunner(ctx context.Context, cfg *config.Config) (engine.
 
 	detectCtx, detectCancel := context.WithTimeout(ctx, 5*time.Second)
 	defer detectCancel()
-	externalNetwork := executor.DetectProjectNetwork(detectCtx, dockerCli, cfg.Sandbox.Container.ExternalNetwork)
+	externalNetwork := container.DetectProjectNetwork(detectCtx, dockerCli, cfg.Sandbox.Container.ExternalNetwork)
 
-	project, err := executor.NewSandboxProject(
+	project, err := container.NewSandboxProject(
 		os.Getpid(),
 		os.Getuid(),
 		os.Getgid(),
@@ -56,5 +56,5 @@ func newComposeContainerRunner(ctx context.Context, cfg *config.Config) (engine.
 		return nil, nil, fmt.Errorf("sandbox project: %w", err)
 	}
 
-	return executor.NewComposeExecutor(dockerCli, project), cleanup, nil
+	return container.NewComposeExecutor(dockerCli, project), cleanup, nil
 }

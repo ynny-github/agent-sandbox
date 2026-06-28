@@ -1,6 +1,6 @@
 //go:build integration
 
-package executor_test
+package container_test
 
 import (
 	"bytes"
@@ -21,7 +21,7 @@ import (
 	"github.com/docker/docker/api/types/filters"
 	dockernetwork "github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/errdefs"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/executor"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/container"
 )
 
 const testProjectName = "mcptest"
@@ -81,7 +81,7 @@ func startComposeService(t *testing.T) {
 func TestRunContainer_Echo_WritesStdoutAndExitsZero(t *testing.T) {
 	cli := newIntegrationDockerCli(t)
 	startComposeService(t)
-	ex := executor.NewComposeExecutor(cli, testProject(testProjectName))
+	ex := container.NewComposeExecutor(cli, testProject(testProjectName))
 
 	var stdout, stderr bytes.Buffer
 	code, err := ex.RunContainer(context.Background(), testServiceName, []string{"echo", "hello"}, nil, &stdout, &stderr)
@@ -102,7 +102,7 @@ func TestRunContainer_Echo_WritesStdoutAndExitsZero(t *testing.T) {
 func TestRunContainer_BothOutputs_WrittenToCorrectWriters(t *testing.T) {
 	cli := newIntegrationDockerCli(t)
 	startComposeService(t)
-	ex := executor.NewComposeExecutor(cli, testProject(testProjectName))
+	ex := container.NewComposeExecutor(cli, testProject(testProjectName))
 
 	var stdout, stderr bytes.Buffer
 	code, err := ex.RunContainer(context.Background(), testServiceName,
@@ -124,7 +124,7 @@ func TestRunContainer_BothOutputs_WrittenToCorrectWriters(t *testing.T) {
 func TestRunContainer_ShellOperators_ExecutedInsideContainer(t *testing.T) {
 	cli := newIntegrationDockerCli(t)
 	startComposeService(t)
-	ex := executor.NewComposeExecutor(cli, testProject(testProjectName))
+	ex := container.NewComposeExecutor(cli, testProject(testProjectName))
 
 	var stdout, stderr bytes.Buffer
 	code, err := ex.RunContainer(context.Background(), testServiceName,
@@ -148,7 +148,7 @@ func TestComposeExecutor_IsRunning(t *testing.T) {
 		t.Fatalf("write compose file: %v", err)
 	}
 	projectName := "isrunning-" + strconv.FormatInt(time.Now().UnixNano(), 36)
-	ex := executor.NewComposeExecutor(cli, testProject(projectName), "", "")
+	ex := container.NewComposeExecutor(cli, testProject(projectName), "", "")
 	t.Cleanup(func() {
 		exec.Command("docker", "compose", "-f", composeFile, "-p", projectName, "down", "--remove-orphans").Run()
 	})
@@ -178,7 +178,7 @@ func TestComposeExecutor_IsRunning(t *testing.T) {
 func TestRunContainer_NonZeroExit_ReturnsExitCode(t *testing.T) {
 	cli := newIntegrationDockerCli(t)
 	startComposeService(t)
-	ex := executor.NewComposeExecutor(cli, testProject(testProjectName))
+	ex := container.NewComposeExecutor(cli, testProject(testProjectName))
 
 	var stdout, stderr bytes.Buffer
 	code, err := ex.RunContainer(context.Background(), testServiceName,
@@ -212,7 +212,7 @@ func TestCleanStale_RemovesOrphanedSandboxNetwork(t *testing.T) {
 	})
 
 	// nil project is intentional: CleanStale only uses e.dockerCLI, not e.project.
-	ex := executor.NewComposeExecutor(cli, nil, "", "")
+	ex := container.NewComposeExecutor(cli, nil, "", "")
 	result, err := ex.CleanStale(context.Background())
 	if err != nil {
 		t.Fatalf("CleanStale: %v", err)
@@ -278,7 +278,7 @@ networks:
 		t.Fatalf("network %q should exist before CleanStale: %v", networkName, err)
 	}
 
-	ex := executor.NewComposeExecutor(cli, testProject(projectName), "", "")
+	ex := container.NewComposeExecutor(cli, testProject(projectName), "", "")
 	cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cleanCancel()
 	result, err := ex.CleanStale(cleanCtx)
@@ -314,7 +314,7 @@ networks:
 func TestRunContainer_Timeout_Returns124AndProcessTerminated(t *testing.T) {
 	cli := newIntegrationDockerCli(t)
 	startComposeService(t)
-	ex := executor.NewComposeExecutor(cli, testProject(testProjectName))
+	ex := container.NewComposeExecutor(cli, testProject(testProjectName))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()

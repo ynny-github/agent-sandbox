@@ -10,7 +10,7 @@ import (
 	"os"
 
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/command"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/executor"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/container"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/router"
 )
 
@@ -58,7 +58,7 @@ func Run(ctx context.Context, req Request) (int, error) {
 			argv = []string{"bash", "-c", cmd.Raw}
 		}
 		env := resolveEnv(req.ContainerEnvPassthrough)
-		exitCode, runErr := req.ContainerRunner.RunContainer(ctx, executor.SandboxServiceName, argv, env, req.Stdout, req.Stderr)
+		exitCode, runErr := req.ContainerRunner.RunContainer(ctx, container.SandboxServiceName, argv, env, req.Stdout, req.Stderr)
 		if runErr != nil {
 			fmt.Fprintf(req.Stderr, "container exec: %v\n", runErr)
 			if exitCode == 0 {
@@ -77,7 +77,7 @@ func Run(ctx context.Context, req Request) (int, error) {
 			fmt.Fprintln(req.Stderr, "rejected: empty command")
 			return 1, nil
 		}
-		exitCode, runErr := executor.RunHost(ctx, cmd.Args, req.Stdout, req.Stderr)
+		exitCode, runErr := container.RunHost(ctx, cmd.Args, req.Stdout, req.Stderr)
 		if runErr != nil {
 			return exitCode, fmt.Errorf("executor: %w", runErr)
 		}

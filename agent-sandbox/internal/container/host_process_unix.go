@@ -1,6 +1,6 @@
 //go:build unix
 
-package executor
+package container
 
 import (
 	"os/exec"

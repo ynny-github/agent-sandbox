@@ -10,7 +10,7 @@ import (
 	cliflags "github.com/docker/cli/cli/flags"
 	"github.com/spf13/cobra"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/executor"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/container"
 )
 
 var sandboxDownCmd = &cobra.Command{
@@ -46,9 +46,9 @@ func runSandboxDown(cmd *cobra.Command, args []string) error {
 
 	detectCtx, detectCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer detectCancel()
-	externalNetwork := executor.DetectProjectNetwork(detectCtx, dockerCli, cfg.Sandbox.Container.ExternalNetwork)
+	externalNetwork := container.DetectProjectNetwork(detectCtx, dockerCli, cfg.Sandbox.Container.ExternalNetwork)
 
-	project, err := executor.NewSandboxProject(
+	project, err := container.NewSandboxProject(
 		os.Getpid(),
 		os.Getuid(),
 		os.Getgid(),
@@ -63,7 +63,7 @@ func runSandboxDown(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("sandbox project: %w", err)
 	}
 
-	composeExecutor := executor.NewComposeExecutor(dockerCli, project)
+	composeExecutor := container.NewComposeExecutor(dockerCli, project)
 	downCtx, downCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer downCancel()
 	if err := composeExecutor.Down(downCtx); err != nil {

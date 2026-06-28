@@ -200,17 +200,18 @@ func TestRunCommand_PatternMismatch_ReturnsNonZeroExitAndStderrPath(t *testing.T
 	}
 }
 
-func TestRunCommand_ShellOperatorRejection_ReturnsNonZeroExitAndStderrPath(t *testing.T) {
+func TestRunCommand_ParseError_ReturnsNonZeroExitAndStderrPath(t *testing.T) {
+	// An unterminated quote is a parse error → engine writes "rejected: ..." to stderr.
 	dir := t.TempDir()
 	cfg := mcptool.HandlerConfig{
 		OutputDir:     dir,
-		AllowPatterns: []string{"git *"},
+		AllowPatterns: []string{"echo *"},
 	}
 	session := setupServerWithConfig(t, cfg)
 
 	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "run_command",
-		Arguments: map[string]any{"command": "git log | head -20"},
+		Arguments: map[string]any{"command": `echo "hi`},
 	})
 	if err != nil {
 		t.Fatalf("CallTool error: %v", err)
@@ -218,7 +219,7 @@ func TestRunCommand_ShellOperatorRejection_ReturnsNonZeroExitAndStderrPath(t *te
 
 	result := parseToolResult(t, res)
 	if result.ExitCode == 0 {
-		t.Error("exit_code should be non-zero for shell operator rejection")
+		t.Error("exit_code should be non-zero for parse error")
 	}
 	if result.StderrPath == "" {
 		t.Error("stderr_path should be non-empty for rejection")

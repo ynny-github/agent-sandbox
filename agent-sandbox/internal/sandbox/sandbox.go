@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"strings"
 )
 
 // Config holds routing patterns and the optional container runner.
@@ -51,7 +52,22 @@ func (s *Sandbox) RunBuffered(ctx context.Context, command string) (Result, erro
 }
 
 // NeedsContainer reports whether running command requires a container runner.
+// It uses ParseLine to check each segment individually, so a pipeline with any
+// container-routed segment returns true, and a Fallback line always returns true.
 func (s *Sandbox) NeedsContainer(command string) (bool, error) {
-	decision, _ := Route(command, s.cfg.AllowPatterns, s.cfg.DropPatterns)
-	return decision == "container", nil
+	line, err := ParseLine(command)
+	if err != nil {
+		return false, err
+	}
+	if line.Fallback {
+		return true, nil
+	}
+	for _, pl := range line.Pipelines {
+		for _, seg := range pl.Segments {
+			if decision, _ := Route(strings.TrimSpace(seg.Raw), s.cfg.AllowPatterns, s.cfg.DropPatterns); decision == "container" {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }

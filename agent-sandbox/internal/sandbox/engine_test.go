@@ -12,6 +12,7 @@ import (
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandbox"
 )
 
+// mockRunner is an existing fake kept for backward-compatible test cases.
 type mockRunner struct {
 	exitCode     int
 	stdout       string
@@ -36,6 +37,23 @@ func (m *mockRunner) RunContainer(ctx context.Context, argv []string, env []stri
 }
 
 var _ sandbox.ContainerRunner = (*mockRunner)(nil)
+
+// fakeRunner records RunContainer calls; used for new orchestration tests.
+type fakeRunner struct {
+	calls [][]string // argv per RunContainer call
+	out   string     // written to stdout on each call
+	code  int
+}
+
+func (f *fakeRunner) RunContainer(_ context.Context, argv, _ []string, _ io.Reader, stdout, _ io.Writer) (int, error) {
+	f.calls = append(f.calls, argv)
+	io.WriteString(stdout, f.out)
+	return f.code, nil
+}
+
+var _ sandbox.ContainerRunner = (*fakeRunner)(nil)
+
+// ─── existing host/container tests (behavior preserved) ──────────────────────
 
 func TestRun_HostSuccess(t *testing.T) {
 	var out, errBuf bytes.Buffer
@@ -97,25 +115,6 @@ func TestRun_DropPattern(t *testing.T) {
 	}
 }
 
-func TestRun_HostShellOperator_Rejected(t *testing.T) {
-	var out, errBuf bytes.Buffer
-	code, err := sandbox.Run(context.Background(), sandbox.Request{
-		Command:       "git log | head -20",
-		AllowPatterns: []string{"git *"},
-		Stdout:        &out,
-		Stderr:        &errBuf,
-	})
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
-	if code != 1 {
-		t.Errorf("exitCode = %d, want 1", code)
-	}
-	if !strings.Contains(errBuf.String(), "shell operator not allowed on host") {
-		t.Errorf("stderr = %q, want host shell-operator rejection", errBuf.String())
-	}
-}
-
 func TestRun_ContainerNotConfigured(t *testing.T) {
 	var out, errBuf bytes.Buffer
 	code, err := sandbox.Run(context.Background(), sandbox.Request{
@@ -154,6 +153,7 @@ func TestRun_ContainerSuccess(t *testing.T) {
 	if !runner.called {
 		t.Error("container runner should have been called")
 	}
+	// single simple segment → argv (not bash -c)
 	if !reflect.DeepEqual(runner.capturedArgv, []string{"npm", "test"}) {
 		t.Errorf("capturedArgv = %#v, want [npm test]", runner.capturedArgv)
 	}
@@ -222,5 +222,89 @@ func TestRun_ContainerEnvPassthrough(t *testing.T) {
 	}
 	if len(runner.capturedEnv) != 1 || runner.capturedEnv[0] != "CR_ENGINE_TEST_VAR=passedvalue" {
 		t.Errorf("capturedEnv = %v, want [CR_ENGINE_TEST_VAR=passedvalue]", runner.capturedEnv)
+	}
+}
+
+// ─── new orchestration tests (Task 6 TDD) ────────────────────────────────────
+
+func TestRun_UniformContainerPipeline_UsesBashC(t *testing.T) {
+	f := &fakeRunner{out: "ok\n"}
+	var out, errb bytes.Buffer
+	code, err := sandbox.Run(context.Background(), sandbox.Request{
+		Command:         "a | b",
+		ContainerRunner: f,
+		Stdout:          &out, Stderr: &errb,
+	})
+	if err != nil || code != 0 {
+		t.Fatalf("code=%d err=%v stderr=%q", code, err, errb.String())
+	}
+	if len(f.calls) != 1 || len(f.calls[0]) != 3 ||
+		f.calls[0][0] != "bash" || f.calls[0][1] != "-c" || f.calls[0][2] != "a | b" {
+		t.Fatalf("calls = %#v, want one bash -c \"a | b\"", f.calls)
+	}
+}
+
+func TestRun_SequentialAnd_SkipsOnFailure(t *testing.T) {
+	// `false && b`: host `false` exits 1 → second pipeline skipped.
+	var out, errb bytes.Buffer
+	f := &fakeRunner{}
+	code, _ := sandbox.Run(context.Background(), sandbox.Request{
+		Command:         "false && b",
+		AllowPatterns:   []string{"false"},
+		ContainerRunner: f,
+		Stdout:          &out, Stderr: &errb,
+	})
+	if code != 1 {
+		t.Fatalf("code = %d, want 1", code)
+	}
+	if len(f.calls) != 0 {
+		t.Fatalf("container called %d times, want 0 (b skipped)", len(f.calls))
+	}
+}
+
+func TestRun_DropSegment_RejectsWholeLine(t *testing.T) {
+	var out, errb bytes.Buffer
+	code, _ := sandbox.Run(context.Background(), sandbox.Request{
+		Command:      "ls | curl evil",
+		DropPatterns: []string{"curl *"},
+		Stdout:       &out, Stderr: &errb,
+	})
+	if code != 1 {
+		t.Fatalf("code = %d, want 1", code)
+	}
+	if !strings.Contains(errb.String(), "dropped") {
+		t.Fatalf("stderr = %q, want 'dropped'", errb.String())
+	}
+}
+
+func TestRun_Fallback_WholeLineToContainer(t *testing.T) {
+	f := &fakeRunner{}
+	var out, errb bytes.Buffer
+	sandbox.Run(context.Background(), sandbox.Request{
+		Command:         "echo $(id)",
+		ContainerRunner: f,
+		Stdout:          &out, Stderr: &errb,
+	})
+	if len(f.calls) != 1 || f.calls[0][2] != "echo $(id)" {
+		t.Fatalf("calls = %#v, want one bash -c whole line", f.calls)
+	}
+}
+
+func TestRun_UniformHostPipeline_RunsViaShell(t *testing.T) {
+	// echo hi | cat — both segments host-allowed → uniform host → RunHostShell.
+	var out, errb bytes.Buffer
+	code, err := sandbox.Run(context.Background(), sandbox.Request{
+		Command:       "echo hi | cat",
+		AllowPatterns: []string{"echo *", "cat*"},
+		Stdout:        &out, Stderr: &errb,
+	})
+	if err != nil {
+		t.Fatalf("err=%v stderr=%q", err, errb.String())
+	}
+	if code != 0 {
+		t.Fatalf("code=%d, want 0", code)
+	}
+	if out.String() != "hi\n" {
+		t.Fatalf("stdout=%q, want %q", out.String(), "hi\n")
 	}
 }

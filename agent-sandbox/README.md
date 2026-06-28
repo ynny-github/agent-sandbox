@@ -33,7 +33,7 @@ allow = [
 Start the project sandbox from your project root:
 
 ```bash
-agent-sandbox sandbox-up -d --config agent-sandbox.toml
+agent-sandbox sandbox up -d --config agent-sandbox.toml
 ```
 
 Start the MCP server:
@@ -45,16 +45,24 @@ agent-sandbox command-router --config agent-sandbox.toml
 Stop the current project sandbox:
 
 ```bash
-agent-sandbox sandbox-down --config agent-sandbox.toml
+agent-sandbox sandbox down --config agent-sandbox.toml
 ```
+
+To stop a sandbox that belongs to a different directory, pass `--path`:
+
+```bash
+agent-sandbox sandbox down --path /path/to/other/project
+```
+
+The path must match the directory the sandbox was started from. `down` only needs the project name derived from the path, so it works even if that directory's build context or config is unavailable.
 
 Remove all Docker containers and networks that appear to be managed by agent-sandbox:
 
 ```bash
-agent-sandbox sandbox-prune
+agent-sandbox sandbox prune
 ```
 
-`sandbox-prune` is destructive. It removes every container labeled `cr.managed=true` and every Docker network whose name starts with `cr-sandbox-`.
+`sandbox prune` is destructive. It removes every container labeled `cr.managed=true` and every Docker network whose name starts with `cr-sandbox-`.
 
 Check whether external dependencies are usable on this host:
 

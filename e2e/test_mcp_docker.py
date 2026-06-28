@@ -41,10 +41,10 @@ def docker_mcp(
     if not docker_available():
         pytest.skip("Docker daemon is not available")
 
-    up = run_sandbox_command(agent_sandbox_binary, docker_config, "sandbox-up", "-d")
+    up = run_sandbox_command(agent_sandbox_binary, docker_config, "sandbox", "up", "-d")
     if up.returncode != 0:
         pytest.fail(
-            f"sandbox-up failed with {up.returncode}\nstdout:\n{up.stdout}\nstderr:\n{up.stderr}"
+            f"sandbox up failed with {up.returncode}\nstdout:\n{up.stdout}\nstderr:\n{up.stderr}"
         )
 
     process = start_server(agent_sandbox_binary, docker_config, lightweight=False)
@@ -54,10 +54,10 @@ def docker_mcp(
         yield client
     finally:
         stderr = stop_server(process)
-        down = run_sandbox_command(agent_sandbox_binary, docker_config, "sandbox-down")
+        down = run_sandbox_command(agent_sandbox_binary, docker_config, "sandbox", "down")
         if down.returncode != 0:
             message = (
-                f"sandbox-down failed with {down.returncode}\n"
+                f"sandbox down failed with {down.returncode}\n"
                 f"stdout:\n{down.stdout}\nstderr:\n{down.stderr}"
             )
             exc = sys.exc_info()[1]
@@ -89,3 +89,31 @@ def test_fstool_tools_are_not_registered(docker_mcp: McpStdioClient) -> None:
     names = {tool["name"] for tool in tools}
     assert "create_file" not in names
     assert "create_directory" not in names
+
+
+def test_sandbox_down_by_path(
+    agent_sandbox_binary: Path,
+    docker_config: Path,
+) -> None:
+    if not docker_available():
+        pytest.skip("Docker daemon is not available")
+
+    up = run_sandbox_command(agent_sandbox_binary, docker_config, "sandbox", "up", "-d")
+    assert up.returncode == 0, f"sandbox up failed:\n{up.stdout}\n{up.stderr}"
+
+    try:
+        # REPO_ROOT is where `up` ran (run_sandbox_command uses cwd=REPO_ROOT),
+        # so its absolute path identifies the same sandbox.
+        down = run_sandbox_command(
+            agent_sandbox_binary,
+            docker_config,
+            "sandbox",
+            "down",
+            "--path",
+            str(REPO_ROOT),
+        )
+        assert down.returncode == 0, f"sandbox down --path failed:\n{down.stdout}\n{down.stderr}"
+        assert "stopped" in down.stderr
+    finally:
+        # Idempotent cleanup in case the assertion above failed before teardown.
+        run_sandbox_command(agent_sandbox_binary, docker_config, "sandbox", "down")

@@ -17,7 +17,7 @@ import (
 )
 
 var sandboxUpCmd = &cobra.Command{
-	Use:   "sandbox-up",
+	Use:   "up",
 	Short: "Start the sandbox container and wait until stopped",
 	RunE:  runSandboxUp,
 }
@@ -26,7 +26,7 @@ var sandboxUpDetach bool
 
 func init() {
 	sandboxUpCmd.Flags().BoolVarP(&sandboxUpDetach, "detach", "d", false, "start the sandbox and exit without stopping it")
-	rootCmd.AddCommand(sandboxUpCmd)
+	sandboxCmd.AddCommand(sandboxUpCmd)
 }
 
 func runSandboxUp(cmd *cobra.Command, args []string) error {

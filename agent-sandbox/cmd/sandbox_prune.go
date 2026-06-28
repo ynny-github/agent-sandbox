@@ -13,13 +13,13 @@ import (
 )
 
 var sandboxPruneCmd = &cobra.Command{
-	Use:   "sandbox-prune",
+	Use:   "prune",
 	Short: "Remove all agent-sandbox managed containers and networks",
 	RunE:  runSandboxPrune,
 }
 
 func init() {
-	rootCmd.AddCommand(sandboxPruneCmd)
+	sandboxCmd.AddCommand(sandboxPruneCmd)
 }
 
 func runSandboxPrune(cmd *cobra.Command, args []string) error {

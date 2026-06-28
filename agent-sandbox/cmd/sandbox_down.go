@@ -14,13 +14,13 @@ import (
 )
 
 var sandboxDownCmd = &cobra.Command{
-	Use:   "sandbox-down",
+	Use:   "down",
 	Short: "Stop and remove the current project sandbox",
 	RunE:  runSandboxDown,
 }
 
 func init() {
-	rootCmd.AddCommand(sandboxDownCmd)
+	sandboxCmd.AddCommand(sandboxDownCmd)
 }
 
 func runSandboxDown(cmd *cobra.Command, args []string) error {

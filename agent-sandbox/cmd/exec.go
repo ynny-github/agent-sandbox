@@ -9,7 +9,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/engine"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/router"
 )
 
@@ -52,27 +51,33 @@ func commandFromArgs(cmd *cobra.Command, args []string) string {
 // the exit code. A container runner is built lazily, only when the routing
 // decision is "container", so host/drop commands never touch Docker.
 func runExecCore(ctx context.Context, cfg *config.Config, command string, stdout, stderr io.Writer) int {
-	req := engine.Request{
-		Command:                 command,
+	s := router.New(router.Config{
 		AllowPatterns:           cfg.Sandbox.Command.Allow,
 		DropPatterns:            cfg.Sandbox.Command.Drop,
 		ContainerEnvPassthrough: cfg.Sandbox.Container.EnvPassthrough,
-		Stdout:                  stdout,
-		Stderr:                  stderr,
-	}
+	})
 
-	decision, _ := router.Route(command, cfg.Sandbox.Command.Allow, cfg.Sandbox.Command.Drop)
-	if decision == "container" {
-		runner, cleanup, err := newComposeContainerRunner(ctx, cfg)
-		if err != nil {
-			fmt.Fprintf(stderr, "container setup: %v\n", err)
+	needs, err := s.NeedsContainer(command)
+	if err != nil {
+		fmt.Fprintf(stderr, "%v\n", err)
+		return 1
+	}
+	if needs {
+		runner, cleanup, rerr := newComposeContainerRunner(ctx, cfg)
+		if rerr != nil {
+			fmt.Fprintf(stderr, "container setup: %v\n", rerr)
 			return 1
 		}
 		defer cleanup()
-		req.ContainerRunner = runner
+		s = router.New(router.Config{
+			AllowPatterns:           cfg.Sandbox.Command.Allow,
+			DropPatterns:            cfg.Sandbox.Command.Drop,
+			ContainerEnvPassthrough: cfg.Sandbox.Container.EnvPassthrough,
+			ContainerRunner:         runner,
+		})
 	}
 
-	exitCode, runErr := engine.Run(ctx, req)
+	exitCode, runErr := s.Run(ctx, command, stdout, stderr)
 	if runErr != nil {
 		fmt.Fprintf(stderr, "%v\n", runErr)
 		return 1

@@ -1,4 +1,4 @@
-package executor_test
+package container_test
 
 import (
 	"os"
@@ -6,11 +6,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/executor"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/container"
 )
 
 func TestNewSandboxProject_Name(t *testing.T) {
-	proj, err := executor.NewSandboxProject(12345, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
+	proj, err := container.NewSandboxProject(12345, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -18,18 +18,18 @@ func TestNewSandboxProject_Name(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := executor.ProjectSandboxName(cwd)
+	want := container.ProjectSandboxName(cwd)
 	if proj.Name != want {
 		t.Errorf("Name = %q, want %q", proj.Name, want)
 	}
 }
 
 func TestNewSandboxProject_ImageName(t *testing.T) {
-	proj, err := executor.NewSandboxProject(1, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
+	proj, err := container.NewSandboxProject(1, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	svc := proj.Services[executor.SandboxServiceName]
+	svc := proj.Services[container.SandboxServiceName]
 	want := "agent-sandbox/myapp"
 	if svc.Image != want {
 		t.Errorf("Image = %q, want %q", svc.Image, want)
@@ -37,11 +37,11 @@ func TestNewSandboxProject_ImageName(t *testing.T) {
 }
 
 func TestNewSandboxProject_BuildConfig(t *testing.T) {
-	proj, err := executor.NewSandboxProject(1, 1000, 2000, "./ctx", "MyDockerfile", "myapp", nil, nil, "")
+	proj, err := container.NewSandboxProject(1, 1000, 2000, "./ctx", "MyDockerfile", "myapp", nil, nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	svc := proj.Services[executor.SandboxServiceName]
+	svc := proj.Services[container.SandboxServiceName]
 	if svc.Build == nil {
 		t.Fatal("Build is nil")
 	}
@@ -55,7 +55,7 @@ func TestNewSandboxProject_BuildConfig(t *testing.T) {
 }
 
 func TestNewSandboxProject_Labels(t *testing.T) {
-	proj, err := executor.NewSandboxProject(99, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
+	proj, err := container.NewSandboxProject(99, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestNewSandboxProject_Labels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, serviceName := range []string{executor.SandboxServiceName, "gost"} {
+	for _, serviceName := range []string{container.SandboxServiceName, "gost"} {
 		svc := proj.Services[serviceName]
 		if svc.Labels["cr.managed"] != "true" {
 			t.Errorf("%s label cr.managed = %q, want \"true\"", serviceName, svc.Labels["cr.managed"])
@@ -75,11 +75,11 @@ func TestNewSandboxProject_Labels(t *testing.T) {
 }
 
 func TestNewSandboxProject_VolumeMountsCwd(t *testing.T) {
-	proj, err := executor.NewSandboxProject(1, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
+	proj, err := container.NewSandboxProject(1, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	svc := proj.Services[executor.SandboxServiceName]
+	svc := proj.Services[container.SandboxServiceName]
 	if len(svc.Volumes) != 1 {
 		t.Fatalf("Volumes len = %d, want 1", len(svc.Volumes))
 	}
@@ -97,17 +97,17 @@ func TestNewSandboxProject_VolumeMountsCwd(t *testing.T) {
 }
 
 func TestNewSandboxProject_ServiceName(t *testing.T) {
-	proj, err := executor.NewSandboxProject(1, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
+	proj, err := container.NewSandboxProject(1, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if _, ok := proj.Services[executor.SandboxServiceName]; !ok {
-		t.Errorf("service %q not found in project", executor.SandboxServiceName)
+	if _, ok := proj.Services[container.SandboxServiceName]; !ok {
+		t.Errorf("service %q not found in project", container.SandboxServiceName)
 	}
 }
 
 func TestNewSandboxProject_WorkingDir(t *testing.T) {
-	proj, err := executor.NewSandboxProject(1, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
+	proj, err := container.NewSandboxProject(1, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -118,15 +118,15 @@ func TestNewSandboxProject_WorkingDir(t *testing.T) {
 }
 
 func TestSandboxServiceName(t *testing.T) {
-	if executor.SandboxServiceName != "workspace" {
-		t.Errorf("SandboxServiceName = %q, want \"workspace\"", executor.SandboxServiceName)
+	if container.SandboxServiceName != "workspace" {
+		t.Errorf("SandboxServiceName = %q, want \"workspace\"", container.SandboxServiceName)
 	}
 }
 
 func TestProjectSandboxName_StableForSameCWD(t *testing.T) {
 	cwd := filepath.Join("tmp", "my project")
-	got1 := executor.ProjectSandboxName(cwd)
-	got2 := executor.ProjectSandboxName(cwd)
+	got1 := container.ProjectSandboxName(cwd)
+	got2 := container.ProjectSandboxName(cwd)
 	if got1 != got2 {
 		t.Fatalf("ProjectSandboxName not stable: %q != %q", got1, got2)
 	}
@@ -136,15 +136,15 @@ func TestProjectSandboxName_StableForSameCWD(t *testing.T) {
 }
 
 func TestProjectSandboxName_DifferentPathsWithSameBaseDiffer(t *testing.T) {
-	got1 := executor.ProjectSandboxName(filepath.Join("tmp", "one", "app"))
-	got2 := executor.ProjectSandboxName(filepath.Join("tmp", "two", "app"))
+	got1 := container.ProjectSandboxName(filepath.Join("tmp", "one", "app"))
+	got2 := container.ProjectSandboxName(filepath.Join("tmp", "two", "app"))
 	if got1 == got2 {
 		t.Fatalf("ProjectSandboxName collision for different paths: %q", got1)
 	}
 }
 
 func TestProjectSandboxName_NormalizesUnsupportedCharacters(t *testing.T) {
-	got := executor.ProjectSandboxName(filepath.Join("tmp", "My App!!!"))
+	got := container.ProjectSandboxName(filepath.Join("tmp", "My App!!!"))
 	if !strings.HasPrefix(got, "cr-sandbox-my-app-") {
 		t.Fatalf("ProjectSandboxName = %q, want normalized basename", got)
 	}
@@ -157,7 +157,7 @@ func TestProjectSandboxName_NormalizesUnsupportedCharacters(t *testing.T) {
 
 func TestNewSandboxProject_ProjectNameUsesCWD(t *testing.T) {
 	pid := os.Getpid()
-	proj, err := executor.NewSandboxProject(pid, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
+	proj, err := container.NewSandboxProject(pid, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -165,25 +165,25 @@ func TestNewSandboxProject_ProjectNameUsesCWD(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := executor.ProjectSandboxName(cwd)
+	want := container.ProjectSandboxName(cwd)
 	if proj.Name != want {
 		t.Errorf("Name = %q, want %q", proj.Name, want)
 	}
 }
 
 func TestNewSandboxProject_User(t *testing.T) {
-	proj, err := executor.NewSandboxProject(1, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
+	proj, err := container.NewSandboxProject(1, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	svc := proj.Services[executor.SandboxServiceName]
+	svc := proj.Services[container.SandboxServiceName]
 	if svc.User != "1000:2000" {
 		t.Errorf("User = %q, want \"1000:2000\"", svc.User)
 	}
 }
 
 func TestNewSandboxProject_RootUserReturnsError(t *testing.T) {
-	_, err := executor.NewSandboxProject(1, 0, 0, "./ctx", "Dockerfile", "myapp", nil, nil, "")
+	_, err := container.NewSandboxProject(1, 0, 0, "./ctx", "Dockerfile", "myapp", nil, nil, "")
 	if err == nil {
 		t.Fatal("expected error when uid=0 (root), got nil")
 	}
@@ -194,43 +194,43 @@ func TestNewSandboxProject_RootUserReturnsError(t *testing.T) {
 
 func TestNewSandboxProject_RootGIDOnlyNotBlocked(t *testing.T) {
 	// only uid=0 is blocked, gid=0 alone is allowed
-	proj, err := executor.NewSandboxProject(1, 1000, 0, "./ctx", "Dockerfile", "myapp", nil, nil, "")
+	proj, err := container.NewSandboxProject(1, 1000, 0, "./ctx", "Dockerfile", "myapp", nil, nil, "")
 	if err != nil {
 		t.Fatalf("gid=0 with non-root uid should be allowed: %v", err)
 	}
-	svc := proj.Services[executor.SandboxServiceName]
+	svc := proj.Services[container.SandboxServiceName]
 	if svc.User != "1000:0" {
 		t.Errorf("User = %q, want \"1000:0\"", svc.User)
 	}
 }
 
 func TestNewSandboxProject_WorkingDir_Container(t *testing.T) {
-	proj, err := executor.NewSandboxProject(1, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
+	proj, err := container.NewSandboxProject(1, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	svc := proj.Services[executor.SandboxServiceName]
+	svc := proj.Services[container.SandboxServiceName]
 	if svc.WorkingDir != "/workspace" {
 		t.Errorf("svc.WorkingDir = %q, want \"/workspace\"", svc.WorkingDir)
 	}
 }
 
 func TestNewSandboxProject_HasDefaultNetwork(t *testing.T) {
-	proj, err := executor.NewSandboxProject(1, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
+	proj, err := container.NewSandboxProject(1, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if _, ok := proj.Networks["default"]; !ok {
 		t.Error("project Networks does not contain \"default\"")
 	}
-	svc := proj.Services[executor.SandboxServiceName]
+	svc := proj.Services[container.SandboxServiceName]
 	if _, ok := svc.Networks["default"]; !ok {
 		t.Error("service Networks does not contain \"default\"")
 	}
 }
 
 func TestNewSandboxProject_HasGostService(t *testing.T) {
-	proj, err := executor.NewSandboxProject(1, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
+	proj, err := container.NewSandboxProject(1, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -250,7 +250,7 @@ func TestNewSandboxProject_HasGostService(t *testing.T) {
 }
 
 func TestNewSandboxProject_HasGostConfig(t *testing.T) {
-	proj, err := executor.NewSandboxProject(1, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
+	proj, err := container.NewSandboxProject(1, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -266,18 +266,18 @@ func TestNewSandboxProject_HasGostConfig(t *testing.T) {
 // During Up, workspace uses default network (full internet for build/pull).
 // After Up, ApplyNetworkPolicy moves it to sandbox_internal.
 func TestNewSandboxProject_WorkspaceStartsOnDefaultNetwork(t *testing.T) {
-	proj, err := executor.NewSandboxProject(1, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
+	proj, err := container.NewSandboxProject(1, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	svc := proj.Services[executor.SandboxServiceName]
+	svc := proj.Services[container.SandboxServiceName]
 	if _, ok := svc.Networks["default"]; !ok {
 		t.Error("workspace should start on default network (for build/pull during Up)")
 	}
 }
 
 func TestNewSandboxProject_GostOnBothNetworks(t *testing.T) {
-	proj, err := executor.NewSandboxProject(1, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
+	proj, err := container.NewSandboxProject(1, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -291,7 +291,7 @@ func TestNewSandboxProject_GostOnBothNetworks(t *testing.T) {
 }
 
 func TestNewSandboxProject_SandboxInternalNetworkIsInternal(t *testing.T) {
-	proj, err := executor.NewSandboxProject(1, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
+	proj, err := container.NewSandboxProject(1, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -305,11 +305,11 @@ func TestNewSandboxProject_SandboxInternalNetworkIsInternal(t *testing.T) {
 }
 
 func TestNewSandboxProject_WorkspaceHasProxyEnv(t *testing.T) {
-	proj, err := executor.NewSandboxProject(1, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
+	proj, err := container.NewSandboxProject(1, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	svc := proj.Services[executor.SandboxServiceName]
+	svc := proj.Services[container.SandboxServiceName]
 	checkEnv := func(key, want string) {
 		t.Helper()
 		v, ok := svc.Environment[key]
@@ -333,7 +333,7 @@ func TestNewSandboxProject_WorkspaceHasProxyEnv(t *testing.T) {
 }
 
 func TestGenerateGostConfig_HasSOCKS5(t *testing.T) {
-	cfg := executor.GenerateGostConfig(nil, nil)
+	cfg := container.GenerateGostConfig(nil, nil)
 	if !strings.Contains(cfg, "type: socks5") {
 		t.Error("config should contain socks5 service")
 	}
@@ -343,7 +343,7 @@ func TestGenerateGostConfig_HasSOCKS5(t *testing.T) {
 }
 
 func TestGenerateGostConfig_HasHTTP(t *testing.T) {
-	cfg := executor.GenerateGostConfig(nil, nil)
+	cfg := container.GenerateGostConfig(nil, nil)
 	if !strings.Contains(cfg, "type: http") {
 		t.Error("config should contain http proxy service")
 	}
@@ -353,28 +353,28 @@ func TestGenerateGostConfig_HasHTTP(t *testing.T) {
 }
 
 func TestGenerateGostConfig_DefaultDeny(t *testing.T) {
-	cfg := executor.GenerateGostConfig(nil, nil)
+	cfg := container.GenerateGostConfig(nil, nil)
 	if !strings.Contains(cfg, "reverse: true") {
 		t.Error("config should have reverse: true for whitelist mode")
 	}
 }
 
 func TestGenerateGostConfig_WithCIDR(t *testing.T) {
-	cfg := executor.GenerateGostConfig([]string{"192.168.0.0/16"}, nil)
+	cfg := container.GenerateGostConfig([]string{"192.168.0.0/16"}, nil)
 	if !strings.Contains(cfg, "192.168.0.0/16") {
 		t.Error("config should contain the CIDR")
 	}
 }
 
 func TestGenerateGostConfig_WithHost(t *testing.T) {
-	cfg := executor.GenerateGostConfig(nil, []string{"api.github.com"})
+	cfg := container.GenerateGostConfig(nil, []string{"api.github.com"})
 	if !strings.Contains(cfg, "api.github.com") {
 		t.Error("config should contain the hostname")
 	}
 }
 
 func TestGenerateGostConfig_BothCIDRAndHost(t *testing.T) {
-	cfg := executor.GenerateGostConfig([]string{"10.0.0.0/8"}, []string{"registry.npmjs.org"})
+	cfg := container.GenerateGostConfig([]string{"10.0.0.0/8"}, []string{"registry.npmjs.org"})
 	if !strings.Contains(cfg, "10.0.0.0/8") {
 		t.Error("config should contain the CIDR")
 	}
@@ -403,7 +403,7 @@ func TestNormalizeProjectName(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got := executor.NormalizeProjectName(tt.input)
+			got := container.NormalizeProjectName(tt.input)
 			if got != tt.want {
 				t.Errorf("NormalizeProjectName(%q) = %q, want %q", tt.input, got, tt.want)
 			}
@@ -412,7 +412,7 @@ func TestNormalizeProjectName(t *testing.T) {
 }
 
 func TestNewSandboxProject_NoExternalNetwork(t *testing.T) {
-	proj, err := executor.NewSandboxProject(1, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
+	proj, err := container.NewSandboxProject(1, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -426,7 +426,7 @@ func TestNewSandboxProject_NoExternalNetwork(t *testing.T) {
 }
 
 func TestNewSandboxProject_WithExternalNetwork(t *testing.T) {
-	proj, err := executor.NewSandboxProject(1, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "myproject_default")
+	proj, err := container.NewSandboxProject(1, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "myproject_default")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -441,7 +441,7 @@ func TestNewSandboxProject_WithExternalNetwork(t *testing.T) {
 	if !extNet.External {
 		t.Error("external network should have External=true")
 	}
-	svc := proj.Services[executor.SandboxServiceName]
+	svc := proj.Services[container.SandboxServiceName]
 	if _, ok := svc.Networks["myproject_default"]; !ok {
 		t.Error("workspace service should be on external network")
 	}

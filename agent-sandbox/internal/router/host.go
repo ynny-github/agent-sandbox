@@ -1,4 +1,4 @@
-package executor
+package router
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 	"sync"
 )
 
-func RunHost(ctx context.Context, args []string, stdout, stderr io.Writer) (int, error) {
+func RunHost(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, fmt.Errorf("executor: context: %w", err)
 	}
@@ -18,6 +18,9 @@ func RunHost(ctx context.Context, args []string, stdout, stderr io.Writer) (int,
 	}
 
 	c := exec.Command(args[0], args[1:]...)
+	if stdin != nil {
+		c.Stdin = stdin
+	}
 	configureProcessGroup(c)
 
 	stdoutPipe, err := c.StdoutPipe()
@@ -52,6 +55,13 @@ func RunHost(ctx context.Context, args []string, stdout, stderr io.Writer) (int,
 		if _, err := io.Copy(stdout, stdoutPipe); err != nil {
 			copyErrs <- fmt.Errorf("stdout: %w", err)
 		}
+		// Close stdoutPipe so the subprocess receives SIGPIPE / EPIPE on its
+		// next write if the downstream consumer exited early (e.g. head -1 in
+		// a mixed pipeline). Without this close, the subprocess blocks on a
+		// full OS pipe and c.Wait() hangs indefinitely. c.Wait also closes the
+		// pipe; this earlier close is an intentional, harmless double-close
+		// (os.File.Close is idempotent — the second call just returns ErrClosed).
+		stdoutPipe.Close()
 	}()
 	go func() {
 		defer wg.Done()
@@ -84,6 +94,12 @@ func RunHost(ctx context.Context, args []string, stdout, stderr io.Writer) (int,
 		return exitCode(waitErr), waitError(waitErr)
 	}
 	return 0, nil
+}
+
+// RunHostShell runs raw via "bash -c" on the host. Used for segments that
+// contain a redirect (which the shell-free argv path cannot express).
+func RunHostShell(ctx context.Context, raw string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	return RunHost(ctx, []string{"bash", "-c", raw}, stdin, stdout, stderr)
 }
 
 func joinCopyErrors(errs <-chan error) error {

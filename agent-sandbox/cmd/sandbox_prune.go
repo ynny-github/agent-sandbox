@@ -9,7 +9,7 @@ import (
 	"github.com/docker/cli/cli/command"
 	cliflags "github.com/docker/cli/cli/flags"
 	"github.com/spf13/cobra"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/executor"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/container"
 )
 
 var sandboxPruneCmd = &cobra.Command{
@@ -39,7 +39,7 @@ func runSandboxPrune(cmd *cobra.Command, args []string) error {
 	}
 
 	// nil project: CleanStale only uses dockerCLI, not the project.
-	ex := executor.NewComposeExecutor(dockerCli, nil)
+	ex := container.NewComposeExecutor(dockerCli, nil)
 
 	cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cleanCancel()

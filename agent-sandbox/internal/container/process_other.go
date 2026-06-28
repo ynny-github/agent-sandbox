@@ -1,6 +1,6 @@
 //go:build !unix
 
-package executor
+package container
 
 // processExists always returns true on non-Unix platforms to avoid
 // incorrectly removing containers when process existence cannot be checked.

@@ -38,16 +38,18 @@ func TestRunExecCore_DropPattern(t *testing.T) {
 	}
 }
 
-func TestRunExecCore_ValidationFailure(t *testing.T) {
+func TestRunExecCore_ParseFailure(t *testing.T) {
+	// An unterminated quote is a parse error; NeedsContainer returns the error
+	// and runExecCore writes it to stderr, returning exit code 1.
 	cfg := &config.Config{}
-	cfg.Sandbox.Command.Allow = []string{"git *"}
+	cfg.Sandbox.Command.Allow = []string{"echo *"}
 
 	var out, errBuf bytes.Buffer
-	code := runExecCore(context.Background(), cfg, "git log | head -20", &out, &errBuf)
+	code := runExecCore(context.Background(), cfg, `echo "hi`, &out, &errBuf)
 	if code != 1 {
 		t.Errorf("exit code = %d, want 1", code)
 	}
-	if !strings.Contains(errBuf.String(), "rejected") {
-		t.Errorf("stderr = %q, want it to contain rejected", errBuf.String())
+	if !strings.Contains(errBuf.String(), "unterminated quote") {
+		t.Errorf("stderr = %q, want it to contain 'unterminated quote'", errBuf.String())
 	}
 }

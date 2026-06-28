@@ -12,7 +12,7 @@ import (
 
 // ContainerRunner executes an argv inside the sandbox container.
 type ContainerRunner interface {
-	RunContainer(ctx context.Context, argv []string, env []string, stdout, stderr io.Writer) (int, error)
+	RunContainer(ctx context.Context, argv []string, env []string, stdin io.Reader, stdout, stderr io.Writer) (int, error)
 }
 
 // Request carries everything Run needs for a single command.
@@ -49,7 +49,7 @@ func Run(ctx context.Context, req Request) (int, error) {
 			argv = []string{"bash", "-c", cmd.Raw}
 		}
 		env := resolveEnv(req.ContainerEnvPassthrough)
-		exitCode, runErr := req.ContainerRunner.RunContainer(ctx, argv, env, req.Stdout, req.Stderr)
+		exitCode, runErr := req.ContainerRunner.RunContainer(ctx, argv, env, nil, req.Stdout, req.Stderr)
 		if runErr != nil {
 			fmt.Fprintf(req.Stderr, "container exec: %v\n", runErr)
 			if exitCode == 0 {
@@ -68,7 +68,7 @@ func Run(ctx context.Context, req Request) (int, error) {
 			fmt.Fprintln(req.Stderr, "rejected: empty command")
 			return 1, nil
 		}
-		exitCode, runErr := RunHost(ctx, cmd.Args, req.Stdout, req.Stderr)
+		exitCode, runErr := RunHost(ctx, cmd.Args, nil, req.Stdout, req.Stderr)
 		if runErr != nil {
 			return exitCode, fmt.Errorf("executor: %w", runErr)
 		}

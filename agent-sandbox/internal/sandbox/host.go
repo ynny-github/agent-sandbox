@@ -9,7 +9,7 @@ import (
 	"sync"
 )
 
-func RunHost(ctx context.Context, args []string, stdout, stderr io.Writer) (int, error) {
+func RunHost(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, fmt.Errorf("executor: context: %w", err)
 	}
@@ -18,6 +18,9 @@ func RunHost(ctx context.Context, args []string, stdout, stderr io.Writer) (int,
 	}
 
 	c := exec.Command(args[0], args[1:]...)
+	if stdin != nil {
+		c.Stdin = stdin
+	}
 	configureProcessGroup(c)
 
 	stdoutPipe, err := c.StdoutPipe()
@@ -84,6 +87,12 @@ func RunHost(ctx context.Context, args []string, stdout, stderr io.Writer) (int,
 		return exitCode(waitErr), waitError(waitErr)
 	}
 	return 0, nil
+}
+
+// RunHostShell runs raw via "bash -c" on the host. Used for segments that
+// contain a redirect (which the shell-free argv path cannot express).
+func RunHostShell(ctx context.Context, raw string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	return RunHost(ctx, []string{"bash", "-c", raw}, stdin, stdout, stderr)
 }
 
 func joinCopyErrors(errs <-chan error) error {

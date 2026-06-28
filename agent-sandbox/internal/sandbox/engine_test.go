@@ -22,7 +22,7 @@ type mockRunner struct {
 	capturedArgv []string
 }
 
-func (m *mockRunner) RunContainer(ctx context.Context, argv []string, env []string, stdout, stderr io.Writer) (int, error) {
+func (m *mockRunner) RunContainer(ctx context.Context, argv []string, env []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	m.called = true
 	m.capturedEnv = env
 	m.capturedArgv = argv

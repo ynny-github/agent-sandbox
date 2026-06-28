@@ -170,19 +170,23 @@ func (e *ComposeExecutor) ApplyNetworkPolicy(ctx context.Context) error {
 	return nil
 }
 
-func (e *ComposeExecutor) RunContainer(ctx context.Context, argv []string, env []string, stdout, stderr io.Writer) (int, error) {
-	return e.runContainerCommand(ctx, argv, env, stdout, stderr)
+func (e *ComposeExecutor) RunContainer(ctx context.Context, argv []string, env []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	return e.runContainerCommand(ctx, argv, env, stdin, stdout, stderr)
 }
 
-func (e *ComposeExecutor) runContainerCommand(ctx context.Context, commandTokens []string, env []string, stdout, stderr io.Writer) (int, error) {
+func (e *ComposeExecutor) runContainerCommand(ctx context.Context, commandTokens []string, env []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	if err := e.WaitReady(ctx); err != nil {
 		return 0, fmt.Errorf("executor: sandbox not ready: %w", err)
 	}
-	perCallCLI, err := command.NewDockerCli(
+	opts := []command.CLIOption{
 		command.WithAPIClient(e.dockerCLI.Client()),
 		command.WithOutputStream(stdout),
 		command.WithErrorStream(stderr),
-	)
+	}
+	if stdin != nil {
+		opts = append(opts, command.WithInputStream(io.NopCloser(stdin)))
+	}
+	perCallCLI, err := command.NewDockerCli(opts...)
 	if err != nil {
 		return 0, fmt.Errorf("executor: create cli: %w", err)
 	}
@@ -195,6 +199,7 @@ func (e *ComposeExecutor) runContainerCommand(ctx context.Context, commandTokens
 		Service:     SandboxServiceName,
 		Command:     commandTokens,
 		Tty:         false,
+		Interactive: stdin != nil,
 		Environment: env,
 	})
 	if err != nil {

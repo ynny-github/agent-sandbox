@@ -14,9 +14,9 @@ import (
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/router"
 )
 
-// ContainerRunner executes a command inside the sandbox container.
+// ContainerRunner executes an argv inside the sandbox container.
 type ContainerRunner interface {
-	RunContainer(ctx context.Context, serviceName, cmd string, env []string, stdout, stderr io.Writer) (int, error)
+	RunContainer(ctx context.Context, serviceName string, argv []string, env []string, stdout, stderr io.Writer) (int, error)
 }
 
 // Request carries everything Run needs for a single command.
@@ -53,8 +53,12 @@ func Run(ctx context.Context, req Request) (int, error) {
 			fmt.Fprintln(req.Stderr, "no container configured: cannot route command to container")
 			return 1, nil
 		}
+		argv := cmd.Args
+		if cmd.HasOperator {
+			argv = []string{"bash", "-c", cmd.Raw}
+		}
 		env := resolveEnv(req.ContainerEnvPassthrough)
-		exitCode, runErr := req.ContainerRunner.RunContainer(ctx, executor.SandboxServiceName, req.Command, env, req.Stdout, req.Stderr)
+		exitCode, runErr := req.ContainerRunner.RunContainer(ctx, executor.SandboxServiceName, argv, env, req.Stdout, req.Stderr)
 		if runErr != nil {
 			fmt.Fprintf(req.Stderr, "container exec: %v\n", runErr)
 			if exitCode == 0 {

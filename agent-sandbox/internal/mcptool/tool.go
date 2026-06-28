@@ -17,9 +17,13 @@ Routing:
 - Commands matching drop-patterns are refused.
 - All other commands run in the container.
 
-Host restrictions:
-- Shell operators (|, >, <, &, ;, ` + "`" + `, $(...)) are not allowed.
-- FD redirects (2>&1, 1>&2) are also not allowed.`
+Operator handling:
+- Pipe (|): each segment is routed independently; host and container segments
+  may be mixed within the same pipeline.
+- Sequential operators (&&, ||, ;): each pipeline is routed and executed in order.
+- Redirect segments (>, <, >>, 2>) and operators ($(), ` + "`" + `, lone &): run via
+  bash -c on whichever side they are routed to; $(), backtick, and lone &
+  always fall back to the container.`
 
 type RunCommandInput struct {
 	Command        string `json:"command"`

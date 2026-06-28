@@ -55,6 +55,13 @@ func RunHost(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 		if _, err := io.Copy(stdout, stdoutPipe); err != nil {
 			copyErrs <- fmt.Errorf("stdout: %w", err)
 		}
+		// Close stdoutPipe so the subprocess receives SIGPIPE / EPIPE on its
+		// next write if the downstream consumer exited early (e.g. head -1 in
+		// a mixed pipeline). Without this close, the subprocess blocks on a
+		// full OS pipe and c.Wait() hangs indefinitely. c.Wait also closes the
+		// pipe; this earlier close is an intentional, harmless double-close
+		// (os.File.Close is idempotent — the second call just returns ErrClosed).
+		stdoutPipe.Close()
 	}()
 	go func() {
 		defer wg.Done()

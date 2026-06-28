@@ -52,6 +52,8 @@ func Run(ctx context.Context, req Request) (int, error) {
 	// (fail-closed before any execution), then check for missing container runner.
 	// Trim each segment's Raw before routing to strip structural whitespace left
 	// by the pipeline/sequential split (e.g. " b" or "false ").
+	// INVARIANT: trimming is for pattern matching only; execution always uses the
+	// original seg.Raw / seg.Args so routing semantics are never altered by whitespace.
 	plDecisions := make([][]routedSeg, len(line.Pipelines))
 	for i, pl := range line.Pipelines {
 		for _, seg := range pl.Segments {
@@ -100,9 +102,7 @@ func Run(ctx context.Context, req Request) (int, error) {
 
 // runPipeline runs one pipeline. Uniform pipelines (all segments on the same
 // side) run as a single invocation on that side. Mixed host+container pipelines
-// fall back to the container whole-line path.
-//
-// NOTE: Task 7 will replace the interim mixed fallback with real io.Pipe wiring.
+// are wired segment-by-segment with io.Pipe via runMixedPipeline.
 func runPipeline(ctx context.Context, req Request, pl PipelineNode, rs []routedSeg) (int, error) {
 	allHost := true
 	allContainer := true
@@ -174,8 +174,8 @@ func runUniformContainer(ctx context.Context, req Request, pl PipelineNode, rs [
 	return runContainerWhole(ctx, req, pl.Raw)
 }
 
-// runContainerWhole runs raw in the container via bash -c. Used for pipelines,
-// redirects, fallback constructs ($(), backtick, &), and interim mixed pipelines.
+// runContainerWhole runs raw in the container via bash -c. Used for
+// all-container pipelines with redirects, and fallback constructs ($(), backtick, &).
 func runContainerWhole(ctx context.Context, req Request, raw string) (int, error) {
 	if req.ContainerRunner == nil {
 		fmt.Fprintln(req.Stderr, "no container configured: cannot route command to container")
@@ -194,22 +194,57 @@ func runContainerWhole(ctx context.Context, req Request, raw string) (int, error
 	return code, nil
 }
 
+// syncWriter wraps an io.Writer with a mutex so it is safe for concurrent use.
+// Used to guard req.Stderr when multiple segment goroutines run in parallel.
+type syncWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *syncWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
+}
+
 // runMixedPipeline runs a pipeline whose segments span host and container,
 // wiring stdout→stdin between adjacent segments with io.Pipe. All segments run
 // concurrently; the exit code is that of the last segment.
+//
+// Pipe ownership and deadlock prevention: each segment goroutine closes BOTH
+// ends of the pipes it owns when it finishes:
+//   - writeEnds[i].Close()                      — sends EOF to segment i+1.
+//   - readEnds[i].CloseWithError(ErrClosedPipe) — causes the upstream write
+//     (via inter-segment io.PipeWriter) to return an error, which in turn
+//     causes RunHost's io.Copy goroutine to close the OS stdoutPipe, delivering
+//     SIGPIPE to the upstream OS subprocess so it exits and c.Wait() returns.
+//
+// This two-step unblocking (inter-segment pipe → OS pipe → subprocess exit)
+// guarantees that an early-exiting downstream (e.g. `producer | head -1`)
+// unblocks its upstream without leaving goroutines or processes running.
+//
+// req.Stderr is shared across all segment goroutines; it is wrapped in a
+// syncWriter so concurrent writes from parallel segments do not race.
 func runMixedPipeline(ctx context.Context, req Request, rs []routedSeg) (int, error) {
 	n := len(rs)
+
+	// Wrap stderr to allow safe concurrent writes from all segment goroutines.
+	safeReq := req
+	safeReq.Stderr = &syncWriter{w: req.Stderr}
+
 	// stdin for each segment: first is nil, others read the previous pipe.
 	stdins := make([]io.Reader, n)
 	// stdout for each segment: last writes req.Stdout, others write a pipe.
 	stdouts := make([]io.Writer, n)
-	writeEnds := make([]*io.PipeWriter, n)
+	writeEnds := make([]*io.PipeWriter, n) // write end that segment i uses as stdout
+	readEnds := make([]*io.PipeReader, n)  // read end that segment i uses as stdin (nil for i==0)
 
 	for i := 0; i < n-1; i++ {
 		pr, pw := io.Pipe()
 		stdouts[i] = pw
 		writeEnds[i] = pw
 		stdins[i+1] = pr
+		readEnds[i+1] = pr // segment i+1 owns this reader; closes it when done
 	}
 	stdouts[n-1] = req.Stdout
 
@@ -219,17 +254,23 @@ func runMixedPipeline(ctx context.Context, req Request, rs []routedSeg) (int, er
 	for i := range rs {
 		go func(i int) {
 			defer wg.Done()
-			code, err := runSegment(ctx, req, rs[i], stdins[i], stdouts[i])
+			code, err := runSegment(ctx, safeReq, rs[i], stdins[i], stdouts[i])
 			exits[i] = code
 			if err != nil {
-				fmt.Fprintf(req.Stderr, "pipeline segment: %v\n", err)
+				fmt.Fprintf(safeReq.Stderr, "pipeline segment: %v\n", err)
 				if exits[i] == 0 {
 					exits[i] = 1
 				}
 			}
-			// Close this segment's write end so the next segment sees EOF.
+			// Close write end: signals EOF to the next segment.
 			if writeEnds[i] != nil {
 				writeEnds[i].Close()
+			}
+			// Close read end: unblocks the previous segment's inter-segment
+			// io.Copy if it is still writing (e.g. this segment exited early
+			// without draining stdin, as in `producer | head -1`).
+			if readEnds[i] != nil {
+				readEnds[i].CloseWithError(io.ErrClosedPipe)
 			}
 		}(i)
 	}

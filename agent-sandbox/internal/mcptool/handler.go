@@ -27,15 +27,12 @@ func HandleRunCommand(ctx context.Context, cmd string, cfg HandlerConfig) (*mcp.
 		return errorResult(fmt.Sprintf("output: %v", err)), nil, nil
 	}
 
-	exitCode, runErr := sandbox.Run(ctx, sandbox.Request{
-		Command:                 cmd,
+	exitCode, runErr := sandbox.New(sandbox.Config{
 		AllowPatterns:           cfg.AllowPatterns,
 		DropPatterns:            cfg.DropPatterns,
 		ContainerRunner:         cfg.ContainerRunner,
 		ContainerEnvPassthrough: cfg.ContainerEnvPassthrough,
-		Stdout:                  files.Stdout,
-		Stderr:                  files.Stderr,
-	})
+	}).Run(ctx, cmd, files.Stdout, files.Stderr)
 
 	closeErr := files.Close()
 	if runErr != nil {

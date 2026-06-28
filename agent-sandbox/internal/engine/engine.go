@@ -9,9 +9,9 @@ import (
 	"io"
 	"os"
 
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/command"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/executor"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/router"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/validator"
 )
 
 // ContainerRunner executes a command inside the sandbox container.
@@ -37,6 +37,11 @@ type Request struct {
 // runner error) write a message to req.Stderr and return err == nil with a
 // non-zero exit code.
 func Run(ctx context.Context, req Request) (int, error) {
+	cmd, parseErr := command.Parse(req.Command)
+	if parseErr != nil {
+		fmt.Fprintf(req.Stderr, "rejected: %v\n", parseErr)
+		return 1, nil
+	}
 	decision, matched := router.Route(req.Command, req.AllowPatterns, req.DropPatterns)
 	switch decision {
 	case "drop":
@@ -60,11 +65,15 @@ func Run(ctx context.Context, req Request) (int, error) {
 		return exitCode, nil
 
 	default:
-		if err := validator.Validate(req.Command); err != nil {
-			fmt.Fprintf(req.Stderr, "rejected: %v\n", err)
+		if cmd.HasOperator {
+			fmt.Fprintln(req.Stderr, "rejected: shell operator not allowed on host")
 			return 1, nil
 		}
-		exitCode, runErr := executor.RunHost(ctx, req.Command, req.Stdout, req.Stderr)
+		if len(cmd.Args) == 0 {
+			fmt.Fprintln(req.Stderr, "rejected: empty command")
+			return 1, nil
+		}
+		exitCode, runErr := executor.RunHost(ctx, cmd.Args, req.Stdout, req.Stderr)
 		if runErr != nil {
 			return exitCode, fmt.Errorf("executor: %w", runErr)
 		}

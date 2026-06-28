@@ -94,7 +94,7 @@ func TestRun_DropPattern(t *testing.T) {
 	}
 }
 
-func TestRun_ValidationFailure(t *testing.T) {
+func TestRun_HostShellOperator_Rejected(t *testing.T) {
 	var out, errBuf bytes.Buffer
 	code, err := engine.Run(context.Background(), engine.Request{
 		Command:       "git log | head -20",
@@ -108,8 +108,8 @@ func TestRun_ValidationFailure(t *testing.T) {
 	if code != 1 {
 		t.Errorf("exitCode = %d, want 1", code)
 	}
-	if !strings.Contains(errBuf.String(), "rejected") {
-		t.Errorf("stderr = %q, want it to contain rejected", errBuf.String())
+	if !strings.Contains(errBuf.String(), "shell operator not allowed on host") {
+		t.Errorf("stderr = %q, want host shell-operator rejection", errBuf.String())
 	}
 }
 

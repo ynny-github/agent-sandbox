@@ -38,7 +38,7 @@ func TestRunHost_Echo_WritesStdoutAndExitsZero(t *testing.T) {
 
 func TestRunHost_BothOutputs_WrittenToCorrectWriters(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	// Use printf to write to stdout and redirect to stderr via fd-to-fd (permitted by validator)
+	// Run sh explicitly as the program to exercise fd-to-fd redirection.
 	code, err := executor.RunHost(context.Background(),
 		[]string{"sh", "-c", "printf out && printf err 1>&2"}, &stdout, &stderr)
 	if err != nil {

@@ -1,7 +1,7 @@
-// Package sandbox routes a command to drop/host/container and executes it,
+// Package commandrouter routes a command to drop/host/container and executes it,
 // independent of any transport (MCP, CLI). Output is written to the caller's
 // io.Writers.
-package sandbox
+package commandrouter
 
 import (
 	"context"

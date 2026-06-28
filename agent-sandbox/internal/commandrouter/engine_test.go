@@ -1,4 +1,4 @@
-package sandbox_test
+package commandrouter_test
 
 import (
 	"bytes"
@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandbox"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/commandrouter"
 )
 
 // mockRunner is an existing fake kept for backward-compatible test cases.
@@ -36,7 +36,7 @@ func (m *mockRunner) RunContainer(ctx context.Context, argv []string, env []stri
 	return m.exitCode, m.err
 }
 
-var _ sandbox.ContainerRunner = (*mockRunner)(nil)
+var _ commandrouter.ContainerRunner = (*mockRunner)(nil)
 
 // fakeRunner records RunContainer calls; used for new orchestration tests.
 type fakeRunner struct {
@@ -51,13 +51,13 @@ func (f *fakeRunner) RunContainer(_ context.Context, argv, _ []string, _ io.Read
 	return f.code, nil
 }
 
-var _ sandbox.ContainerRunner = (*fakeRunner)(nil)
+var _ commandrouter.ContainerRunner = (*fakeRunner)(nil)
 
 // ─── existing host/container tests (behavior preserved) ──────────────────────
 
 func TestRun_HostSuccess(t *testing.T) {
 	var out, errBuf bytes.Buffer
-	code, err := sandbox.Run(context.Background(), sandbox.Request{
+	code, err := commandrouter.Run(context.Background(), commandrouter.Request{
 		Command:       "echo hello",
 		AllowPatterns: []string{"echo *"},
 		Stdout:        &out,
@@ -76,7 +76,7 @@ func TestRun_HostSuccess(t *testing.T) {
 
 func TestRun_HostNonZeroExit_NoError(t *testing.T) {
 	var out, errBuf bytes.Buffer
-	code, err := sandbox.Run(context.Background(), sandbox.Request{
+	code, err := commandrouter.Run(context.Background(), commandrouter.Request{
 		Command:       "ls /nonexistent-path-xyz-12345",
 		AllowPatterns: []string{"ls *"},
 		Stdout:        &out,
@@ -93,7 +93,7 @@ func TestRun_HostNonZeroExit_NoError(t *testing.T) {
 func TestRun_DropPattern(t *testing.T) {
 	var out, errBuf bytes.Buffer
 	runner := &mockRunner{}
-	code, err := sandbox.Run(context.Background(), sandbox.Request{
+	code, err := commandrouter.Run(context.Background(), commandrouter.Request{
 		Command:         "rm -rf /tmp/anything",
 		DropPatterns:    []string{"rm -rf *"},
 		ContainerRunner: runner,
@@ -117,7 +117,7 @@ func TestRun_DropPattern(t *testing.T) {
 
 func TestRun_ContainerNotConfigured(t *testing.T) {
 	var out, errBuf bytes.Buffer
-	code, err := sandbox.Run(context.Background(), sandbox.Request{
+	code, err := commandrouter.Run(context.Background(), commandrouter.Request{
 		Command:       "npm test",
 		AllowPatterns: []string{"git *"},
 		Stdout:        &out,
@@ -137,7 +137,7 @@ func TestRun_ContainerNotConfigured(t *testing.T) {
 func TestRun_ContainerSuccess(t *testing.T) {
 	var out, errBuf bytes.Buffer
 	runner := &mockRunner{exitCode: 0, stdout: "container output\n"}
-	code, err := sandbox.Run(context.Background(), sandbox.Request{
+	code, err := commandrouter.Run(context.Background(), commandrouter.Request{
 		Command:         "npm test",
 		AllowPatterns:   []string{"git *"},
 		ContainerRunner: runner,
@@ -165,7 +165,7 @@ func TestRun_ContainerSuccess(t *testing.T) {
 func TestRun_ContainerShellOperator_WrappedInBash(t *testing.T) {
 	var out, errBuf bytes.Buffer
 	runner := &mockRunner{exitCode: 0}
-	code, err := sandbox.Run(context.Background(), sandbox.Request{
+	code, err := commandrouter.Run(context.Background(), commandrouter.Request{
 		Command:         "ls / | head -1",
 		AllowPatterns:   []string{"git *"},
 		ContainerRunner: runner,
@@ -186,7 +186,7 @@ func TestRun_ContainerShellOperator_WrappedInBash(t *testing.T) {
 func TestRun_ContainerRunnerError(t *testing.T) {
 	var out, errBuf bytes.Buffer
 	runner := &mockRunner{exitCode: 0, stdout: "partial output\n", err: errors.New("attach interrupted")}
-	code, err := sandbox.Run(context.Background(), sandbox.Request{
+	code, err := commandrouter.Run(context.Background(), commandrouter.Request{
 		Command:         "npm test",
 		ContainerRunner: runner,
 		Stdout:          &out,
@@ -210,7 +210,7 @@ func TestRun_ContainerEnvPassthrough(t *testing.T) {
 	t.Setenv("CR_ENGINE_TEST_VAR", "passedvalue")
 	var out, errBuf bytes.Buffer
 	runner := &mockRunner{exitCode: 0}
-	_, err := sandbox.Run(context.Background(), sandbox.Request{
+	_, err := commandrouter.Run(context.Background(), commandrouter.Request{
 		Command:                 "npm test",
 		ContainerRunner:         runner,
 		ContainerEnvPassthrough: []string{"CR_ENGINE_TEST_VAR", "CR_ENGINE_TEST_ABSENT_XYZ"},
@@ -230,7 +230,7 @@ func TestRun_ContainerEnvPassthrough(t *testing.T) {
 func TestRun_UniformContainerPipeline_UsesBashC(t *testing.T) {
 	f := &fakeRunner{out: "ok\n"}
 	var out, errb bytes.Buffer
-	code, err := sandbox.Run(context.Background(), sandbox.Request{
+	code, err := commandrouter.Run(context.Background(), commandrouter.Request{
 		Command:         "a | b",
 		ContainerRunner: f,
 		Stdout:          &out, Stderr: &errb,
@@ -248,7 +248,7 @@ func TestRun_SequentialAnd_SkipsOnFailure(t *testing.T) {
 	// `false && b`: host `false` exits 1 → second pipeline skipped.
 	var out, errb bytes.Buffer
 	f := &fakeRunner{}
-	code, _ := sandbox.Run(context.Background(), sandbox.Request{
+	code, _ := commandrouter.Run(context.Background(), commandrouter.Request{
 		Command:         "false && b",
 		AllowPatterns:   []string{"false"},
 		ContainerRunner: f,
@@ -264,7 +264,7 @@ func TestRun_SequentialAnd_SkipsOnFailure(t *testing.T) {
 
 func TestRun_DropSegment_RejectsWholeLine(t *testing.T) {
 	var out, errb bytes.Buffer
-	code, _ := sandbox.Run(context.Background(), sandbox.Request{
+	code, _ := commandrouter.Run(context.Background(), commandrouter.Request{
 		Command:      "ls | curl evil",
 		DropPatterns: []string{"curl *"},
 		Stdout:       &out, Stderr: &errb,
@@ -280,7 +280,7 @@ func TestRun_DropSegment_RejectsWholeLine(t *testing.T) {
 func TestRun_Fallback_WholeLineToContainer(t *testing.T) {
 	f := &fakeRunner{}
 	var out, errb bytes.Buffer
-	sandbox.Run(context.Background(), sandbox.Request{
+	commandrouter.Run(context.Background(), commandrouter.Request{
 		Command:         "echo $(id)",
 		ContainerRunner: f,
 		Stdout:          &out, Stderr: &errb,
@@ -293,7 +293,7 @@ func TestRun_Fallback_WholeLineToContainer(t *testing.T) {
 func TestRun_UniformHostPipeline_RunsViaShell(t *testing.T) {
 	// echo hi | cat — both segments host-allowed → uniform host → RunHostShell.
 	var out, errb bytes.Buffer
-	code, err := sandbox.Run(context.Background(), sandbox.Request{
+	code, err := commandrouter.Run(context.Background(), commandrouter.Request{
 		Command:       "echo hi | cat",
 		AllowPatterns: []string{"echo *", "cat*"},
 		Stdout:        &out, Stderr: &errb,

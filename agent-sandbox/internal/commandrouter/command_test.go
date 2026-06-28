@@ -1,18 +1,18 @@
-package sandbox_test
+package commandrouter_test
 
 import (
 	"errors"
 	"reflect"
 	"testing"
 
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandbox"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/commandrouter"
 )
 
 func TestParseLine_UnterminatedQuote(t *testing.T) {
-	if _, err := sandbox.ParseLine(`echo "hi`); !errors.Is(err, sandbox.ErrUnterminatedQuote) {
+	if _, err := commandrouter.ParseLine(`echo "hi`); !errors.Is(err, commandrouter.ErrUnterminatedQuote) {
 		t.Fatalf("err = %v, want ErrUnterminatedQuote", err)
 	}
-	if _, err := sandbox.ParseLine(`echo 'hi`); !errors.Is(err, sandbox.ErrUnterminatedQuote) {
+	if _, err := commandrouter.ParseLine(`echo 'hi`); !errors.Is(err, commandrouter.ErrUnterminatedQuote) {
 		t.Fatalf("err = %v, want ErrUnterminatedQuote", err)
 	}
 }
@@ -41,7 +41,7 @@ func TestParseLine(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			line, err := sandbox.ParseLine(tt.in)
+			line, err := commandrouter.ParseLine(tt.in)
 			if err != nil {
 				t.Fatalf("ParseLine(%q) error: %v", tt.in, err)
 			}

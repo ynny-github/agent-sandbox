@@ -9,7 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandbox"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/commandrouter"
 )
 
 var execCmd = &cobra.Command{
@@ -51,7 +51,7 @@ func commandFromArgs(cmd *cobra.Command, args []string) string {
 // the exit code. A container runner is built lazily, only when the routing
 // decision is "container", so host/drop commands never touch Docker.
 func runExecCore(ctx context.Context, cfg *config.Config, command string, stdout, stderr io.Writer) int {
-	s := sandbox.New(sandbox.Config{
+	s := commandrouter.New(commandrouter.Config{
 		AllowPatterns:           cfg.Sandbox.Command.Allow,
 		DropPatterns:            cfg.Sandbox.Command.Drop,
 		ContainerEnvPassthrough: cfg.Sandbox.Container.EnvPassthrough,
@@ -69,7 +69,7 @@ func runExecCore(ctx context.Context, cfg *config.Config, command string, stdout
 			return 1
 		}
 		defer cleanup()
-		s = sandbox.New(sandbox.Config{
+		s = commandrouter.New(commandrouter.Config{
 			AllowPatterns:           cfg.Sandbox.Command.Allow,
 			DropPatterns:            cfg.Sandbox.Command.Drop,
 			ContainerEnvPassthrough: cfg.Sandbox.Container.EnvPassthrough,

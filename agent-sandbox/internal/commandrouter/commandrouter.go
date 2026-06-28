@@ -1,4 +1,4 @@
-package sandbox
+package commandrouter
 
 import (
 	"bytes"
@@ -15,13 +15,13 @@ type Config struct {
 	ContainerRunner         ContainerRunner // nil allowed (host/drop-only lines)
 }
 
-// Sandbox routes and runs command lines.
-type Sandbox struct {
+// Router routes and runs command lines.
+type Router struct {
 	cfg Config
 }
 
-// New builds a Sandbox from cfg.
-func New(cfg Config) *Sandbox { return &Sandbox{cfg: cfg} }
+// New builds a Router from cfg.
+func New(cfg Config) *Router { return &Router{cfg: cfg} }
 
 // Result is the buffered outcome of RunBuffered.
 type Result struct {
@@ -32,7 +32,7 @@ type Result struct {
 
 // Run routes command and streams output to stdout/stderr, returning the exit
 // code. The error is non-nil only on host-execution infrastructure failure.
-func (s *Sandbox) Run(ctx context.Context, command string, stdout, stderr io.Writer) (int, error) {
+func (s *Router) Run(ctx context.Context, command string, stdout, stderr io.Writer) (int, error) {
 	return Run(ctx, Request{
 		Command:                 command,
 		AllowPatterns:           s.cfg.AllowPatterns,
@@ -45,7 +45,7 @@ func (s *Sandbox) Run(ctx context.Context, command string, stdout, stderr io.Wri
 }
 
 // RunBuffered runs command and captures stdout/stderr into memory.
-func (s *Sandbox) RunBuffered(ctx context.Context, command string) (Result, error) {
+func (s *Router) RunBuffered(ctx context.Context, command string) (Result, error) {
 	var out, errb bytes.Buffer
 	code, err := s.Run(ctx, command, &out, &errb)
 	return Result{Stdout: out.Bytes(), Stderr: errb.Bytes(), ExitCode: code}, err
@@ -54,7 +54,7 @@ func (s *Sandbox) RunBuffered(ctx context.Context, command string) (Result, erro
 // NeedsContainer reports whether running command requires a container runner.
 // It uses ParseLine to check each segment individually, so a pipeline with any
 // container-routed segment returns true, and a Fallback line always returns true.
-func (s *Sandbox) NeedsContainer(command string) (bool, error) {
+func (s *Router) NeedsContainer(command string) (bool, error) {
 	line, err := ParseLine(command)
 	if err != nil {
 		return false, err

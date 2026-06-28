@@ -1,14 +1,14 @@
-package sandbox_test
+package commandrouter_test
 
 import (
 	"context"
 	"testing"
 
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandbox"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/commandrouter"
 )
 
 func TestRunBuffered_HostEcho(t *testing.T) {
-	s := sandbox.New(sandbox.Config{AllowPatterns: []string{"echo *"}})
+	s := commandrouter.New(commandrouter.Config{AllowPatterns: []string{"echo *"}})
 	res, err := s.RunBuffered(context.Background(), "echo hello")
 	if err != nil {
 		t.Fatalf("RunBuffered error: %v", err)
@@ -22,7 +22,7 @@ func TestRunBuffered_HostEcho(t *testing.T) {
 }
 
 func TestNeedsContainer(t *testing.T) {
-	s := sandbox.New(sandbox.Config{AllowPatterns: []string{"echo *"}})
+	s := commandrouter.New(commandrouter.Config{AllowPatterns: []string{"echo *"}})
 	got, err := s.NeedsContainer("echo hi")
 	if err != nil {
 		t.Fatalf("NeedsContainer error: %v", err)

@@ -1,6 +1,6 @@
 //go:build !unix
 
-package commandrouter
+package router
 
 import "os/exec"
 

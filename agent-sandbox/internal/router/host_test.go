@@ -1,4 +1,4 @@
-package commandrouter_test
+package router_test
 
 import (
 	"bytes"
@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/commandrouter"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/router"
 )
 
 var errFailingWriter = errors.New("failing writer")
@@ -22,7 +22,7 @@ func (failingWriter) Write([]byte) (int, error) {
 
 func TestRunHost_Echo_WritesStdoutAndExitsZero(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code, err := commandrouter.RunHost(context.Background(), []string{"echo", "hello"}, nil, &stdout, &stderr)
+	code, err := router.RunHost(context.Background(), []string{"echo", "hello"}, nil, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -40,7 +40,7 @@ func TestRunHost_Echo_WritesStdoutAndExitsZero(t *testing.T) {
 func TestRunHost_BothOutputs_WrittenToCorrectWriters(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	// Run sh explicitly as the program to exercise fd-to-fd redirection.
-	code, err := commandrouter.RunHost(context.Background(),
+	code, err := router.RunHost(context.Background(),
 		[]string{"sh", "-c", "printf out && printf err 1>&2"}, nil, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -58,7 +58,7 @@ func TestRunHost_BothOutputs_WrittenToCorrectWriters(t *testing.T) {
 
 func TestRunHost_NonZeroExit_ReturnsExitCode(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code, err := commandrouter.RunHost(context.Background(), []string{"false"}, nil, &stdout, &stderr)
+	code, err := router.RunHost(context.Background(), []string{"false"}, nil, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestRunHost_NonZeroExit_ReturnsExitCode(t *testing.T) {
 func TestRunHost_OutputBeforeExit_IsPreserved(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	// Write output then exit with code 1
-	code, err := commandrouter.RunHost(context.Background(),
+	code, err := router.RunHost(context.Background(),
 		[]string{"sh", "-c", "echo partial; exit 1"}, nil, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -85,7 +85,7 @@ func TestRunHost_OutputBeforeExit_IsPreserved(t *testing.T) {
 
 func TestRunHost_NoOutput_ExitsZero(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code, err := commandrouter.RunHost(context.Background(), []string{"true"}, nil, &stdout, &stderr)
+	code, err := router.RunHost(context.Background(), []string{"true"}, nil, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestRunHost_ContextCancelled_ReturnsError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel before start
 	var stdout, stderr bytes.Buffer
-	_, err := commandrouter.RunHost(ctx, []string{"sleep", "10"}, nil, &stdout, &stderr)
+	_, err := router.RunHost(ctx, []string{"sleep", "10"}, nil, &stdout, &stderr)
 	if err == nil {
 		t.Fatal("expected error for cancelled context, got nil")
 	}
@@ -116,7 +116,7 @@ func TestRunHost_DeadlineKillsProcessGroupPromptly(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	start := time.Now()
-	code, err := commandrouter.RunHost(ctx, []string{"sh", "-c", "sleep 10 &"}, nil, &stdout, &stderr)
+	code, err := router.RunHost(ctx, []string{"sh", "-c", "sleep 10 &"}, nil, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestRunHost_DeadlineExceeded_ReturnsExitCode124(t *testing.T) {
 	defer cancel()
 	var stdout, stderr bytes.Buffer
 
-	code, err := commandrouter.RunHost(ctx, []string{"sleep", "60"}, nil, &stdout, &stderr)
+	code, err := router.RunHost(ctx, []string{"sleep", "60"}, nil, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestRunHost_DeadlineExceeded_PreservesPartialOutput(t *testing.T) {
 	defer cancel()
 	var stdout, stderr bytes.Buffer
 
-	code, err := commandrouter.RunHost(ctx, []string{"sh", "-c", "echo partial; sleep 60"}, nil, &stdout, &stderr)
+	code, err := router.RunHost(ctx, []string{"sh", "-c", "echo partial; sleep 60"}, nil, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestRunHost_DeadlineExceeded_CopyErrorReturnsError(t *testing.T) {
 	defer cancel()
 	var stderr bytes.Buffer
 
-	code, err := commandrouter.RunHost(ctx, []string{"sh", "-c", "yes; sleep 60"}, nil, failingWriter{}, &stderr)
+	code, err := router.RunHost(ctx, []string{"sh", "-c", "yes; sleep 60"}, nil, failingWriter{}, &stderr)
 	if err == nil {
 		t.Fatal("expected copy error, got nil")
 	}
@@ -178,7 +178,7 @@ func TestRunHost_DeadlineExceeded_CopyErrorReturnsError(t *testing.T) {
 
 func TestRunHost_CopyError_ReturnsError(t *testing.T) {
 	var stderr bytes.Buffer
-	code, err := commandrouter.RunHost(context.Background(), []string{"printf", "hello"}, nil, failingWriter{}, &stderr)
+	code, err := router.RunHost(context.Background(), []string{"printf", "hello"}, nil, failingWriter{}, &stderr)
 	if err == nil {
 		t.Fatal("expected copy error, got nil")
 	}
@@ -192,7 +192,7 @@ func TestRunHost_CopyError_ReturnsError(t *testing.T) {
 
 func TestRunHost_StderrCopyError_ReturnsError(t *testing.T) {
 	var stdout bytes.Buffer
-	code, err := commandrouter.RunHost(context.Background(),
+	code, err := router.RunHost(context.Background(),
 		[]string{"sh", "-c", "printf err 1>&2"}, nil, &stdout, failingWriter{})
 	if err == nil {
 		t.Fatal("expected copy error, got nil")
@@ -207,14 +207,14 @@ func TestRunHost_StderrCopyError_ReturnsError(t *testing.T) {
 
 func TestRunHost_EmptyArgs_ReturnsError(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	if _, err := commandrouter.RunHost(context.Background(), nil, nil, &stdout, &stderr); err == nil {
+	if _, err := router.RunHost(context.Background(), nil, nil, &stdout, &stderr); err == nil {
 		t.Fatal("expected error for empty args, got nil")
 	}
 }
 
 func TestRunHost_Stdin(t *testing.T) {
 	var out bytes.Buffer
-	code, err := commandrouter.RunHost(context.Background(), []string{"cat"},
+	code, err := router.RunHost(context.Background(), []string{"cat"},
 		strings.NewReader("piped\n"), &out, io.Discard)
 	if err != nil {
 		t.Fatalf("RunHost error: %v", err)

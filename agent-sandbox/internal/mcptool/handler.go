@@ -5,13 +5,13 @@ import (
 	"fmt"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/commandrouter"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/router"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/output"
 )
 
 // ContainerRunner is the engine's container-execution interface, re-exported so
 // existing callers (serve.go, tests) keep their import.
-type ContainerRunner = commandrouter.ContainerRunner
+type ContainerRunner = router.ContainerRunner
 
 type HandlerConfig struct {
 	OutputDir               string
@@ -27,7 +27,7 @@ func HandleRunCommand(ctx context.Context, cmd string, cfg HandlerConfig) (*mcp.
 		return errorResult(fmt.Sprintf("output: %v", err)), nil, nil
 	}
 
-	exitCode, runErr := commandrouter.New(commandrouter.Config{
+	exitCode, runErr := router.New(router.Config{
 		AllowPatterns:           cfg.AllowPatterns,
 		DropPatterns:            cfg.DropPatterns,
 		ContainerRunner:         cfg.ContainerRunner,

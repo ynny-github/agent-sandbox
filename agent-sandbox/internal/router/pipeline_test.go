@@ -1,4 +1,4 @@
-package commandrouter_test
+package router_test
 
 import (
 	"bufio"
@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/commandrouter"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/router"
 )
 
 // echoRunner copies its stdin to stdout (models `cat` in the container).
@@ -26,7 +26,7 @@ func TestRun_MixedPipe_HostToContainer(t *testing.T) {
 	// `echo hi` on host (allowed) | `cat` in container.
 	r := &echoRunner{}
 	var out, errb bytes.Buffer
-	code, err := commandrouter.Run(context.Background(), commandrouter.Request{
+	code, err := router.Run(context.Background(), router.Request{
 		Command:         "echo hi | cat",
 		AllowPatterns:   []string{"echo *"}, // echo→host, cat→container
 		ContainerRunner: r,
@@ -76,7 +76,7 @@ func TestRun_MixedPipe_EarlyExitDeadlockGuard(t *testing.T) {
 	)
 	go func() {
 		defer close(done)
-		runCode, runErr = commandrouter.Run(context.Background(), commandrouter.Request{
+		runCode, runErr = router.Run(context.Background(), router.Request{
 			Command:         "seq 1 1000000 | cat",
 			AllowPatterns:   []string{"seq *"}, // seq→host, cat→container
 			ContainerRunner: &earlyExitRunner{},
@@ -104,7 +104,7 @@ func TestRun_MixedPipe_ThreeSegments(t *testing.T) {
 	// Expected: "HELLO\n"
 	r := &echoRunner{}
 	var out, errb bytes.Buffer
-	code, err := commandrouter.Run(context.Background(), commandrouter.Request{
+	code, err := router.Run(context.Background(), router.Request{
 		Command:         "echo hello | cat | tr a-z A-Z",
 		AllowPatterns:   []string{"echo *", "tr *"}, // echo+tr→host, cat→container
 		ContainerRunner: r,

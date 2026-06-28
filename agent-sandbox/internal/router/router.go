@@ -1,4 +1,4 @@
-package commandrouter
+package router
 
 import (
 	"bytes"

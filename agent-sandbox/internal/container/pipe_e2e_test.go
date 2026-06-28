@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/container"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/commandrouter"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/router"
 )
 
 func TestPipe_E2E(t *testing.T) {
@@ -15,7 +15,7 @@ func TestPipe_E2E(t *testing.T) {
 	startComposeService(t)
 	exec := container.NewComposeExecutor(cli, testProject(testProjectName))
 
-	s := commandrouter.New(commandrouter.Config{
+	s := router.New(router.Config{
 		AllowPatterns:   []string{"echo *"}, // echo on host, tr in container
 		ContainerRunner: exec,
 	})

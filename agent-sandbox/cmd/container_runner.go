@@ -10,13 +10,13 @@ import (
 	cliflags "github.com/docker/cli/cli/flags"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/container"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/commandrouter"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/router"
 )
 
 // newComposeContainerRunner builds a Docker-Compose-backed container runner.
 // The returned cleanup closes the Docker client and must be called by the
 // caller once the runner is no longer needed.
-func newComposeContainerRunner(ctx context.Context, cfg *config.Config) (commandrouter.ContainerRunner, func(), error) {
+func newComposeContainerRunner(ctx context.Context, cfg *config.Config) (router.ContainerRunner, func(), error) {
 	dockerCli, err := command.NewDockerCli(
 		command.WithOutputStream(os.Stderr),
 		command.WithErrorStream(os.Stderr),

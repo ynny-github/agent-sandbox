@@ -1,6 +1,6 @@
 //go:build unix
 
-package container
+package sandbox
 
 import (
 	"os/exec"

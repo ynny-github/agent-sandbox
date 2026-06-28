@@ -24,7 +24,7 @@ type mockRunner struct {
 	capturedEnv []string
 }
 
-func (m *mockRunner) RunContainer(ctx context.Context, containerID string, argv []string, env []string, stdout, stderr io.Writer) (int, error) {
+func (m *mockRunner) RunContainer(ctx context.Context, argv []string, env []string, stdout, stderr io.Writer) (int, error) {
 	m.capturedEnv = env
 	if m.stdout != "" {
 		io.WriteString(stdout, m.stdout)

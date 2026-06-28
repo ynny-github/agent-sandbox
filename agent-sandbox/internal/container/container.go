@@ -170,11 +170,11 @@ func (e *ComposeExecutor) ApplyNetworkPolicy(ctx context.Context) error {
 	return nil
 }
 
-func (e *ComposeExecutor) RunContainer(ctx context.Context, serviceName string, argv []string, env []string, stdout, stderr io.Writer) (int, error) {
-	return e.runContainerCommand(ctx, serviceName, argv, env, stdout, stderr)
+func (e *ComposeExecutor) RunContainer(ctx context.Context, argv []string, env []string, stdout, stderr io.Writer) (int, error) {
+	return e.runContainerCommand(ctx, argv, env, stdout, stderr)
 }
 
-func (e *ComposeExecutor) runContainerCommand(ctx context.Context, serviceName string, commandTokens []string, env []string, stdout, stderr io.Writer) (int, error) {
+func (e *ComposeExecutor) runContainerCommand(ctx context.Context, commandTokens []string, env []string, stdout, stderr io.Writer) (int, error) {
 	if err := e.WaitReady(ctx); err != nil {
 		return 0, fmt.Errorf("executor: sandbox not ready: %w", err)
 	}
@@ -192,7 +192,7 @@ func (e *ComposeExecutor) runContainerCommand(ctx context.Context, serviceName s
 
 	svc := compose.NewComposeService(perCallCLI)
 	exitCode, err := svc.Exec(ctx, e.project.Name, api.RunOptions{
-		Service:     serviceName,
+		Service:     SandboxServiceName,
 		Command:     commandTokens,
 		Tty:         false,
 		Environment: env,

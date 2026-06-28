@@ -1,22 +1,18 @@
-// Package engine routes a command to drop/host/container and executes it,
+// Package sandbox routes a command to drop/host/container and executes it,
 // independent of any transport (MCP, CLI). Output is written to the caller's
 // io.Writers.
-package engine
+package sandbox
 
 import (
 	"context"
 	"fmt"
 	"io"
 	"os"
-
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/command"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/container"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/router"
 )
 
 // ContainerRunner executes an argv inside the sandbox container.
 type ContainerRunner interface {
-	RunContainer(ctx context.Context, serviceName string, argv []string, env []string, stdout, stderr io.Writer) (int, error)
+	RunContainer(ctx context.Context, argv []string, env []string, stdout, stderr io.Writer) (int, error)
 }
 
 // Request carries everything Run needs for a single command.
@@ -31,18 +27,13 @@ type Request struct {
 }
 
 // Run routes req.Command and executes it.
-//
-// err is non-nil only on host-execution infrastructure failure. All other
-// outcomes (drop, container-not-configured, validation failure, container
-// runner error) write a message to req.Stderr and return err == nil with a
-// non-zero exit code.
 func Run(ctx context.Context, req Request) (int, error) {
-	cmd, parseErr := command.Parse(req.Command)
+	cmd, parseErr := Parse(req.Command)
 	if parseErr != nil {
 		fmt.Fprintf(req.Stderr, "rejected: %v\n", parseErr)
 		return 1, nil
 	}
-	decision, matched := router.Route(req.Command, req.AllowPatterns, req.DropPatterns)
+	decision, matched := Route(req.Command, req.AllowPatterns, req.DropPatterns)
 	switch decision {
 	case "drop":
 		fmt.Fprintf(req.Stderr, "dropped: command matches drop pattern %q\n", matched)
@@ -58,7 +49,7 @@ func Run(ctx context.Context, req Request) (int, error) {
 			argv = []string{"bash", "-c", cmd.Raw}
 		}
 		env := resolveEnv(req.ContainerEnvPassthrough)
-		exitCode, runErr := req.ContainerRunner.RunContainer(ctx, container.SandboxServiceName, argv, env, req.Stdout, req.Stderr)
+		exitCode, runErr := req.ContainerRunner.RunContainer(ctx, argv, env, req.Stdout, req.Stderr)
 		if runErr != nil {
 			fmt.Fprintf(req.Stderr, "container exec: %v\n", runErr)
 			if exitCode == 0 {
@@ -77,7 +68,7 @@ func Run(ctx context.Context, req Request) (int, error) {
 			fmt.Fprintln(req.Stderr, "rejected: empty command")
 			return 1, nil
 		}
-		exitCode, runErr := container.RunHost(ctx, cmd.Args, req.Stdout, req.Stderr)
+		exitCode, runErr := RunHost(ctx, cmd.Args, req.Stdout, req.Stderr)
 		if runErr != nil {
 			return exitCode, fmt.Errorf("executor: %w", runErr)
 		}

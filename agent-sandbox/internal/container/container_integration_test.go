@@ -84,7 +84,7 @@ func TestRunContainer_Echo_WritesStdoutAndExitsZero(t *testing.T) {
 	ex := container.NewComposeExecutor(cli, testProject(testProjectName))
 
 	var stdout, stderr bytes.Buffer
-	code, err := ex.RunContainer(context.Background(), testServiceName, []string{"echo", "hello"}, nil, &stdout, &stderr)
+	code, err := ex.RunContainer(context.Background(), []string{"echo", "hello"}, nil, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestRunContainer_BothOutputs_WrittenToCorrectWriters(t *testing.T) {
 	ex := container.NewComposeExecutor(cli, testProject(testProjectName))
 
 	var stdout, stderr bytes.Buffer
-	code, err := ex.RunContainer(context.Background(), testServiceName,
+	code, err := ex.RunContainer(context.Background(),
 		[]string{"bash", "-c", "printf out && printf err 1>&2"}, nil, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -127,7 +127,7 @@ func TestRunContainer_ShellOperators_ExecutedInsideContainer(t *testing.T) {
 	ex := container.NewComposeExecutor(cli, testProject(testProjectName))
 
 	var stdout, stderr bytes.Buffer
-	code, err := ex.RunContainer(context.Background(), testServiceName,
+	code, err := ex.RunContainer(context.Background(),
 		[]string{"bash", "-c", "ls / | head -1"}, nil, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -181,7 +181,7 @@ func TestRunContainer_NonZeroExit_ReturnsExitCode(t *testing.T) {
 	ex := container.NewComposeExecutor(cli, testProject(testProjectName))
 
 	var stdout, stderr bytes.Buffer
-	code, err := ex.RunContainer(context.Background(), testServiceName,
+	code, err := ex.RunContainer(context.Background(),
 		[]string{"bash", "-c", "printf out; printf err 1>&2; exit 2"}, nil, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -320,7 +320,7 @@ func TestRunContainer_Timeout_Returns124AndProcessTerminated(t *testing.T) {
 	defer cancel()
 
 	var stdout, stderr bytes.Buffer
-	code, err := ex.RunContainer(ctx, testServiceName, []string{"bash", "-c", "echo partial; sleep 60"}, nil, &stdout, &stderr)
+	code, err := ex.RunContainer(ctx, []string{"bash", "-c", "echo partial; sleep 60"}, nil, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -333,7 +333,7 @@ func TestRunContainer_Timeout_Returns124AndProcessTerminated(t *testing.T) {
 
 	time.Sleep(200 * time.Millisecond)
 	var psOut bytes.Buffer
-	checkCode, checkErr := ex.RunContainer(context.Background(), testServiceName,
+	checkCode, checkErr := ex.RunContainer(context.Background(),
 		[]string{"bash", "-c", "ps aux | grep 'sleep 60' | grep -v grep"}, nil, &psOut, &bytes.Buffer{})
 	if checkErr != nil {
 		t.Fatalf("process check error: %v", checkErr)

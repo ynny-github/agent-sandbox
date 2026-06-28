@@ -1,11 +1,11 @@
-package command_test
+package sandbox_test
 
 import (
 	"errors"
 	"reflect"
 	"testing"
 
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/command"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandbox"
 )
 
 func TestParse(t *testing.T) {
@@ -34,7 +34,7 @@ func TestParse(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cmd, err := command.Parse(tt.in)
+			cmd, err := sandbox.Parse(tt.in)
 			if err != nil {
 				t.Fatalf("Parse(%q) unexpected error: %v", tt.in, err)
 			}
@@ -52,10 +52,10 @@ func TestParse(t *testing.T) {
 }
 
 func TestParse_UnterminatedQuote(t *testing.T) {
-	if _, err := command.Parse(`echo "hi`); !errors.Is(err, command.ErrUnterminatedQuote) {
+	if _, err := sandbox.Parse(`echo "hi`); !errors.Is(err, sandbox.ErrUnterminatedQuote) {
 		t.Fatalf("err = %v, want ErrUnterminatedQuote", err)
 	}
-	if _, err := command.Parse(`echo 'hi`); !errors.Is(err, command.ErrUnterminatedQuote) {
+	if _, err := sandbox.Parse(`echo 'hi`); !errors.Is(err, sandbox.ErrUnterminatedQuote) {
 		t.Fatalf("err = %v, want ErrUnterminatedQuote", err)
 	}
 }

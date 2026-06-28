@@ -1,6 +1,7 @@
-// Package command parses a raw command line into argv tokens, detecting
-// unquoted shell operators without interpreting them.
-package command
+// Package sandbox routes a command to drop/host/container and executes it,
+// independent of any transport (MCP, CLI). Output is written to the caller's
+// io.Writers.
+package sandbox
 
 import (
 	"errors"

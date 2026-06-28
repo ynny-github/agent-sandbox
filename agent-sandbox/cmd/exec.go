@@ -9,8 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/engine"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/router"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandbox"
 )
 
 var execCmd = &cobra.Command{
@@ -52,7 +51,7 @@ func commandFromArgs(cmd *cobra.Command, args []string) string {
 // the exit code. A container runner is built lazily, only when the routing
 // decision is "container", so host/drop commands never touch Docker.
 func runExecCore(ctx context.Context, cfg *config.Config, command string, stdout, stderr io.Writer) int {
-	req := engine.Request{
+	req := sandbox.Request{
 		Command:                 command,
 		AllowPatterns:           cfg.Sandbox.Command.Allow,
 		DropPatterns:            cfg.Sandbox.Command.Drop,
@@ -61,7 +60,7 @@ func runExecCore(ctx context.Context, cfg *config.Config, command string, stdout
 		Stderr:                  stderr,
 	}
 
-	decision, _ := router.Route(command, cfg.Sandbox.Command.Allow, cfg.Sandbox.Command.Drop)
+	decision, _ := sandbox.Route(command, cfg.Sandbox.Command.Allow, cfg.Sandbox.Command.Drop)
 	if decision == "container" {
 		runner, cleanup, err := newComposeContainerRunner(ctx, cfg)
 		if err != nil {
@@ -72,7 +71,7 @@ func runExecCore(ctx context.Context, cfg *config.Config, command string, stdout
 		req.ContainerRunner = runner
 	}
 
-	exitCode, runErr := engine.Run(ctx, req)
+	exitCode, runErr := sandbox.Run(ctx, req)
 	if runErr != nil {
 		fmt.Fprintf(stderr, "%v\n", runErr)
 		return 1

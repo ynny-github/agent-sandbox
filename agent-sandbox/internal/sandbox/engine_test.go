@@ -1,4 +1,4 @@
-package engine_test
+package sandbox_test
 
 import (
 	"bytes"
@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/engine"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandbox"
 )
 
 type mockRunner struct {
@@ -22,7 +22,7 @@ type mockRunner struct {
 	capturedArgv []string
 }
 
-func (m *mockRunner) RunContainer(ctx context.Context, serviceName string, argv []string, env []string, stdout, stderr io.Writer) (int, error) {
+func (m *mockRunner) RunContainer(ctx context.Context, argv []string, env []string, stdout, stderr io.Writer) (int, error) {
 	m.called = true
 	m.capturedEnv = env
 	m.capturedArgv = argv
@@ -35,11 +35,11 @@ func (m *mockRunner) RunContainer(ctx context.Context, serviceName string, argv 
 	return m.exitCode, m.err
 }
 
-var _ engine.ContainerRunner = (*mockRunner)(nil)
+var _ sandbox.ContainerRunner = (*mockRunner)(nil)
 
 func TestRun_HostSuccess(t *testing.T) {
 	var out, errBuf bytes.Buffer
-	code, err := engine.Run(context.Background(), engine.Request{
+	code, err := sandbox.Run(context.Background(), sandbox.Request{
 		Command:       "echo hello",
 		AllowPatterns: []string{"echo *"},
 		Stdout:        &out,
@@ -58,7 +58,7 @@ func TestRun_HostSuccess(t *testing.T) {
 
 func TestRun_HostNonZeroExit_NoError(t *testing.T) {
 	var out, errBuf bytes.Buffer
-	code, err := engine.Run(context.Background(), engine.Request{
+	code, err := sandbox.Run(context.Background(), sandbox.Request{
 		Command:       "ls /nonexistent-path-xyz-12345",
 		AllowPatterns: []string{"ls *"},
 		Stdout:        &out,
@@ -75,7 +75,7 @@ func TestRun_HostNonZeroExit_NoError(t *testing.T) {
 func TestRun_DropPattern(t *testing.T) {
 	var out, errBuf bytes.Buffer
 	runner := &mockRunner{}
-	code, err := engine.Run(context.Background(), engine.Request{
+	code, err := sandbox.Run(context.Background(), sandbox.Request{
 		Command:         "rm -rf /tmp/anything",
 		DropPatterns:    []string{"rm -rf *"},
 		ContainerRunner: runner,
@@ -99,7 +99,7 @@ func TestRun_DropPattern(t *testing.T) {
 
 func TestRun_HostShellOperator_Rejected(t *testing.T) {
 	var out, errBuf bytes.Buffer
-	code, err := engine.Run(context.Background(), engine.Request{
+	code, err := sandbox.Run(context.Background(), sandbox.Request{
 		Command:       "git log | head -20",
 		AllowPatterns: []string{"git *"},
 		Stdout:        &out,
@@ -118,7 +118,7 @@ func TestRun_HostShellOperator_Rejected(t *testing.T) {
 
 func TestRun_ContainerNotConfigured(t *testing.T) {
 	var out, errBuf bytes.Buffer
-	code, err := engine.Run(context.Background(), engine.Request{
+	code, err := sandbox.Run(context.Background(), sandbox.Request{
 		Command:       "npm test",
 		AllowPatterns: []string{"git *"},
 		Stdout:        &out,
@@ -138,7 +138,7 @@ func TestRun_ContainerNotConfigured(t *testing.T) {
 func TestRun_ContainerSuccess(t *testing.T) {
 	var out, errBuf bytes.Buffer
 	runner := &mockRunner{exitCode: 0, stdout: "container output\n"}
-	code, err := engine.Run(context.Background(), engine.Request{
+	code, err := sandbox.Run(context.Background(), sandbox.Request{
 		Command:         "npm test",
 		AllowPatterns:   []string{"git *"},
 		ContainerRunner: runner,
@@ -165,7 +165,7 @@ func TestRun_ContainerSuccess(t *testing.T) {
 func TestRun_ContainerShellOperator_WrappedInBash(t *testing.T) {
 	var out, errBuf bytes.Buffer
 	runner := &mockRunner{exitCode: 0}
-	code, err := engine.Run(context.Background(), engine.Request{
+	code, err := sandbox.Run(context.Background(), sandbox.Request{
 		Command:         "ls / | head -1",
 		AllowPatterns:   []string{"git *"},
 		ContainerRunner: runner,
@@ -186,7 +186,7 @@ func TestRun_ContainerShellOperator_WrappedInBash(t *testing.T) {
 func TestRun_ContainerRunnerError(t *testing.T) {
 	var out, errBuf bytes.Buffer
 	runner := &mockRunner{exitCode: 0, stdout: "partial output\n", err: errors.New("attach interrupted")}
-	code, err := engine.Run(context.Background(), engine.Request{
+	code, err := sandbox.Run(context.Background(), sandbox.Request{
 		Command:         "npm test",
 		ContainerRunner: runner,
 		Stdout:          &out,
@@ -210,7 +210,7 @@ func TestRun_ContainerEnvPassthrough(t *testing.T) {
 	t.Setenv("CR_ENGINE_TEST_VAR", "passedvalue")
 	var out, errBuf bytes.Buffer
 	runner := &mockRunner{exitCode: 0}
-	_, err := engine.Run(context.Background(), engine.Request{
+	_, err := sandbox.Run(context.Background(), sandbox.Request{
 		Command:                 "npm test",
 		ContainerRunner:         runner,
 		ContainerEnvPassthrough: []string{"CR_ENGINE_TEST_VAR", "CR_ENGINE_TEST_ABSENT_XYZ"},

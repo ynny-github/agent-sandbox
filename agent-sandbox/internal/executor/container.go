@@ -170,12 +170,8 @@ func (e *ComposeExecutor) ApplyNetworkPolicy(ctx context.Context) error {
 	return nil
 }
 
-func (e *ComposeExecutor) RunContainer(ctx context.Context, serviceName, cmd string, env []string, stdout, stderr io.Writer) (int, error) {
-	return e.runContainerCommand(ctx, serviceName, strings.Fields(cmd), env, stdout, stderr)
-}
-
-func (e *ComposeExecutor) RunContainerDirect(ctx context.Context, serviceName, cmd string, env []string, stdout, stderr io.Writer) (int, error) {
-	return e.runContainerCommand(ctx, serviceName, strings.Fields(cmd), env, stdout, stderr)
+func (e *ComposeExecutor) RunContainer(ctx context.Context, serviceName string, argv []string, env []string, stdout, stderr io.Writer) (int, error) {
+	return e.runContainerCommand(ctx, serviceName, argv, env, stdout, stderr)
 }
 
 func (e *ComposeExecutor) runContainerCommand(ctx context.Context, serviceName string, commandTokens []string, env []string, stdout, stderr io.Writer) (int, error) {

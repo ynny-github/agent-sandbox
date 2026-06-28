@@ -9,12 +9,15 @@ import (
 	"sync"
 )
 
-func RunHost(ctx context.Context, cmd string, stdout, stderr io.Writer) (int, error) {
+func RunHost(ctx context.Context, args []string, stdout, stderr io.Writer) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, fmt.Errorf("executor: context: %w", err)
 	}
+	if len(args) == 0 {
+		return 0, fmt.Errorf("executor: empty command")
+	}
 
-	c := exec.Command("sh", "-c", cmd)
+	c := exec.Command(args[0], args[1:]...)
 	configureProcessGroup(c)
 
 	stdoutPipe, err := c.StdoutPipe()

@@ -21,7 +21,7 @@ func (failingWriter) Write([]byte) (int, error) {
 
 func TestRunHost_Echo_WritesStdoutAndExitsZero(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code, err := executor.RunHost(context.Background(), "echo hello", &stdout, &stderr)
+	code, err := executor.RunHost(context.Background(), []string{"echo", "hello"}, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -38,9 +38,9 @@ func TestRunHost_Echo_WritesStdoutAndExitsZero(t *testing.T) {
 
 func TestRunHost_BothOutputs_WrittenToCorrectWriters(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	// Use printf to write to stdout and redirect to stderr via fd-to-fd (permitted by validator)
+	// Run sh explicitly as the program to exercise fd-to-fd redirection.
 	code, err := executor.RunHost(context.Background(),
-		"sh -c 'printf out && printf err 1>&2'", &stdout, &stderr)
+		[]string{"sh", "-c", "printf out && printf err 1>&2"}, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestRunHost_BothOutputs_WrittenToCorrectWriters(t *testing.T) {
 
 func TestRunHost_NonZeroExit_ReturnsExitCode(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code, err := executor.RunHost(context.Background(), "false", &stdout, &stderr)
+	code, err := executor.RunHost(context.Background(), []string{"false"}, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestRunHost_OutputBeforeExit_IsPreserved(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	// Write output then exit with code 1
 	code, err := executor.RunHost(context.Background(),
-		"sh -c 'echo partial; exit 1'", &stdout, &stderr)
+		[]string{"sh", "-c", "echo partial; exit 1"}, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestRunHost_OutputBeforeExit_IsPreserved(t *testing.T) {
 
 func TestRunHost_NoOutput_ExitsZero(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code, err := executor.RunHost(context.Background(), "true", &stdout, &stderr)
+	code, err := executor.RunHost(context.Background(), []string{"true"}, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestRunHost_ContextCancelled_ReturnsError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel before start
 	var stdout, stderr bytes.Buffer
-	_, err := executor.RunHost(ctx, "sleep 10", &stdout, &stderr)
+	_, err := executor.RunHost(ctx, []string{"sleep", "10"}, &stdout, &stderr)
 	if err == nil {
 		t.Fatal("expected error for cancelled context, got nil")
 	}
@@ -115,7 +115,7 @@ func TestRunHost_DeadlineKillsProcessGroupPromptly(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	start := time.Now()
-	code, err := executor.RunHost(ctx, "sleep 10 &", &stdout, &stderr)
+	code, err := executor.RunHost(ctx, []string{"sh", "-c", "sleep 10 &"}, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestRunHost_DeadlineExceeded_ReturnsExitCode124(t *testing.T) {
 	defer cancel()
 	var stdout, stderr bytes.Buffer
 
-	code, err := executor.RunHost(ctx, "sleep 60", &stdout, &stderr)
+	code, err := executor.RunHost(ctx, []string{"sleep", "60"}, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestRunHost_DeadlineExceeded_PreservesPartialOutput(t *testing.T) {
 	defer cancel()
 	var stdout, stderr bytes.Buffer
 
-	code, err := executor.RunHost(ctx, "echo partial; sleep 60", &stdout, &stderr)
+	code, err := executor.RunHost(ctx, []string{"sh", "-c", "echo partial; sleep 60"}, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestRunHost_DeadlineExceeded_CopyErrorReturnsError(t *testing.T) {
 	defer cancel()
 	var stderr bytes.Buffer
 
-	code, err := executor.RunHost(ctx, "yes; sleep 60", failingWriter{}, &stderr)
+	code, err := executor.RunHost(ctx, []string{"sh", "-c", "yes; sleep 60"}, failingWriter{}, &stderr)
 	if err == nil {
 		t.Fatal("expected copy error, got nil")
 	}
@@ -177,7 +177,7 @@ func TestRunHost_DeadlineExceeded_CopyErrorReturnsError(t *testing.T) {
 
 func TestRunHost_CopyError_ReturnsError(t *testing.T) {
 	var stderr bytes.Buffer
-	code, err := executor.RunHost(context.Background(), "printf hello", failingWriter{}, &stderr)
+	code, err := executor.RunHost(context.Background(), []string{"printf", "hello"}, failingWriter{}, &stderr)
 	if err == nil {
 		t.Fatal("expected copy error, got nil")
 	}
@@ -192,7 +192,7 @@ func TestRunHost_CopyError_ReturnsError(t *testing.T) {
 func TestRunHost_StderrCopyError_ReturnsError(t *testing.T) {
 	var stdout bytes.Buffer
 	code, err := executor.RunHost(context.Background(),
-		"sh -c 'printf err 1>&2'", &stdout, failingWriter{})
+		[]string{"sh", "-c", "printf err 1>&2"}, &stdout, failingWriter{})
 	if err == nil {
 		t.Fatal("expected copy error, got nil")
 	}
@@ -201,6 +201,13 @@ func TestRunHost_StderrCopyError_ReturnsError(t *testing.T) {
 	}
 	if code != 0 {
 		t.Errorf("exit code = %d, want 0", code)
+	}
+}
+
+func TestRunHost_EmptyArgs_ReturnsError(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if _, err := executor.RunHost(context.Background(), nil, &stdout, &stderr); err == nil {
+		t.Fatal("expected error for empty args, got nil")
 	}
 }
 

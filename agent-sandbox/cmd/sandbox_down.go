@@ -9,24 +9,32 @@ import (
 	"github.com/docker/cli/cli/command"
 	cliflags "github.com/docker/cli/cli/flags"
 	"github.com/spf13/cobra"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/container"
 )
 
 var sandboxDownCmd = &cobra.Command{
-	Use:   "sandbox-down",
-	Short: "Stop and remove the current project sandbox",
+	Use:   "down",
+	Short: "Stop and remove a project sandbox",
 	RunE:  runSandboxDown,
 }
 
+var sandboxDownPath string
+
 func init() {
-	rootCmd.AddCommand(sandboxDownCmd)
+	sandboxDownCmd.Flags().StringVar(&sandboxDownPath, "path", "", "directory whose sandbox to stop (default: current directory)")
+	sandboxCmd.AddCommand(sandboxDownCmd)
 }
 
 func runSandboxDown(cmd *cobra.Command, args []string) error {
-	cfg, err := config.Load(configPath)
-	if err != nil {
-		return fmt.Errorf("config error: %w", err)
+	targetDir := sandboxDownPath
+	if !cmd.Flags().Changed("path") {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("getwd: %w", err)
+		}
+		targetDir = cwd
+	} else if targetDir == "" {
+		return fmt.Errorf("--path must not be empty")
 	}
 
 	dockerCli, err := command.NewDockerCli()
@@ -44,32 +52,14 @@ func runSandboxDown(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("docker daemon error: %w", err)
 	}
 
-	detectCtx, detectCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer detectCancel()
-	externalNetwork := container.DetectProjectNetwork(detectCtx, dockerCli, cfg.Sandbox.Container.ExternalNetwork)
+	projectName := container.ProjectSandboxName(targetDir)
 
-	project, err := container.NewSandboxProject(
-		os.Getpid(),
-		os.Getuid(),
-		os.Getgid(),
-		cfg.Sandbox.Container.BuildContext,
-		cfg.Sandbox.Container.Dockerfile,
-		cfg.Sandbox.Container.Image,
-		cfg.Sandbox.Network.AllowCIDRs,
-		cfg.Sandbox.Network.AllowHosts,
-		externalNetwork,
-	)
-	if err != nil {
-		return fmt.Errorf("sandbox project: %w", err)
-	}
-
-	composeExecutor := container.NewComposeExecutor(dockerCli, project)
 	downCtx, downCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer downCancel()
-	if err := composeExecutor.Down(downCtx); err != nil {
+	if err := container.DownProject(downCtx, dockerCli, projectName); err != nil {
 		return fmt.Errorf("sandbox down: %w", err)
 	}
 
-	fmt.Fprintf(cmd.ErrOrStderr(), "sandbox %s stopped\n", project.Name)
+	fmt.Fprintf(cmd.ErrOrStderr(), "sandbox %s stopped\n", projectName)
 	return nil
 }

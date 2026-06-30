@@ -10,9 +10,10 @@ import (
 )
 
 var debugCmd = &cobra.Command{
-	Use:   "debug",
-	Short: "Show the command that would be used to run Claude",
-	RunE:  runDebug,
+	Use:                "debug [nono-opts...] -- [claude-args...]",
+	Short:              "Show the command that would be used to run Claude",
+	DisableFlagParsing: true,
+	RunE:               runDebug,
 }
 
 func init() {
@@ -20,11 +21,12 @@ func init() {
 }
 
 func runDebug(cmd *cobra.Command, args []string) error {
-	cfg, err := config.Load(configPath)
+	configFile, nonoOpts, claudeOpts := parseClaudeArgs(args)
+	cfg, err := config.Load(configFile)
 	if err != nil {
 		return fmt.Errorf("config error: %w", err)
 	}
-	_, nonoArgs, err := buildNonoArgs(cfg)
+	_, nonoArgs, err := buildNonoArgs(cfg, nonoOpts, claudeOpts)
 	if err != nil {
 		return err
 	}

@@ -27,8 +27,14 @@ var dangerousCaps = map[string]bool{
 }
 
 // CheckCLI refuses subcommands that are entrypoints for arbitrary command
-// execution.
+// execution, and fails closed on any leading flag ParseArgs could not classify.
 func CheckCLI(p ParsedArgs) []safe.Violation {
+	if p.Unrecognized != "" {
+		return []safe.Violation{{
+			Source:  "cli",
+			Setting: fmt.Sprintf("unrecognized global flag %q is not allowed", p.Unrecognized),
+		}}
+	}
 	switch p.Subcommand {
 	case "run", "exec":
 		return []safe.Violation{{
@@ -117,5 +123,9 @@ func normalizeCap(c string) string {
 
 func isUnsafeSecurityOpt(opt string) bool {
 	o := strings.ToLower(strings.TrimSpace(opt))
-	return strings.Contains(o, "unconfined") || o == "label:disable"
+	if strings.Contains(o, "unconfined") {
+		return true
+	}
+	// label:disable / label=disable both turn off the labeling confinement.
+	return strings.Contains(o, "label") && strings.Contains(o, "disable")
 }

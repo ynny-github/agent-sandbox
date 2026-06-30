@@ -30,6 +30,16 @@ func TestCheckCLI(t *testing.T) {
 	}
 }
 
+func TestCheckCLI_UnrecognizedFlagRefused(t *testing.T) {
+	v := dockercompose.CheckCLI(dockercompose.ParsedArgs{Unrecognized: "--bogus", Subcommand: "up"})
+	if len(v) == 0 {
+		t.Fatal("expected a violation for an unrecognized global flag, got none")
+	}
+	if !strings.Contains(v[0].String(), "unrecognized global flag") {
+		t.Errorf("violation %q does not mention unrecognized flag", v[0].String())
+	}
+}
+
 // modelFromJSON is a helper that decodes a compose-config JSON string or fails.
 func modelFromJSON(t *testing.T, js string) dockercompose.Model {
 	t.Helper()
@@ -124,9 +134,27 @@ func TestCheckModel(t *testing.T) {
 			wantText: "capability",
 		},
 		{
+			name:     "dangerous cap lowercase refused",
+			js:       `{"services":{"web":{"cap_add":["cap_sys_admin"]}}}`,
+			wantViol: true,
+			wantText: "capability",
+		},
+		{
+			name:     "cap ALL refused",
+			js:       `{"services":{"web":{"cap_add":["ALL"]}}}`,
+			wantViol: true,
+			wantText: "capability",
+		},
+		{
 			name:     "benign cap allowed",
 			js:       `{"services":{"web":{"cap_add":["CHOWN"]}}}`,
 			wantViol: false,
+		},
+		{
+			name:     "label disable equals form refused",
+			js:       `{"services":{"web":{"security_opt":["label=disable"]}}}`,
+			wantViol: true,
+			wantText: "security_opt",
 		},
 		{
 			name:     "devices refused",
@@ -157,5 +185,21 @@ func TestCheckModel(t *testing.T) {
 				t.Errorf("violation %q does not contain %q", v[0].String(), tc.wantText)
 			}
 		})
+	}
+}
+
+// CheckModel must report every violation across services in a deterministic
+// (service-name sorted) order, since the wrapper prints all of them.
+func TestCheckModel_MultipleViolations_DeterministicOrder(t *testing.T) {
+	js := `{"services":{
+		"zeta":{"privileged":true},
+		"alpha":{"volumes":[{"type":"bind","source":"/etc","target":"/etc"}]}
+	}}`
+	v := dockercompose.CheckModel(modelFromJSON(t, js), "/work")
+	if len(v) != 2 {
+		t.Fatalf("got %d violations, want 2: %v", len(v), v)
+	}
+	if v[0].Service != "alpha" || v[1].Service != "zeta" {
+		t.Errorf("services out of order: %q then %q, want alpha then zeta", v[0].Service, v[1].Service)
 	}
 }

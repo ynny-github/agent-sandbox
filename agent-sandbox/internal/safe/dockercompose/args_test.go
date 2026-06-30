@@ -51,6 +51,27 @@ func TestParseArgs(t *testing.T) {
 			args:       []string{"-f", "compose.yml"},
 			wantGlobal: []string{"-f", "compose.yml"},
 		},
+		{
+			name:       "boolean global flag before subcommand",
+			args:       []string{"--dry-run", "up"},
+			wantGlobal: []string{"--dry-run"},
+			wantSub:    "up",
+			wantRest:   []string{"up"},
+		},
+		{
+			name:       "boolean global flag does not hide run",
+			args:       []string{"--dry-run", "run", "web", "sh"},
+			wantGlobal: []string{"--dry-run"},
+			wantSub:    "run",
+			wantRest:   []string{"run", "web", "sh"},
+		},
+		{
+			name:       "short value flag with attached value",
+			args:       []string{"-fcompose.yml", "up"},
+			wantGlobal: []string{"-fcompose.yml"},
+			wantSub:    "up",
+			wantRest:   []string{"up"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -64,6 +85,16 @@ func TestParseArgs(t *testing.T) {
 			if !reflect.DeepEqual(got.Rest, tc.wantRest) {
 				t.Errorf("Rest = %v, want %v", got.Rest, tc.wantRest)
 			}
+			if got.Unrecognized != "" {
+				t.Errorf("Unrecognized = %q, want empty", got.Unrecognized)
+			}
 		})
+	}
+}
+
+func TestParseArgs_UnrecognizedLeadingFlag(t *testing.T) {
+	got := dockercompose.ParseArgs([]string{"--bogus", "value", "run", "web"})
+	if got.Unrecognized != "--bogus" {
+		t.Errorf("Unrecognized = %q, want %q", got.Unrecognized, "--bogus")
 	}
 }

@@ -65,3 +65,23 @@ func TestRealPath_NonexistentFallsBackToClean(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
+
+// A bind target under a symlinked directory may not exist yet (compose does not
+// create it). RealPath must resolve the existing symlinked prefix and re-append
+// the missing tail, so the result stays comparable to the resolved parent.
+func TestRealPath_SymlinkedParent_NonexistentChild(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	got := safe.RealPath(filepath.Join(link, "child"))
+	want := filepath.Join(safe.RealPath(real), "child")
+	if got != want {
+		t.Errorf("RealPath(link/child) = %q, want %q", got, want)
+	}
+}

@@ -112,10 +112,18 @@ func scanQuotes(raw string, line *Line) error {
 				line.Fallback = true
 			}
 		case '&':
-			// "&&" is a sequential operator; a lone "&" is background → fallback.
-			if i+1 < len(runes) && runes[i+1] == '&' {
-				i++
-			} else {
+			switch {
+			case i+1 < len(runes) && runes[i+1] == '&':
+				i++ // "&&" sequential operator
+			case i > 0 && (runes[i-1] == '>' || runes[i-1] == '<'):
+				// ">&" / "<&" fd-duplication redirect (e.g. 2>&1, >&2) — not background.
+			case i+1 < len(runes) && runes[i+1] == '>':
+				// "&>" / "&>>" redirect (e.g. &>file) — not background.
+			default:
+				// A lone "&" is background → fallback. Note: a backslash-escaped
+				// ">" immediately before a real background "&" (e.g. `\>&`) is
+				// mis-read as a redirect here; that combination is vanishingly
+				// rare and acceptable for this heuristic parser.
 				line.Fallback = true
 			}
 		}

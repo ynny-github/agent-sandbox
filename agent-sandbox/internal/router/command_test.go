@@ -37,6 +37,9 @@ func TestParseLine(t *testing.T) {
 		{"subst", "echo $(id)", [][]string{{"echo $(id)"}}, nil, [][]bool{{false}}, true},
 		{"backtick", "echo `id`", [][]string{{"echo `id`"}}, nil, [][]bool{{false}}, true},
 		{"background", "a & b", [][]string{{"a & b"}}, nil, [][]bool{{false}}, true},
+		{"redirectStderrDup", "echo hi 2>&1", [][]string{{"echo hi 2>&1"}}, nil, [][]bool{{true}}, false},
+		{"redirectFdToStderr", "echo hi >&2", [][]string{{"echo hi >&2"}}, nil, [][]bool{{true}}, false},
+		{"redirectAmpToFile", "echo hi &>out", [][]string{{"echo hi &>out"}}, nil, [][]bool{{true}}, false},
 		{"mixedSeqPipe", "a | b && c", [][]string{{"a ", " b "}, {" c"}}, []string{"&&"}, [][]bool{{false, false}, {false}}, false},
 	}
 	for _, tt := range tests {

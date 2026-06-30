@@ -96,6 +96,3 @@
     "git config --remove-*",
     "git config --replace-all *"
   ]
-
-  [nono]
-  profile = "nono.jsonc"

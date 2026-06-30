@@ -72,6 +72,16 @@ agent-sandbox doctor
 
 `doctor` verifies that `nono` is on `PATH`, that `docker compose version` works (which also accepts compatible CLIs like colima or podman that alias `docker`), and that the Docker daemon is reachable. Exits 0 when all checks pass, 1 otherwise.
 
+Run Claude inside the nono sandbox. Options before `--` go to `nono wrap`
+(including `--profile`); options after `--` go to `claude`:
+
+```bash
+agent-sandbox claude --profile nono.jsonc -- --model opus
+```
+
+`agent-sandbox debug` accepts the same form and prints the resulting `nono`
+command without running it.
+
 Register as an MCP tool in your Claude Code settings.
 
 Route a single command through the router from the shell (streams output live):
@@ -129,6 +139,6 @@ The configuration was reorganized; old keys are no longer accepted.
 | `[drop_patterns] patterns` | `sandbox.command.drop` |
 | `[deny_patterns] patterns` | removed — move destructive entries into `sandbox.command.drop` |
 | `[container] env_passthrough` | `sandbox.container.env_passthrough` |
-| `[nono] profile` | `nono.profile` (unchanged) |
+| `[nono] profile` | removed — pass `--profile <name>` to `agent-sandbox claude` instead |
 
 The `deny` routing axis is gone. Patterns that previously forced a host-allowed command into the sandbox now have two options: leave them out of `allow` (so they default to the sandbox), or add them to `drop` if they should be refused entirely.

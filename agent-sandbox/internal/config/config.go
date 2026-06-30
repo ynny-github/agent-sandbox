@@ -12,7 +12,6 @@ type Config struct {
 	ToolMode string        `toml:"tool_mode"`
 	MCP      MCPConfig     `toml:"mcp"`
 	Sandbox  SandboxConfig `toml:"sandbox"`
-	Nono     NonoConfig    `toml:"nono"`
 }
 
 type MCPConfig struct {
@@ -41,10 +40,6 @@ type ContainerConfig struct {
 	Image           string   `toml:"image"`
 	ExternalNetwork string   `toml:"external_network"`
 	EnvPassthrough  []string `toml:"env_passthrough"`
-}
-
-type NonoConfig struct {
-	Profile string `toml:"profile"`
 }
 
 func Load(path string) (*Config, error) {

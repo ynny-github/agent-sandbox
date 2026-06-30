@@ -15,14 +15,51 @@ import (
 )
 
 var claudeCmd = &cobra.Command{
-	Use:   "claude [-- <claude-args>...]",
-	Short: "Run Claude via nono sandbox",
-	Args:  cobra.ArbitraryArgs,
-	RunE:  runClaude,
+	Use:                "claude [nono-opts...] -- [claude-args...]",
+	Short:              "Run Claude via nono sandbox",
+	Args:               cobra.ArbitraryArgs,
+	DisableFlagParsing: true,
+	RunE:               runClaude,
 }
 
 func init() {
 	rootCmd.AddCommand(claudeCmd)
+}
+
+// parseClaudeArgs splits the raw args passed to the claude/debug command into
+// the config-file path, the nono passthrough options, and the claude
+// passthrough options. The first standalone "--" separates nono options
+// (before) from claude options (after); with no "--", every token is a nono
+// option. A "--config <val>" or "--config=<val>" appearing in the nono region
+// sets the config path and is removed from the nono options. This is needed
+// because the command disables cobra flag parsing to pass options verbatim.
+func parseClaudeArgs(args []string) (configFile string, nonoOpts, claudeOpts []string) {
+	configFile = configPath
+
+	pre := args
+	for i, a := range args {
+		if a == "--" {
+			pre = args[:i]
+			claudeOpts = args[i+1:]
+			break
+		}
+	}
+
+	for i := 0; i < len(pre); i++ {
+		a := pre[i]
+		switch {
+		case a == "--config":
+			if i+1 < len(pre) {
+				configFile = pre[i+1]
+				i++
+			}
+		case strings.HasPrefix(a, "--config="):
+			configFile = strings.TrimPrefix(a, "--config=")
+		default:
+			nonoOpts = append(nonoOpts, a)
+		}
+	}
+	return configFile, nonoOpts, claudeOpts
 }
 
 func validateClaudePassthrough(args []string) error {
@@ -34,15 +71,14 @@ func validateClaudePassthrough(args []string) error {
 	return nil
 }
 
-func buildNonoArgs(cfg *config.Config) (string, []string, error) {
-	if cfg.Nono.Profile == "" {
-		return "", nil, fmt.Errorf("[nono] profile not set in agent-sandbox.toml")
-	}
+func buildNonoArgs(cfg *config.Config, nonoOpts, claudeOpts []string) (string, []string, error) {
 	nonoPath, err := exec.LookPath("nono")
 	if err != nil {
 		return "", nil, fmt.Errorf("nono not found in PATH: %w", err)
 	}
-	args := []string{"nono", "wrap", "--profile", cfg.Nono.Profile}
+	args := []string{"nono", "wrap"}
+	args = append(args, nonoOpts...)
+
 	cwd, cwdErr := os.Getwd()
 	if cwdErr == nil {
 		if mainGit, ok := gitutil.DetectWorktreeGitDir(cwd); ok {
@@ -66,29 +102,26 @@ func buildNonoArgs(cfg *config.Config) (string, []string, error) {
 		args = append(args, "--disallowed-tools", "Bash,Monitor")
 	}
 
+	args = append(args, claudeOpts...)
 	return nonoPath, args, nil
 }
 
 func runClaude(cmd *cobra.Command, args []string) error {
-	var claudeArgs []string
-	if dashIdx := cmd.ArgsLenAtDash(); dashIdx >= 0 {
-		claudeArgs = args[dashIdx:]
-	}
+	configFile, nonoOpts, claudeOpts := parseClaudeArgs(args)
 
-	if err := validateClaudePassthrough(claudeArgs); err != nil {
+	if err := validateClaudePassthrough(claudeOpts); err != nil {
 		return err
 	}
 
-	cfg, err := config.Load(configPath)
+	cfg, err := config.Load(configFile)
 	if err != nil {
 		return fmt.Errorf("config error: %w", err)
 	}
 
-	nonoPath, nonoArgs, err := buildNonoArgs(cfg)
+	nonoPath, nonoArgs, err := buildNonoArgs(cfg, nonoOpts, claudeOpts)
 	if err != nil {
 		return err
 	}
-	nonoArgs = append(nonoArgs, claudeArgs...)
 
 	if err := syscall.Exec(nonoPath, nonoArgs, os.Environ()); err != nil {
 		return fmt.Errorf("exec nono: %w", err)

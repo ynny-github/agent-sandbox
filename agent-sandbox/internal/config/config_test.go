@@ -387,46 +387,6 @@ command_output_dir = "/tmp/out"
 	}
 }
 
-func TestLoad_Nono_Loaded(t *testing.T) {
-	path := writeToml(t, validBase+`
-[nono]
-profile = "nono.json"
-`)
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.Nono.Profile != "nono.json" {
-		t.Errorf("Nono.Profile = %q, want nono.json", cfg.Nono.Profile)
-	}
-}
-
-func TestLoad_Nono_OmittedIsEmpty(t *testing.T) {
-	path := writeToml(t, validBase)
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.Nono.Profile != "" {
-		t.Errorf("Nono.Profile = %q, want empty", cfg.Nono.Profile)
-	}
-}
-
-func TestLoad_Nono_LegacySubcommandIgnored(t *testing.T) {
-	path := writeToml(t, validBase+`
-[nono]
-profile = "nono.json"
-subcommand = "run"
-`)
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.Nono.Profile != "nono.json" {
-		t.Errorf("Profile = %q, want \"nono.json\"", cfg.Nono.Profile)
-	}
-}
-
 func TestLoad_ToolMode_DefaultsToMcp(t *testing.T) {
 	path := writeToml(t, validBase)
 	cfg, err := config.Load(path)

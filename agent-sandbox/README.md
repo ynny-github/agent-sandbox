@@ -114,6 +114,34 @@ router:
   refuses to start in `hook` mode if the hook is missing for either the `Bash` or
   `Monitor` matcher.
 
+## Safe wrappers
+
+`agent-sandbox safe <tool> ...` runs a tool only after validating that its
+invocation is safe, then passes the command through unchanged.
+
+### `safe docker-compose`
+
+```bash
+agent-sandbox safe docker-compose up -d
+```
+
+This resolves the project with `docker compose config` and refuses the
+invocation (exit 1, running nothing) when any of the following hold:
+
+- a `bind` mount resolves to a path outside the current working directory;
+- a `bind` mount targets the Docker socket (`docker.sock`);
+- a service sets `privileged: true`, `network_mode: host`, `pid: host`,
+  `ipc: host`, or `userns_mode: host`;
+- a service exposes host `devices`;
+- `cap_add` contains a dangerous capability (e.g. `SYS_ADMIN`, `NET_ADMIN`);
+- `security_opt` disables confinement (`seccomp:unconfined`,
+  `apparmor:unconfined`, `label:disable`);
+- the subcommand is `run` or `exec`.
+
+Named volumes and `tmpfs` mounts are allowed, and every other subcommand
+(`up`, `build`, `down`, `ps`, `logs`, ...) passes through. The danger rules are
+fixed and built-in.
+
 ## How It Works
 
 - Commands matching a drop pattern are **refused** — neither the host nor the container runs them; the MCP response carries exit code 1 and a stderr file containing `dropped: command matches drop pattern "<pattern>"`.

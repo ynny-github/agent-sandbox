@@ -308,3 +308,32 @@ func TestRun_UniformHostPipeline_RunsViaShell(t *testing.T) {
 		t.Fatalf("stdout=%q, want %q", out.String(), "hi\n")
 	}
 }
+
+func TestRun_HostRedirectStderr_RoutesToHost(t *testing.T) {
+	var out, errBuf bytes.Buffer
+	// If the line were wrongly treated as fallback, it would run whole in the
+	// container and this stdout would appear; on the host it must not.
+	runner := &mockRunner{exitCode: 0, stdout: "RAN-IN-CONTAINER\n"}
+	code, err := router.Run(context.Background(), router.Request{
+		Command:         "echo hi 2>&1",
+		AllowPatterns:   []string{"echo *"},
+		ContainerRunner: runner,
+		Stdout:          &out,
+		Stderr:          &errBuf,
+	})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if code != 0 {
+		t.Errorf("exitCode = %d, want 0", code)
+	}
+	if runner.called {
+		t.Error("host-allowed command with 2>&1 must run on host, not container")
+	}
+	if strings.Contains(out.String(), "RAN-IN-CONTAINER") {
+		t.Errorf("stdout = %q, command leaked to container", out.String())
+	}
+	if !strings.Contains(out.String(), "hi") {
+		t.Errorf("stdout = %q, want it to contain hi", out.String())
+	}
+}

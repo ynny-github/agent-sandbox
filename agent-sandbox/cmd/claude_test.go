@@ -148,3 +148,69 @@ func TestBuildNonoArgs_HookMode_HookMissing_Errors(t *testing.T) {
 		t.Errorf("error should mention install-hook; got %v", err)
 	}
 }
+
+func TestParseClaudeArgs_SplitsOnFirstDash(t *testing.T) {
+	cfgFile, nonoOpts, claudeOpts := parseClaudeArgs(
+		[]string{"--profile", "nono.jsonc", "--", "--model", "opus"})
+	if cfgFile != configPath {
+		t.Errorf("configFile = %q, want default %q", cfgFile, configPath)
+	}
+	if strings.Join(nonoOpts, " ") != "--profile nono.jsonc" {
+		t.Errorf("nonoOpts = %v", nonoOpts)
+	}
+	if strings.Join(claudeOpts, " ") != "--model opus" {
+		t.Errorf("claudeOpts = %v", claudeOpts)
+	}
+}
+
+func TestParseClaudeArgs_NoDash_AllNono(t *testing.T) {
+	_, nonoOpts, claudeOpts := parseClaudeArgs([]string{"--profile", "nono.jsonc"})
+	if strings.Join(nonoOpts, " ") != "--profile nono.jsonc" {
+		t.Errorf("nonoOpts = %v", nonoOpts)
+	}
+	if len(claudeOpts) != 0 {
+		t.Errorf("claudeOpts = %v, want empty", claudeOpts)
+	}
+}
+
+func TestParseClaudeArgs_ConfigSpaceForm(t *testing.T) {
+	cfgFile, nonoOpts, _ := parseClaudeArgs(
+		[]string{"--config", "custom.toml", "--profile", "p", "--", "--print"})
+	if cfgFile != "custom.toml" {
+		t.Errorf("configFile = %q, want custom.toml", cfgFile)
+	}
+	if strings.Join(nonoOpts, " ") != "--profile p" {
+		t.Errorf("nonoOpts = %v, want [--profile p]", nonoOpts)
+	}
+}
+
+func TestParseClaudeArgs_ConfigEqualsForm(t *testing.T) {
+	cfgFile, nonoOpts, _ := parseClaudeArgs(
+		[]string{"--config=custom.toml", "--allow", "/repo"})
+	if cfgFile != "custom.toml" {
+		t.Errorf("configFile = %q, want custom.toml", cfgFile)
+	}
+	if strings.Join(nonoOpts, " ") != "--allow /repo" {
+		t.Errorf("nonoOpts = %v, want [--allow /repo]", nonoOpts)
+	}
+}
+
+func TestParseClaudeArgs_DashAtEnd_EmptyClaudeOpts(t *testing.T) {
+	_, nonoOpts, claudeOpts := parseClaudeArgs([]string{"--profile", "p", "--"})
+	if strings.Join(nonoOpts, " ") != "--profile p" {
+		t.Errorf("nonoOpts = %v", nonoOpts)
+	}
+	if len(claudeOpts) != 0 {
+		t.Errorf("claudeOpts = %v, want empty", claudeOpts)
+	}
+}
+
+func TestParseClaudeArgs_Empty(t *testing.T) {
+	cfgFile, nonoOpts, claudeOpts := parseClaudeArgs(nil)
+	if cfgFile != configPath {
+		t.Errorf("configFile = %q, want default", cfgFile)
+	}
+	if len(nonoOpts) != 0 || len(claudeOpts) != 0 {
+		t.Errorf("expected empty groups, got nono=%v claude=%v", nonoOpts, claudeOpts)
+	}
+}

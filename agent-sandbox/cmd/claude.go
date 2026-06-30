@@ -25,6 +25,42 @@ func init() {
 	rootCmd.AddCommand(claudeCmd)
 }
 
+// parseClaudeArgs splits the raw args passed to the claude/debug command into
+// the config-file path, the nono passthrough options, and the claude
+// passthrough options. The first standalone "--" separates nono options
+// (before) from claude options (after); with no "--", every token is a nono
+// option. A "--config <val>" or "--config=<val>" appearing in the nono region
+// sets the config path and is removed from the nono options. This is needed
+// because the command disables cobra flag parsing to pass options verbatim.
+func parseClaudeArgs(args []string) (configFile string, nonoOpts, claudeOpts []string) {
+	configFile = configPath
+
+	pre := args
+	for i, a := range args {
+		if a == "--" {
+			pre = args[:i]
+			claudeOpts = args[i+1:]
+			break
+		}
+	}
+
+	for i := 0; i < len(pre); i++ {
+		a := pre[i]
+		switch {
+		case a == "--config":
+			if i+1 < len(pre) {
+				configFile = pre[i+1]
+				i++
+			}
+		case strings.HasPrefix(a, "--config="):
+			configFile = strings.TrimPrefix(a, "--config=")
+		default:
+			nonoOpts = append(nonoOpts, a)
+		}
+	}
+	return configFile, nonoOpts, claudeOpts
+}
+
 func validateClaudePassthrough(args []string) error {
 	for _, arg := range args {
 		if strings.HasPrefix(arg, "--settings") {

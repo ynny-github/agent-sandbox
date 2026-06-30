@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "agent-sandbox": {
-      "command": "agent-sandbox",
-      "args": ["command-router"]
-    }
-  }
-}

@@ -12,8 +12,19 @@ import (
 )
 
 var safeDockerComposeCmd = &cobra.Command{
-	Use:                "docker-compose [docker compose args...]",
-	Short:              "Run docker compose only after safety validation",
+	Use:   "docker-compose [docker compose args...]",
+	Short: "Run docker compose only after safety validation",
+	Long: `Run "docker compose" only after validating that the invocation is safe.
+
+The wrapper resolves the project with "docker compose config" and refuses the
+invocation (exit 1, running nothing) when the configuration would:
+  - mount a host path outside the current working directory, or the Docker socket;
+  - set privileged, host network/pid/ipc, userns_mode host, or expose devices;
+  - add a dangerous Linux capability, or disable seccomp/apparmor confinement;
+  - use the "run" or "exec" subcommand.
+
+Named volumes, tmpfs mounts, and every other subcommand pass through. All
+arguments are forwarded verbatim to "docker compose".`,
 	Args:               cobra.ArbitraryArgs,
 	DisableFlagParsing: true, // pass every token through to docker compose verbatim
 	RunE:               runSafeDockerCompose,
@@ -24,6 +35,12 @@ func init() {
 }
 
 func runSafeDockerCompose(cmd *cobra.Command, args []string) error {
+	// A global --help/-h describes this wrapper, not docker compose: an agent
+	// wants this command's usage, so print it and stop.
+	if dockercompose.WantsGlobalHelp(args) {
+		return cmd.Help()
+	}
+
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("getwd: %w", err)

@@ -98,3 +98,29 @@ func TestParseArgs_UnrecognizedLeadingFlag(t *testing.T) {
 		t.Errorf("Unrecognized = %q, want %q", got.Unrecognized, "--bogus")
 	}
 }
+
+func TestParseArgs_HelpRequested(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{"global long help", []string{"--help"}, true},
+		{"global short help", []string{"-h"}, true},
+		{"help then subcommand", []string{"--help", "up"}, true},
+		{"help after global flags", []string{"-f", "x.yml", "--help"}, true},
+		{"no help", []string{"up", "-d"}, false},
+		{"help after subcommand is not global", []string{"up", "--help"}, false},
+		{"help swallowed as flag value", []string{"--project-name", "--help", "up"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := dockercompose.ParseArgs(tc.args).HelpRequested; got != tc.want {
+				t.Errorf("HelpRequested = %v, want %v", got, tc.want)
+			}
+			if got := dockercompose.WantsGlobalHelp(tc.args); got != tc.want {
+				t.Errorf("WantsGlobalHelp = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

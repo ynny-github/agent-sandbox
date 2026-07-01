@@ -6,10 +6,11 @@ import "strings"
 // ParsedArgs is the result of separating docker compose global flags from the
 // subcommand and its arguments.
 type ParsedArgs struct {
-	GlobalFlags  []string // global flags (and their values) before the subcommand
-	Subcommand   string   // e.g. "up", "run"; "" when none is present
-	Rest         []string // subcommand and everything after it
-	Unrecognized string   // a leading flag we could not classify; "" when none
+	GlobalFlags   []string // global flags (and their values) before the subcommand
+	Subcommand    string   // e.g. "up", "run"; "" when none is present
+	Rest          []string // subcommand and everything after it
+	Unrecognized  string   // a leading flag we could not classify; "" when none
+	HelpRequested bool     // --help / -h given at the global level (before any subcommand)
 }
 
 // globalValueFlags lists docker compose global flags that take a value. In the
@@ -39,11 +40,22 @@ var globalBoolFlags = map[string]bool{
 // can fail closed rather than misidentify the subcommand and run it anyway.
 func ParseArgs(args []string) ParsedArgs {
 	var global []string
+	help := false
 	i := 0
 	for i < len(args) {
 		a := args[i]
 		if !strings.HasPrefix(a, "-") {
 			break
+		}
+
+		// Global help flag. Detected only in flag position (a value swallowed by
+		// a preceding value flag is consumed below and never reaches here), so it
+		// cannot be spoofed by "--project-name --help".
+		if a == "--help" || a == "-h" {
+			help = true
+			global = append(global, a)
+			i++
+			continue
 		}
 
 		// "--flag=value" / "-f=value": the key is the part before "=".
@@ -73,14 +85,20 @@ func ParseArgs(args []string) ParsedArgs {
 			global = append(global, a)
 			i++
 		default:
-			return ParsedArgs{GlobalFlags: global, Unrecognized: a}
+			return ParsedArgs{GlobalFlags: global, Unrecognized: a, HelpRequested: help}
 		}
 	}
 
-	p := ParsedArgs{GlobalFlags: global}
+	p := ParsedArgs{GlobalFlags: global, HelpRequested: help}
 	if i < len(args) {
 		p.Subcommand = args[i]
 		p.Rest = args[i:]
 	}
 	return p
+}
+
+// WantsGlobalHelp reports whether args request help at the global level
+// (`docker-compose --help` or `-h`), before any subcommand.
+func WantsGlobalHelp(args []string) bool {
+	return ParseArgs(args).HelpRequested
 }

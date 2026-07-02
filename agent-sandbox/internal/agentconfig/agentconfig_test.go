@@ -24,7 +24,9 @@ func TestExplain_HookMode(t *testing.T) {
 	got := agentconfig.Explain(cfg)
 	for _, want := range []string{
 		"# agent-sandbox environment",
-		`tool_mode = "hook"`,
+		"Bash/Monitor tools",
+		"PreToolUse hook",
+		"returned inline in the tool result",
 		"## Commands that run on the host (allow)",
 		"- git *",
 		"## Refused commands (drop)",
@@ -35,13 +37,24 @@ func TestExplain_HookMode(t *testing.T) {
 			t.Errorf("Explain() missing %q\nfull output:\n%s", want, got)
 		}
 	}
+	if strings.Contains(got, "run_command") {
+		t.Errorf("Explain() hook branch should not mention the mcp run_command tool:\n%s", got)
+	}
 }
 
 func TestExplain_McpMode(t *testing.T) {
 	cfg := &config.Config{ToolMode: "mcp"}
 	got := agentconfig.Explain(cfg)
-	if !strings.Contains(got, "run_command") {
-		t.Errorf("Explain() mcp branch missing run_command:\n%s", got)
+	for _, want := range []string{
+		"run_command",
+		"written to files",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Explain() mcp branch missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "PreToolUse hook") {
+		t.Errorf("Explain() mcp branch should not mention the hook flow:\n%s", got)
 	}
 }
 

@@ -1,0 +1,22 @@
+# agent-sandbox environment
+
+## Running commands
+{{if .Hook}}- tool_mode = "hook": run commands normally; a PreToolUse hook routes them through the sandbox.{{else}}- tool_mode = "mcp": use the `run_command` MCP tool to run commands.{{end}}
+- Allowed commands run on the host; all others run in an isolated container.
+- Output is written to files; read the returned paths for stdout/stderr.
+
+## Commands that run on the host (allow)
+{{range .Allow}}- {{.}}
+{{else}}- (none)
+{{end}}
+## Refused commands (drop)
+These run on neither host nor container:
+{{range .Drop}}- {{.}}
+{{else}}- (none)
+{{end}}
+## Sandbox container
+- image: {{.Image}}
+{{if or .NetworkHosts .NetworkCIDRs}}{{if .NetworkHosts}}- network allow_hosts: {{.NetworkHosts}}
+{{end}}{{if .NetworkCIDRs}}- network allow_cidrs: {{.NetworkCIDRs}}
+{{end}}{{else}}- network: none
+{{end}}

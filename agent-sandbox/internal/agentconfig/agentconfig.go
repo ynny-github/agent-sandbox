@@ -1,8 +1,10 @@
 package agentconfig
 
 import (
-	"fmt"
+	"bytes"
+	_ "embed"
 	"strings"
+	"text/template"
 
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 )
@@ -18,60 +20,48 @@ func Pointer() string {
 		"constraints.\n"
 }
 
+//go:embed explain.tmpl
+var explainTmplText string
+
+// explainTmpl renders the environment explanation. Parsing a static, embedded
+// template cannot fail, so template.Must is safe.
+var explainTmpl = template.Must(template.New("explain").Parse(explainTmplText))
+
+// explainView is the data handed to explain.tmpl. Network host/CIDR lists are
+// pre-joined so the template stays free of helper functions.
+type explainView struct {
+	Hook         bool
+	Allow        []string
+	Drop         []string
+	Image        string
+	NetworkHosts string
+	NetworkCIDRs string
+}
+
 // Explain renders a Markdown description of the sandbox environment from cfg,
-// for the AI agent to read on demand via `agent-sandbox ai explain`.
+// for the AI agent to read on demand via `agent-sandbox ai explain`. The prose
+// lives in explain.tmpl; this function only prepares the view data.
 func Explain(cfg *config.Config) string {
-	var b strings.Builder
-	b.WriteString("# agent-sandbox environment\n\n")
-
-	b.WriteString("## Running commands\n")
-	if cfg.ToolMode == "hook" {
-		b.WriteString(`- tool_mode = "hook": run commands normally; a PreToolUse hook routes them through the sandbox.` + "\n")
-	} else {
-		b.WriteString(`- tool_mode = "mcp": use the ` + "`run_command`" + ` MCP tool to run commands.` + "\n")
-	}
-	b.WriteString("- Allowed commands run on the host; all others run in an isolated container.\n")
-	b.WriteString("- Output is written to files; read the returned paths for stdout/stderr.\n\n")
-
-	b.WriteString("## Commands that run on the host (allow)\n")
-	writeList(&b, cfg.Sandbox.Command.Allow)
-	b.WriteString("\n")
-
-	b.WriteString("## Refused commands (drop)\n")
-	b.WriteString("These run on neither host nor container:\n")
-	writeList(&b, cfg.Sandbox.Command.Drop)
-	b.WriteString("\n")
-
-	b.WriteString("## Sandbox container\n")
 	image := strings.TrimSpace(cfg.Sandbox.Container.Image)
 	if image == "" {
 		image = "(none)"
 	}
-	fmt.Fprintf(&b, "- image: %s\n", image)
-	writeNetwork(&b, cfg.Sandbox.Network)
 
-	return b.String()
-}
+	view := explainView{
+		Hook:         cfg.ToolMode == "hook",
+		Allow:        cfg.Sandbox.Command.Allow,
+		Drop:         cfg.Sandbox.Command.Drop,
+		Image:        image,
+		NetworkHosts: strings.Join(cfg.Sandbox.Network.AllowHosts, ", "),
+		NetworkCIDRs: strings.Join(cfg.Sandbox.Network.AllowCIDRs, ", "),
+	}
 
-func writeList(b *strings.Builder, items []string) {
-	if len(items) == 0 {
-		b.WriteString("- (none)\n")
-		return
+	var buf bytes.Buffer
+	if err := explainTmpl.Execute(&buf, view); err != nil {
+		// The template and its data are static; execution cannot fail. A panic
+		// here would mean the embedded template was edited into an invalid state,
+		// which the package tests catch immediately.
+		panic("agentconfig: render explain template: " + err.Error())
 	}
-	for _, it := range items {
-		fmt.Fprintf(b, "- %s\n", it)
-	}
-}
-
-func writeNetwork(b *strings.Builder, net config.NetworkConfig) {
-	if len(net.AllowHosts) == 0 && len(net.AllowCIDRs) == 0 {
-		b.WriteString("- network: none\n")
-		return
-	}
-	if len(net.AllowHosts) > 0 {
-		fmt.Fprintf(b, "- network allow_hosts: %s\n", strings.Join(net.AllowHosts, ", "))
-	}
-	if len(net.AllowCIDRs) > 0 {
-		fmt.Fprintf(b, "- network allow_cidrs: %s\n", strings.Join(net.AllowCIDRs, ", "))
-	}
+	return strings.TrimRight(buf.String(), "\n") + "\n"
 }

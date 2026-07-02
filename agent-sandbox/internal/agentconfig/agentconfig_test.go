@@ -55,3 +55,22 @@ func TestExplain_EmptyListsRenderNone(t *testing.T) {
 		t.Errorf("Explain() should render network: none when unset:\n%s", got)
 	}
 }
+
+func TestExplain_NetworkListed(t *testing.T) {
+	cfg := &config.Config{ToolMode: "hook"}
+	cfg.Sandbox.Network.AllowHosts = []string{"example.com", "api.example.com"}
+	cfg.Sandbox.Network.AllowCIDRs = []string{"10.0.0.0/8"}
+
+	got := agentconfig.Explain(cfg)
+	for _, want := range []string{
+		"- network allow_hosts: example.com, api.example.com",
+		"- network allow_cidrs: 10.0.0.0/8",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Explain() missing %q\nfull output:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "network: none") {
+		t.Errorf("Explain() should not render network: none when hosts/cidrs are set:\n%s", got)
+	}
+}

@@ -133,7 +133,6 @@ func TestBuildNonoArgs_HookMode_InjectsSettings(t *testing.T) {
 	}
 }
 
-
 func argsIndex(args []string, target string) int {
 	for i, a := range args {
 		if a == target {

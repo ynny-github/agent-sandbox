@@ -8,6 +8,17 @@ import (
 )
 
 var _ = Describe("safe docker-compose wrapper", func() {
+	Context("CLI-level policy", func() {
+		It("refuses the run subcommand before touching docker", func() {
+			dir := GinkgoT().TempDir()
+			stdout, stderr, code := runSafe(dir, "run", "web", "echo", "hi")
+			Expect(code).To(Equal(1))
+			Expect(stderr).To(ContainSubstring("refused:"))
+			Expect(stderr).To(ContainSubstring(`"run" subcommand is not allowed`))
+			Expect(stdout).To(BeEmpty())
+		})
+	})
+
 	Context("help", func() {
 		It("shows the wrapper usage on --help", func() {
 			dir := GinkgoT().TempDir()

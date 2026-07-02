@@ -2,7 +2,6 @@
 package cmd
 
 import (
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -110,15 +109,10 @@ func TestBuildNonoArgs_McpMode_DisablesTools(t *testing.T) {
 	}
 }
 
-func TestBuildNonoArgs_HookMode_HookInstalled_NoDisallowedTools(t *testing.T) {
+func TestBuildNonoArgs_HookMode_InjectsSettings(t *testing.T) {
 	makeFakeNono(t)
-	dir := t.TempDir()
-	if err := runInstallHookIn(dir, io.Discard); err != nil {
-		t.Fatalf("install hook: %v", err)
-	}
-	t.Chdir(dir)
-
 	cfg := &config.Config{ToolMode: "hook"}
+
 	_, args, err := buildNonoArgs(cfg, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -126,21 +120,19 @@ func TestBuildNonoArgs_HookMode_HookInstalled_NoDisallowedTools(t *testing.T) {
 	if argsContain(args, "--disallowed-tools") {
 		t.Errorf("hook mode should not disable tools; got %v", args)
 	}
-}
-
-func TestBuildNonoArgs_HookMode_HookMissing_Errors(t *testing.T) {
-	makeFakeNono(t)
-	t.Chdir(t.TempDir()) // empty dir, no .claude/settings.json
-
-	cfg := &config.Config{ToolMode: "hook"}
-	_, _, err := buildNonoArgs(cfg, nil, nil)
-	if err == nil {
-		t.Fatal("expected error when hook not installed in hook mode")
+	i := argsIndex(args, "--settings")
+	if i < 0 || i+1 >= len(args) {
+		t.Fatalf("hook mode should inject --settings with a value; got %v", args)
 	}
-	if !strings.Contains(err.Error(), "install-hook") {
-		t.Errorf("error should mention install-hook; got %v", err)
+	val := args[i+1]
+	if !strings.Contains(val, `"PreToolUse"`) || !strings.Contains(val, "agent-sandbox hook") {
+		t.Errorf("--settings value missing hook config; got %q", val)
+	}
+	if ci := argsIndex(args, "claude"); ci < 0 || i < ci {
+		t.Errorf("--settings must appear after claude; got %v", args)
 	}
 }
+
 
 func argsIndex(args []string, target string) int {
 	for i, a := range args {

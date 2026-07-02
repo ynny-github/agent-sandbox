@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -90,16 +89,11 @@ func buildNonoArgs(cfg *config.Config, nonoOpts, claudeOpts []string) (string, [
 	args = append(args, "--append-system-prompt", agentconfig.Pointer())
 
 	if cfg.ToolMode == "hook" {
-		if cwdErr != nil {
-			return "", nil, fmt.Errorf("getwd: %w", cwdErr)
-		}
-		settings, err := readSettings(filepath.Join(cwd, ".claude", "settings.json"))
+		settingsJSON, err := buildHookSettingsJSON()
 		if err != nil {
 			return "", nil, err
 		}
-		if !hookInstalledInSettings(settings, hookCommand, []string{"Bash", "Monitor"}) {
-			return "", nil, fmt.Errorf(`hook mode requires the PreToolUse hook; run "agent-sandbox install-hook"`)
-		}
+		args = append(args, "--settings", settingsJSON)
 	} else {
 		args = append(args, "--disallowed-tools", "Bash,Monitor")
 	}

@@ -1,6 +1,6 @@
 # Tool execution mode: "mcp" (agent uses the run_command MCP tool; Bash/Monitor
-# disabled) or "hook" (agent uses Bash/Monitor, routed via the PreToolUse hook —
-# requires `agent-sandbox install-hook`). Default: "mcp".
+# disabled) or "hook" (agent uses Bash/Monitor, routed via a PreToolUse hook that
+# `agent-sandbox claude` injects at launch). Default: "mcp".
 tool_mode = "mcp"
 
 [mcp]

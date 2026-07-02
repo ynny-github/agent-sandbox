@@ -90,17 +90,6 @@ Route a single command through the router from the shell (streams output live):
 agent-sandbox exec --config agent-sandbox.toml -- git status
 ```
 
-Install the Claude Code PreToolUse hook so Bash and Monitor commands route
-through the sandbox automatically:
-
-```bash
-agent-sandbox install-hook
-```
-
-This merges a PreToolUse hook into `.claude/settings.json` (matchers `Bash` and
-`Monitor`) that rewrites each command to `agent-sandbox exec -- <command>` via
-`agent-sandbox hook`. `agent-sandbox` must be on `PATH`.
-
 ### Tool mode
 
 `tool_mode` in `agent-sandbox.toml` selects how the agent's commands reach the
@@ -108,11 +97,11 @@ router:
 
 - `mcp` (default): the `claude` launcher disables the Bash and Monitor tools, and
   the agent routes commands through the `run_command` MCP tool.
-- `hook`: the launcher leaves Bash and Monitor enabled, and the PreToolUse hook
-  rewrites each command to `agent-sandbox exec -- <command>`. This requires the
-  hook to be installed (`agent-sandbox install-hook`); `agent-sandbox claude`
-  refuses to start in `hook` mode if the hook is missing for either the `Bash` or
-  `Monitor` matcher.
+- `hook`: the launcher leaves Bash and Monitor enabled and injects a PreToolUse
+  hook via `claude --settings` at launch, so each command is rewritten to
+  `agent-sandbox exec -- <command>` by `agent-sandbox hook`. No prior setup is
+  needed and nothing is written to `.claude/settings.json`. `agent-sandbox` must
+  be on `PATH`.
 
 ## Safe wrappers
 

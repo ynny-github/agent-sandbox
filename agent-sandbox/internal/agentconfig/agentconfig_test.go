@@ -5,26 +5,85 @@ import (
 	"testing"
 
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/agentconfig"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 )
 
-func TestContent_ContainsKeyPhrases(t *testing.T) {
-	got := agentconfig.Content()
-	for _, want := range []string{
-		"Command Router",
-		"run_command",
-		"native shell commands",
-		"host",
-		"container",
-		"stdout/stderr",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("Content() missing %q\nfull output:\n%s", want, got)
-		}
+func TestPointer_MentionsExplainCommand(t *testing.T) {
+	got := agentconfig.Pointer()
+	if !strings.Contains(got, "agent-sandbox ai explain") {
+		t.Errorf("Pointer() missing command reference:\n%s", got)
 	}
 }
 
-func TestContent_NonEmpty(t *testing.T) {
-	if agentconfig.Content() == "" {
-		t.Fatal("Content() returned empty string")
+func TestExplain_HookMode(t *testing.T) {
+	cfg := &config.Config{ToolMode: "hook"}
+	cfg.Sandbox.Command.Allow = []string{"git *"}
+	cfg.Sandbox.Command.Drop = []string{"git push --force*"}
+	cfg.Sandbox.Container.Image = "sandbox:0.1.0"
+
+	got := agentconfig.Explain(cfg)
+	for _, want := range []string{
+		"# agent-sandbox environment",
+		"Bash/Monitor tools",
+		"PreToolUse hook",
+		"returned inline in the tool result",
+		"## Commands that run on the host (allow)",
+		"- git *",
+		"## Refused commands (drop)",
+		"- git push --force*",
+		"sandbox:0.1.0",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Explain() missing %q\nfull output:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "run_command") {
+		t.Errorf("Explain() hook branch should not mention the mcp run_command tool:\n%s", got)
+	}
+}
+
+func TestExplain_McpMode(t *testing.T) {
+	cfg := &config.Config{ToolMode: "mcp"}
+	got := agentconfig.Explain(cfg)
+	for _, want := range []string{
+		"run_command",
+		"written to files",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Explain() mcp branch missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "PreToolUse hook") {
+		t.Errorf("Explain() mcp branch should not mention the hook flow:\n%s", got)
+	}
+}
+
+func TestExplain_EmptyListsRenderNone(t *testing.T) {
+	cfg := &config.Config{ToolMode: "mcp"}
+	got := agentconfig.Explain(cfg)
+	if !strings.Contains(got, "- (none)") {
+		t.Errorf("Explain() should render (none) for empty allow/drop:\n%s", got)
+	}
+	if !strings.Contains(got, "- network: none") {
+		t.Errorf("Explain() should render network: none when unset:\n%s", got)
+	}
+}
+
+func TestExplain_NetworkListed(t *testing.T) {
+	cfg := &config.Config{ToolMode: "hook"}
+	cfg.Sandbox.Network.AllowHosts = []string{"example.com", "api.example.com"}
+	cfg.Sandbox.Network.AllowCIDRs = []string{"10.0.0.0/8"}
+
+	got := agentconfig.Explain(cfg)
+	for _, want := range []string{
+		"- network allow_hosts: example.com, api.example.com",
+		"- network allow_cidrs: 10.0.0.0/8",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Explain() missing %q\nfull output:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "network: none") {
+		t.Errorf("Explain() should not render network: none when hosts/cidrs are set:\n%s", got)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/agentconfig"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 )
 
@@ -247,5 +248,25 @@ func TestParseClaudeArgs_Empty(t *testing.T) {
 	}
 	if len(nonoOpts) != 0 || len(claudeOpts) != 0 {
 		t.Errorf("expected empty groups, got nono=%v claude=%v", nonoOpts, claudeOpts)
+	}
+}
+
+func TestBuildNonoArgs_InjectsSystemPrompt(t *testing.T) {
+	makeFakeNono(t)
+	cfg := &config.Config{ToolMode: "mcp"}
+
+	_, args, err := buildNonoArgs(cfg, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	i := argsIndex(args, "--append-system-prompt")
+	if i < 0 {
+		t.Fatalf("--append-system-prompt not injected; got %v", args)
+	}
+	if args[i+1] != agentconfig.Pointer() {
+		t.Errorf("system prompt arg = %q, want Pointer()", args[i+1])
+	}
+	if ci := argsIndex(args, "claude"); ci < 0 || i < ci {
+		t.Errorf("--append-system-prompt must appear after claude; got %v", args)
 	}
 }

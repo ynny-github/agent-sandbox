@@ -52,7 +52,7 @@ func commandFromArgs(cmd *cobra.Command, args []string) string {
 // decision is "container", so host/drop commands never touch Docker.
 func runExecCore(ctx context.Context, cfg *config.Config, command string, stdout, stderr io.Writer) int {
 	s := router.New(router.Config{
-		AllowPatterns:           cfg.Sandbox.Command.Allow,
+		AllowPatterns:           allowPatterns(cfg),
 		DropPatterns:            cfg.Sandbox.Command.Drop,
 		ContainerEnvPassthrough: cfg.Sandbox.Container.EnvPassthrough,
 	})
@@ -70,7 +70,7 @@ func runExecCore(ctx context.Context, cfg *config.Config, command string, stdout
 		}
 		defer cleanup()
 		s = router.New(router.Config{
-			AllowPatterns:           cfg.Sandbox.Command.Allow,
+			AllowPatterns:           allowPatterns(cfg),
 			DropPatterns:            cfg.Sandbox.Command.Drop,
 			ContainerEnvPassthrough: cfg.Sandbox.Container.EnvPassthrough,
 			ContainerRunner:         runner,

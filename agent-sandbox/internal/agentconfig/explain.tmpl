@@ -1,0 +1,24 @@
+# agent-sandbox environment
+
+## Running commands
+{{if .Hook}}- Run shell commands with your normal Bash/Monitor tools; a PreToolUse hook transparently routes each one through the sandbox.
+- Command output is returned inline in the tool result.
+{{else}}- The Bash and Monitor tools are disabled; use the `run_command` MCP tool to run shell commands.
+- Command output is written to files; read the returned stdout/stderr paths.
+{{end}}- Allowed commands run on the host; all others run in an isolated container.
+
+## Commands that run on the host (allow)
+{{range .Allow}}- {{.}}
+{{else}}- (none)
+{{end}}
+## Refused commands (drop)
+These run on neither host nor container:
+{{range .Drop}}- {{.}}
+{{else}}- (none)
+{{end}}
+## Sandbox container
+- image: {{.Image}}
+{{if or .NetworkHosts .NetworkCIDRs}}{{if .NetworkHosts}}- network allow_hosts: {{.NetworkHosts}}
+{{end}}{{if .NetworkCIDRs}}- network allow_cidrs: {{.NetworkCIDRs}}
+{{end}}{{else}}- network: none
+{{end}}

@@ -18,6 +18,7 @@ import (
 	"github.com/docker/docker/api/types/filters"
 	dockernetwork "github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/errdefs"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/router"
 )
 
 type CleanResult struct {
@@ -185,6 +186,16 @@ func (e *ComposeExecutor) RunContainer(ctx context.Context, argv []string, env [
 func (e *ComposeExecutor) runContainerCommand(ctx context.Context, commandTokens []string, env []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	if err := e.WaitReady(ctx); err != nil {
 		return 0, fmt.Errorf("executor: sandbox not ready: %w", err)
+	}
+	// Fail with an actionable hint instead of a raw compose error when the
+	// sandbox container is not up. This is the single chokepoint every
+	// container-routed command passes through.
+	running, err := e.IsRunning(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("executor: check sandbox status: %w", err)
+	}
+	if !running {
+		return 0, router.ErrSandboxNotRunning
 	}
 	opts := []command.CLIOption{
 		command.WithAPIClient(e.dockerCLI.Client()),

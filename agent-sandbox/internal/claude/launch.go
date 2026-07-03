@@ -4,15 +4,17 @@
 package claude
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
-	"syscall"
+	"time"
 
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/agentconfig"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/gitutil"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandboxlifecycle"
 )
 
 // Options is the split invocation for the claude launcher: options passed
@@ -104,15 +106,58 @@ func BuildArgs(cfg *config.Config, opts Options) (string, []string, error) {
 	return nonoPath, args, nil
 }
 
-// Run builds the launch command for cfg and replaces the current process with
-// it via syscall.Exec. It returns only on failure.
+// sandboxHandle is the lifecycle surface the launcher needs after ensuring the
+// sandbox is up. *sandboxlifecycle.Result satisfies it.
+type sandboxHandle interface {
+	Started() bool
+	Down(context.Context) error
+	Close()
+}
+
+// runDeps holds the launcher's collaborators so run can be tested without
+// touching Docker, the real process, or os.Exit.
+type runDeps struct {
+	ensureUp  func(context.Context, *config.Config) (sandboxHandle, error)
+	supervise func(path string, args []string) int
+	exit      func(code int)
+}
+
+// Run ensures the sandbox is up, launches Claude under it, and — if this call
+// started the sandbox — tears it down when Claude exits. It replaces the old
+// syscall.Exec approach so the launcher can outlive Claude and run teardown.
 func Run(cfg *config.Config, opts Options) error {
+	return run(cfg, opts, runDeps{
+		ensureUp: func(ctx context.Context, c *config.Config) (sandboxHandle, error) {
+			return sandboxlifecycle.EnsureUp(ctx, c)
+		},
+		supervise: superviseProcess,
+		exit:      os.Exit,
+	})
+}
+
+func run(cfg *config.Config, opts Options, d runDeps) error {
 	nonoPath, nonoArgs, err := BuildArgs(cfg, opts)
 	if err != nil {
 		return err
 	}
-	if err := syscall.Exec(nonoPath, nonoArgs, os.Environ()); err != nil {
-		return fmt.Errorf("exec nono: %w", err)
+
+	handle, err := d.ensureUp(context.Background(), cfg)
+	if err != nil {
+		return fmt.Errorf("sandbox not available: %w (run `agent-sandbox doctor`)", err)
 	}
+	defer handle.Close()
+
+	code := d.supervise(nonoPath, nonoArgs)
+
+	if handle.Started() {
+		downCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if derr := handle.Down(downCtx); derr != nil {
+			fmt.Fprintf(os.Stderr, "warning: sandbox down failed: %v\n", derr)
+		}
+	}
+
+	handle.Close()
+	d.exit(code)
 	return nil
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"reflect"
 	"strings"
@@ -203,6 +204,102 @@ func TestRun_ContainerRunnerError(t *testing.T) {
 	}
 	if !strings.Contains(errBuf.String(), "container exec: attach interrupted") {
 		t.Errorf("stderr = %q, want container exec error", errBuf.String())
+	}
+}
+
+func TestRun_SandboxNotRunning_ShowsHint(t *testing.T) {
+	var out, errBuf bytes.Buffer
+	runner := &mockRunner{err: router.ErrSandboxNotRunning}
+	code, err := router.Run(context.Background(), router.Request{
+		Command:         "npm test",
+		ContainerRunner: runner,
+		Stdout:          &out,
+		Stderr:          &errBuf,
+	})
+	if err != nil {
+		t.Fatalf("sandbox-not-running must be handled internally, got: %v", err)
+	}
+	if code != 1 {
+		t.Errorf("exitCode = %d, want 1", code)
+	}
+	if !strings.Contains(errBuf.String(), "agent-sandbox sandbox up -d") {
+		t.Errorf("stderr = %q, want it to prompt starting the sandbox", errBuf.String())
+	}
+	if strings.Contains(errBuf.String(), "container exec:") {
+		t.Errorf("stderr = %q, should not show the raw 'container exec:' prefix", errBuf.String())
+	}
+}
+
+func TestRun_SandboxNotRunning_WrappedSentinel_ShowsHint(t *testing.T) {
+	var out, errBuf bytes.Buffer
+	// A runner may wrap the sentinel; errors.Is must still match.
+	runner := &mockRunner{err: fmt.Errorf("executor: %w", router.ErrSandboxNotRunning)}
+	code, err := router.Run(context.Background(), router.Request{
+		Command:         "make build",
+		ContainerRunner: runner,
+		Stdout:          &out,
+		Stderr:          &errBuf,
+	})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if code != 1 {
+		t.Errorf("exitCode = %d, want 1", code)
+	}
+	if !strings.Contains(errBuf.String(), "sandbox is not running") {
+		t.Errorf("stderr = %q, want the sandbox-not-running hint", errBuf.String())
+	}
+}
+
+func TestRun_SandboxNotRunning_PipelineWholePath_ShowsHint(t *testing.T) {
+	var out, errBuf bytes.Buffer
+	// A pipeline routes through runContainerWhole (bash -c); the hint must
+	// surface there too.
+	runner := &mockRunner{err: router.ErrSandboxNotRunning}
+	code, err := router.Run(context.Background(), router.Request{
+		Command:         "a | b",
+		ContainerRunner: runner,
+		Stdout:          &out,
+		Stderr:          &errBuf,
+	})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if code != 1 {
+		t.Errorf("exitCode = %d, want 1", code)
+	}
+	if !strings.Contains(errBuf.String(), "agent-sandbox claude") {
+		t.Errorf("stderr = %q, want the sandbox-not-running hint on the pipeline path", errBuf.String())
+	}
+}
+
+func TestRun_SandboxNotRunning_MixedPipeline_ShowsHint(t *testing.T) {
+	var out, errBuf bytes.Buffer
+	// `echo hi | b`: echo → host, b → container → mixed pipeline, exercising
+	// runMixedPipeline's own sentinel handling.
+	runner := &mockRunner{err: router.ErrSandboxNotRunning}
+	code, err := router.Run(context.Background(), router.Request{
+		Command:         "echo hi | b",
+		AllowPatterns:   []string{"echo *"},
+		ContainerRunner: runner,
+		Stdout:          &out,
+		Stderr:          &errBuf,
+	})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if code == 0 {
+		t.Errorf("exitCode = %d, want non-zero", code)
+	}
+	if !strings.Contains(errBuf.String(), "sandbox is not running") {
+		t.Errorf("stderr = %q, want the hint on the mixed-pipeline path", errBuf.String())
+	}
+	// The container segment's sentinel must be translated to the hint, not
+	// mislabeled with the host-segment prefix. (An unrelated upstream
+	// "pipeline segment: ... closed pipe" from the host side reacting to the
+	// fast-failing downstream is pre-existing plumbing and is not asserted on.)
+	if strings.Contains(errBuf.String(), "pipeline segment: sandbox is not running") {
+		t.Errorf("stderr = %q, sentinel must not be mislabeled as a pipeline-segment error", errBuf.String())
 	}
 }
 

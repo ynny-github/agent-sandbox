@@ -1,6 +1,8 @@
 package claude
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -237,5 +239,99 @@ func TestParseArgs_Empty(t *testing.T) {
 	}
 	if len(opts.NonoOpts) != 0 || len(opts.ClaudeOpts) != 0 {
 		t.Errorf("expected empty groups, got nono=%v claude=%v", opts.NonoOpts, opts.ClaudeOpts)
+	}
+}
+
+// --- lifecycle orchestration (Task 4) ---
+
+type fakeHandle struct {
+	started   bool
+	downCalls int
+	downErr   error
+	closed    bool
+}
+
+func (h *fakeHandle) Started() bool              { return h.started }
+func (h *fakeHandle) Down(context.Context) error { h.downCalls++; return h.downErr }
+func (h *fakeHandle) Close()                     { h.closed = true }
+
+func TestRun_EnsureUpFailure_DoesNotLaunch(t *testing.T) {
+	makeFakeNono(t)
+	superviseCalls := 0
+	exitCalls := 0
+	err := run(&config.Config{ToolMode: "mcp"}, Options{}, runDeps{
+		ensureUp: func(context.Context, *config.Config) (sandboxHandle, error) {
+			return nil, errors.New("docker daemon error")
+		},
+		supervise: func(string, []string) int { superviseCalls++; return 0 },
+		exit:      func(int) { exitCalls++ },
+	})
+	if err == nil {
+		t.Fatal("expected error when EnsureUp fails, got nil")
+	}
+	if superviseCalls != 0 {
+		t.Errorf("claude was launched despite sandbox failure (supervise called %d times)", superviseCalls)
+	}
+	if exitCalls != 0 {
+		t.Errorf("exit called %d times, want 0 on hard-fail", exitCalls)
+	}
+}
+
+func TestRun_StartedByUs_CallsDown(t *testing.T) {
+	makeFakeNono(t)
+	h := &fakeHandle{started: true}
+	gotExit := -1
+	err := run(&config.Config{ToolMode: "mcp"}, Options{}, runDeps{
+		ensureUp:  func(context.Context, *config.Config) (sandboxHandle, error) { return h, nil },
+		supervise: func(string, []string) int { return 3 },
+		exit:      func(code int) { gotExit = code },
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if h.downCalls != 1 {
+		t.Errorf("Down called %d times, want 1 when we started the sandbox", h.downCalls)
+	}
+	if !h.closed {
+		t.Error("handle not closed")
+	}
+	if gotExit != 3 {
+		t.Errorf("exit code = %d, want 3 (claude's code)", gotExit)
+	}
+}
+
+func TestRun_NotStartedByUs_SkipsDown(t *testing.T) {
+	makeFakeNono(t)
+	h := &fakeHandle{started: false}
+	err := run(&config.Config{ToolMode: "mcp"}, Options{}, runDeps{
+		ensureUp:  func(context.Context, *config.Config) (sandboxHandle, error) { return h, nil },
+		supervise: func(string, []string) int { return 0 },
+		exit:      func(int) {},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if h.downCalls != 0 {
+		t.Errorf("Down called %d times, want 0 when sandbox was already running", h.downCalls)
+	}
+}
+
+func TestRun_DownError_StillPropagatesExitCode(t *testing.T) {
+	makeFakeNono(t)
+	h := &fakeHandle{started: true, downErr: errors.New("down failed")}
+	gotExit := -1
+	err := run(&config.Config{ToolMode: "mcp"}, Options{}, runDeps{
+		ensureUp:  func(context.Context, *config.Config) (sandboxHandle, error) { return h, nil },
+		supervise: func(string, []string) int { return 5 },
+		exit:      func(code int) { gotExit = code },
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotExit != 5 {
+		t.Errorf("exit code = %d, want 5 even when Down errors", gotExit)
+	}
+	if h.downCalls != 1 {
+		t.Errorf("Down attempted %d times, want 1 in the down-error case", h.downCalls)
 	}
 }

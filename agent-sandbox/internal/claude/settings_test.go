@@ -6,7 +6,7 @@ import (
 )
 
 func TestHookSettingsJSON(t *testing.T) {
-	got, err := HookSettingsJSON()
+	got, err := hookSettingsJSON()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

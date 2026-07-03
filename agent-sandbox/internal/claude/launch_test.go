@@ -1,0 +1,241 @@
+package claude
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/agentconfig"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
+)
+
+func TestValidatePassthrough_SettingsBlocked(t *testing.T) {
+	if err := ValidatePassthrough([]string{"--settings", "foo.json"}); err == nil {
+		t.Fatal("expected error for --settings, got nil")
+	}
+}
+
+func TestValidatePassthrough_SettingsEqualBlocked(t *testing.T) {
+	if err := ValidatePassthrough([]string{"--settings=foo.json"}); err == nil {
+		t.Fatal("expected error for --settings=..., got nil")
+	}
+}
+
+func TestValidatePassthrough_AllowsOtherArgs(t *testing.T) {
+	if err := ValidatePassthrough([]string{"--print", "--model", "opus"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidatePassthrough_Empty(t *testing.T) {
+	if err := ValidatePassthrough(nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestBuildArgs_NonoNotInPath(t *testing.T) {
+	t.Setenv("PATH", "")
+	cfg := &config.Config{}
+	if _, _, err := BuildArgs(cfg, Options{}); err == nil {
+		t.Fatal("expected error when nono not in PATH, got nil")
+	}
+}
+
+func makeFakeNono(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nono")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	return path
+}
+
+func argsContain(args []string, target string) bool {
+	for _, a := range args {
+		if a == target {
+			return true
+		}
+	}
+	return false
+}
+
+func argsIndex(args []string, target string) int {
+	for i, a := range args {
+		if a == target {
+			return i
+		}
+	}
+	return -1
+}
+
+func TestBuildArgs_AlwaysUsesWrap(t *testing.T) {
+	makeFakeNono(t)
+	cfg := &config.Config{}
+	_, args, err := BuildArgs(cfg, Options{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(args) < 2 {
+		t.Fatalf("expected at least 2 args, got %v", args)
+	}
+	if args[0] != "nono" {
+		t.Errorf("args[0] = %q, want \"nono\"; full args: %v", args[0], args)
+	}
+	if args[1] != "wrap" {
+		t.Errorf("args[1] = %q, want \"wrap\"; full args: %v", args[1], args)
+	}
+}
+
+func TestBuildArgs_McpMode_DisablesTools(t *testing.T) {
+	makeFakeNono(t)
+	cfg := &config.Config{ToolMode: "mcp"}
+	_, args, err := BuildArgs(cfg, Options{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !argsContain(args, "--disallowed-tools") || !argsContain(args, "Bash,Monitor") {
+		t.Errorf("mcp mode should disable Bash,Monitor; got %v", args)
+	}
+}
+
+func TestBuildArgs_HookMode_InjectsSettings(t *testing.T) {
+	makeFakeNono(t)
+	cfg := &config.Config{ToolMode: "hook"}
+	_, args, err := BuildArgs(cfg, Options{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if argsContain(args, "--disallowed-tools") {
+		t.Errorf("hook mode should not disable tools; got %v", args)
+	}
+	i := argsIndex(args, "--settings")
+	if i < 0 || i+1 >= len(args) {
+		t.Fatalf("hook mode should inject --settings with a value; got %v", args)
+	}
+	val := args[i+1]
+	if !strings.Contains(val, `"PreToolUse"`) || !strings.Contains(val, "agent-sandbox hook") {
+		t.Errorf("--settings value missing hook config; got %q", val)
+	}
+	if ci := argsIndex(args, "claude"); ci < 0 || i < ci {
+		t.Errorf("--settings must appear after claude; got %v", args)
+	}
+}
+
+func TestBuildArgs_NonoOptsBeforeClaude(t *testing.T) {
+	makeFakeNono(t)
+	cfg := &config.Config{ToolMode: "mcp"}
+	_, args, err := BuildArgs(cfg, Options{NonoOpts: []string{"--profile", "nono.jsonc"}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	pi := argsIndex(args, "--profile")
+	ci := argsIndex(args, "claude")
+	if pi < 0 || ci < 0 || pi > ci {
+		t.Errorf("--profile must appear before claude; got %v", args)
+	}
+	if args[pi+1] != "nono.jsonc" {
+		t.Errorf("--profile value misplaced; got %v", args)
+	}
+}
+
+func TestBuildArgs_ClaudeOptsAfterClaude(t *testing.T) {
+	makeFakeNono(t)
+	cfg := &config.Config{ToolMode: "mcp"}
+	_, args, err := BuildArgs(cfg, Options{ClaudeOpts: []string{"--model", "opus"}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	ci := argsIndex(args, "claude")
+	mi := argsIndex(args, "--model")
+	if ci < 0 || mi < 0 || mi < ci {
+		t.Errorf("--model must appear after claude; got %v", args)
+	}
+	if args[mi+1] != "opus" {
+		t.Errorf("--model value misplaced; got %v", args)
+	}
+}
+
+func TestBuildArgs_InjectsSystemPrompt(t *testing.T) {
+	makeFakeNono(t)
+	cfg := &config.Config{ToolMode: "mcp"}
+	_, args, err := BuildArgs(cfg, Options{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	i := argsIndex(args, "--append-system-prompt")
+	if i < 0 {
+		t.Fatalf("--append-system-prompt not injected; got %v", args)
+	}
+	if args[i+1] != agentconfig.Pointer() {
+		t.Errorf("system prompt arg = %q, want Pointer()", args[i+1])
+	}
+	if ci := argsIndex(args, "claude"); ci < 0 || i < ci {
+		t.Errorf("--append-system-prompt must appear after claude; got %v", args)
+	}
+}
+
+func TestParseArgs_SplitsOnFirstDash(t *testing.T) {
+	cfgFile, opts := ParseArgs([]string{"--profile", "nono.jsonc", "--", "--model", "opus"}, "default.toml")
+	if cfgFile != "default.toml" {
+		t.Errorf("configFile = %q, want default.toml", cfgFile)
+	}
+	if strings.Join(opts.NonoOpts, " ") != "--profile nono.jsonc" {
+		t.Errorf("NonoOpts = %v", opts.NonoOpts)
+	}
+	if strings.Join(opts.ClaudeOpts, " ") != "--model opus" {
+		t.Errorf("ClaudeOpts = %v", opts.ClaudeOpts)
+	}
+}
+
+func TestParseArgs_NoDash_AllNono(t *testing.T) {
+	_, opts := ParseArgs([]string{"--profile", "nono.jsonc"}, "default.toml")
+	if strings.Join(opts.NonoOpts, " ") != "--profile nono.jsonc" {
+		t.Errorf("NonoOpts = %v", opts.NonoOpts)
+	}
+	if len(opts.ClaudeOpts) != 0 {
+		t.Errorf("ClaudeOpts = %v, want empty", opts.ClaudeOpts)
+	}
+}
+
+func TestParseArgs_ConfigSpaceForm(t *testing.T) {
+	cfgFile, opts := ParseArgs([]string{"--config", "custom.toml", "--profile", "p", "--", "--print"}, "default.toml")
+	if cfgFile != "custom.toml" {
+		t.Errorf("configFile = %q, want custom.toml", cfgFile)
+	}
+	if strings.Join(opts.NonoOpts, " ") != "--profile p" {
+		t.Errorf("NonoOpts = %v, want [--profile p]", opts.NonoOpts)
+	}
+}
+
+func TestParseArgs_ConfigEqualsForm(t *testing.T) {
+	cfgFile, opts := ParseArgs([]string{"--config=custom.toml", "--allow", "/repo"}, "default.toml")
+	if cfgFile != "custom.toml" {
+		t.Errorf("configFile = %q, want custom.toml", cfgFile)
+	}
+	if strings.Join(opts.NonoOpts, " ") != "--allow /repo" {
+		t.Errorf("NonoOpts = %v, want [--allow /repo]", opts.NonoOpts)
+	}
+}
+
+func TestParseArgs_DashAtEnd_EmptyClaudeOpts(t *testing.T) {
+	_, opts := ParseArgs([]string{"--profile", "p", "--"}, "default.toml")
+	if strings.Join(opts.NonoOpts, " ") != "--profile p" {
+		t.Errorf("NonoOpts = %v", opts.NonoOpts)
+	}
+	if len(opts.ClaudeOpts) != 0 {
+		t.Errorf("ClaudeOpts = %v, want empty", opts.ClaudeOpts)
+	}
+}
+
+func TestParseArgs_Empty(t *testing.T) {
+	cfgFile, opts := ParseArgs(nil, "default.toml")
+	if cfgFile != "default.toml" {
+		t.Errorf("configFile = %q, want default", cfgFile)
+	}
+	if len(opts.NonoOpts) != 0 || len(opts.ClaudeOpts) != 0 {
+		t.Errorf("expected empty groups, got nono=%v claude=%v", opts.NonoOpts, opts.ClaudeOpts)
+	}
+}

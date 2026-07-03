@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/claude"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 )
 
@@ -21,12 +22,12 @@ func init() {
 }
 
 func runDebug(cmd *cobra.Command, args []string) error {
-	configFile, nonoOpts, claudeOpts := parseClaudeArgs(args)
+	configFile, opts := claude.ParseArgs(args, configPath)
 	cfg, err := config.Load(configFile)
 	if err != nil {
 		return fmt.Errorf("config error: %w", err)
 	}
-	_, nonoArgs, err := buildNonoArgs(cfg, nonoOpts, claudeOpts)
+	_, nonoArgs, err := claude.BuildArgs(cfg, opts)
 	if err != nil {
 		return err
 	}

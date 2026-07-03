@@ -35,3 +35,12 @@ func TestAllowPatterns_RoutesAiExplainToHost(t *testing.T) {
 		t.Errorf("agent-sandbox ai explain routed to %q, want host", decision)
 	}
 }
+
+func argsContain(args []string, target string) bool {
+	for _, a := range args {
+		if a == target {
+			return true
+		}
+	}
+	return false
+}

@@ -1,12 +1,12 @@
-package cmd
+package claude
 
 import (
 	"encoding/json"
 	"testing"
 )
 
-func TestBuildHookSettingsJSON(t *testing.T) {
-	got, err := buildHookSettingsJSON()
+func TestHookSettingsJSON(t *testing.T) {
+	got, err := HookSettingsJSON()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

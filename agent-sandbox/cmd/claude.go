@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/agentconfig"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/claude"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/gitutil"
 )
@@ -89,7 +90,7 @@ func buildNonoArgs(cfg *config.Config, nonoOpts, claudeOpts []string) (string, [
 	args = append(args, "--append-system-prompt", agentconfig.Pointer())
 
 	if cfg.ToolMode == "hook" {
-		settingsJSON, err := buildHookSettingsJSON()
+		settingsJSON, err := claude.HookSettingsJSON()
 		if err != nil {
 			return "", nil, err
 		}

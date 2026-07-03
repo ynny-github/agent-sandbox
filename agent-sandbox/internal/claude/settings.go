@@ -1,4 +1,6 @@
-package cmd
+// Package claude generates Claude Code-facing configuration that agent-sandbox
+// hands to the `claude` CLI at launch.
+package claude
 
 import (
 	"encoding/json"
@@ -7,11 +9,11 @@ import (
 
 const hookCommand = "agent-sandbox hook"
 
-// buildHookSettingsJSON returns a compact Claude Code settings JSON string that
+// HookSettingsJSON returns a compact Claude Code settings JSON string that
 // registers the PreToolUse hook for the Bash and Monitor tools, routing each
 // command through `agent-sandbox hook`. It is injected via `claude --settings`
 // in hook mode, so no persisted .claude/settings.json entry is required.
-func buildHookSettingsJSON() (string, error) {
+func HookSettingsJSON() (string, error) {
 	settings := map[string]any{}
 	for _, matcher := range []string{"Bash", "Monitor"} {
 		ensurePreToolUseHook(settings, matcher, hookCommand)

@@ -273,6 +273,36 @@ func TestRun_SandboxNotRunning_PipelineWholePath_ShowsHint(t *testing.T) {
 	}
 }
 
+func TestRun_SandboxNotRunning_MixedPipeline_ShowsHint(t *testing.T) {
+	var out, errBuf bytes.Buffer
+	// `echo hi | b`: echo → host, b → container → mixed pipeline, exercising
+	// runMixedPipeline's own sentinel handling.
+	runner := &mockRunner{err: router.ErrSandboxNotRunning}
+	code, err := router.Run(context.Background(), router.Request{
+		Command:         "echo hi | b",
+		AllowPatterns:   []string{"echo *"},
+		ContainerRunner: runner,
+		Stdout:          &out,
+		Stderr:          &errBuf,
+	})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if code == 0 {
+		t.Errorf("exitCode = %d, want non-zero", code)
+	}
+	if !strings.Contains(errBuf.String(), "sandbox is not running") {
+		t.Errorf("stderr = %q, want the hint on the mixed-pipeline path", errBuf.String())
+	}
+	// The container segment's sentinel must be translated to the hint, not
+	// mislabeled with the host-segment prefix. (An unrelated upstream
+	// "pipeline segment: ... closed pipe" from the host side reacting to the
+	// fast-failing downstream is pre-existing plumbing and is not asserted on.)
+	if strings.Contains(errBuf.String(), "pipeline segment: sandbox is not running") {
+		t.Errorf("stderr = %q, sentinel must not be mislabeled as a pipeline-segment error", errBuf.String())
+	}
+}
+
 func TestRun_ContainerEnvPassthrough(t *testing.T) {
 	t.Setenv("CR_ENGINE_TEST_VAR", "passedvalue")
 	var out, errBuf bytes.Buffer

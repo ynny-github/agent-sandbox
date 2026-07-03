@@ -19,7 +19,9 @@ const sandboxNotRunningHint = "sandbox is not running; start it with `agent-sand
 
 // printContainerErr writes a container-execution error to stderr, translating
 // the sandbox-not-running sentinel into an actionable hint rather than a raw
-// Docker/Compose error.
+// Docker/Compose error. It is for uniform-container paths; runMixedPipeline
+// handles the sentinel inline because its non-sentinel prefix differs
+// ("pipeline segment:" vs "container exec:").
 func printContainerErr(stderr io.Writer, err error) {
 	if errors.Is(err, ErrSandboxNotRunning) {
 		fmt.Fprintln(stderr, sandboxNotRunningHint)

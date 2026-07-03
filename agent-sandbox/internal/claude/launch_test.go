@@ -331,4 +331,7 @@ func TestRun_DownError_StillPropagatesExitCode(t *testing.T) {
 	if gotExit != 5 {
 		t.Errorf("exit code = %d, want 5 even when Down errors", gotExit)
 	}
+	if h.downCalls != 1 {
+		t.Errorf("Down attempted %d times, want 1 in the down-error case", h.downCalls)
+	}
 }

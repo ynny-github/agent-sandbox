@@ -157,6 +157,7 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 		}
 	}
 
+	handle.Close()
 	d.exit(code)
 	return nil
 }

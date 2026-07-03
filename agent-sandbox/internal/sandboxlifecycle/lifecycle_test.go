@@ -54,8 +54,12 @@ func TestEnsure_NotRunning_StartsAndOwns(t *testing.T) {
 
 func TestEnsure_IsRunningError_Fails(t *testing.T) {
 	f := &fakeSandbox{runningErr: errors.New("docker down")}
-	if _, err := Ensure(context.Background(), f); err == nil {
+	started, err := Ensure(context.Background(), f)
+	if err == nil {
 		t.Fatal("expected error when IsRunning fails, got nil")
+	}
+	if started {
+		t.Error("startedByUs must be false when IsRunning fails")
 	}
 }
 

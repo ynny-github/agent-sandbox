@@ -5,12 +5,28 @@ package router
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 	"sync"
 )
+
+// sandboxNotRunningHint is the actionable message shown when a command is
+// routed to the sandbox but the container is not running.
+const sandboxNotRunningHint = "sandbox is not running; start it with `agent-sandbox sandbox up -d`, or run Claude via `agent-sandbox claude` (which starts the sandbox automatically)"
+
+// printContainerErr writes a container-execution error to stderr, translating
+// the sandbox-not-running sentinel into an actionable hint rather than a raw
+// Docker/Compose error.
+func printContainerErr(stderr io.Writer, err error) {
+	if errors.Is(err, ErrSandboxNotRunning) {
+		fmt.Fprintln(stderr, sandboxNotRunningHint)
+		return
+	}
+	fmt.Fprintf(stderr, "container exec: %v\n", err)
+}
 
 // ContainerRunner executes an argv inside the sandbox container.
 type ContainerRunner interface {
@@ -162,7 +178,7 @@ func runUniformContainer(ctx context.Context, req Request, pl PipelineNode, rs [
 		env := resolveEnv(req.ContainerEnvPassthrough)
 		code, err := req.ContainerRunner.RunContainer(ctx, rs[0].seg.Args, env, nil, req.Stdout, req.Stderr)
 		if err != nil {
-			fmt.Fprintf(req.Stderr, "container exec: %v\n", err)
+			printContainerErr(req.Stderr, err)
 			if code == 0 {
 				code = 1
 			}
@@ -185,7 +201,7 @@ func runContainerWhole(ctx context.Context, req Request, raw string) (int, error
 	env := resolveEnv(req.ContainerEnvPassthrough)
 	code, err := req.ContainerRunner.RunContainer(ctx, argv, env, nil, req.Stdout, req.Stderr)
 	if err != nil {
-		fmt.Fprintf(req.Stderr, "container exec: %v\n", err)
+		printContainerErr(req.Stderr, err)
 		if code == 0 {
 			code = 1
 		}
@@ -257,7 +273,11 @@ func runMixedPipeline(ctx context.Context, req Request, rs []routedSeg) (int, er
 			code, err := runSegment(ctx, safeReq, rs[i], stdins[i], stdouts[i])
 			exits[i] = code
 			if err != nil {
-				fmt.Fprintf(safeReq.Stderr, "pipeline segment: %v\n", err)
+				if errors.Is(err, ErrSandboxNotRunning) {
+					fmt.Fprintln(safeReq.Stderr, sandboxNotRunningHint)
+				} else {
+					fmt.Fprintf(safeReq.Stderr, "pipeline segment: %v\n", err)
+				}
 				if exits[i] == 0 {
 					exits[i] = 1
 				}

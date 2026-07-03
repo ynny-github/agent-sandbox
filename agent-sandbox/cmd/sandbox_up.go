@@ -9,11 +9,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/docker/cli/cli/command"
-	cliflags "github.com/docker/cli/cli/flags"
 	"github.com/spf13/cobra"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/container"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandboxlifecycle"
 )
 
 var sandboxUpCmd = &cobra.Command{
@@ -35,81 +33,37 @@ func runSandboxUp(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("config error: %w", err)
 	}
 
-	dockerCli, err := command.NewDockerCli()
+	ctx := context.Background()
+	executor, projectName, cleanup, err := sandboxlifecycle.NewExecutor(ctx, cfg)
 	if err != nil {
-		return fmt.Errorf("docker cli error: %w", err)
+		return err
 	}
-	if err := dockerCli.Initialize(cliflags.NewClientOptions()); err != nil {
-		return fmt.Errorf("docker cli initialize: %w", err)
-	}
-	defer dockerCli.Client().Close()
+	defer cleanup()
 
-	pingCtx, pingCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer pingCancel()
-	if _, err := dockerCli.Client().Ping(pingCtx); err != nil {
-		return fmt.Errorf("docker daemon error: %w", err)
-	}
-
-	detectCtx, detectCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer detectCancel()
-	externalNetwork := container.DetectProjectNetwork(detectCtx, dockerCli, cfg.Sandbox.Container.ExternalNetwork)
-
-	project, err := container.NewSandboxProject(
-		os.Getpid(),
-		os.Getuid(),
-		os.Getgid(),
-		cfg.Sandbox.Container.BuildContext,
-		cfg.Sandbox.Container.Dockerfile,
-		cfg.Sandbox.Container.Image,
-		cfg.Sandbox.Network.AllowCIDRs,
-		cfg.Sandbox.Network.AllowHosts,
-		externalNetwork,
-	)
+	started, err := sandboxlifecycle.Ensure(ctx, executor)
 	if err != nil {
-		return fmt.Errorf("sandbox project: %w", err)
+		return err
 	}
 
-	composeExecutor := container.NewComposeExecutor(dockerCli, project)
-
-	checkCtx, checkCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer checkCancel()
-	running, err := composeExecutor.IsRunning(checkCtx)
-	if err != nil {
-		return fmt.Errorf("sandbox status: %w", err)
+	if !started {
+		fmt.Fprintf(cmd.ErrOrStderr(), "sandbox %s already running; skipping startup\n", projectName)
 	}
 
-	if running {
-		fmt.Fprintf(cmd.ErrOrStderr(), "sandbox %s already running; skipping startup\n", project.Name)
-		if sandboxUpDetach {
-			return nil
+	if sandboxUpDetach {
+		if started {
+			fmt.Fprintf(cmd.ErrOrStderr(), "sandbox %s is running\n", projectName)
 		}
-	} else {
-		upCtx, upCancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		defer upCancel()
-		if err := composeExecutor.Up(upCtx); err != nil {
-			return fmt.Errorf("sandbox up: %w", err)
-		}
-
-		policyCtx, policyCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer policyCancel()
-		if err := composeExecutor.ApplyNetworkPolicy(policyCtx); err != nil {
-			return fmt.Errorf("network policy: %w", err)
-		}
-
-		if sandboxUpDetach {
-			fmt.Fprintf(cmd.ErrOrStderr(), "sandbox %s is running\n", project.Name)
-			return nil
-		}
+		return nil
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	fmt.Fprintln(os.Stderr, "sandbox is running. press Ctrl+C to stop.")
-	<-ctx.Done()
+	<-sigCtx.Done()
 
 	fmt.Fprintln(os.Stderr, "\nstopping sandbox...")
 	downCtx, downCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer downCancel()
-	return composeExecutor.Down(downCtx)
+	return executor.Down(downCtx)
 }

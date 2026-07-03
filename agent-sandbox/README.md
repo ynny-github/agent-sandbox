@@ -79,6 +79,15 @@ Run Claude inside the nono sandbox. Options before `--` go to `nono wrap`
 agent-sandbox claude --profile nono.jsonc -- --model opus
 ```
 
+`agent-sandbox claude` manages the sandbox container automatically: on launch it
+starts the project sandbox if it is not already running, and when Claude exits
+it stops the sandbox **only if this launch started it** (a sandbox that was
+already running — for example from `sandbox up -d` or another session in the
+same directory — is left untouched). If the sandbox cannot be started (Docker
+daemon unreachable or the build fails), Claude is not launched; run
+`agent-sandbox doctor` to diagnose. Running `sandbox up -d` beforehand is no
+longer required.
+
 `agent-sandbox debug` accepts the same form and prints the resulting `nono`
 command without running it.
 

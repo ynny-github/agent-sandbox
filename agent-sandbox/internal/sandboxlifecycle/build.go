@@ -91,7 +91,7 @@ func EnsureUp(ctx context.Context, cfg *config.Config) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	startedByUs, err := Ensure(ctx, executor)
+	startedByUs, err := Ensure(ctx, executor, DefaultExternalAccessConfirm(cfg))
 	if err != nil {
 		cleanup()
 		return nil, err

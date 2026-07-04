@@ -40,7 +40,7 @@ func runSandboxUp(cmd *cobra.Command, args []string) error {
 	}
 	defer cleanup()
 
-	started, err := sandboxlifecycle.Ensure(ctx, executor)
+	started, err := sandboxlifecycle.Ensure(ctx, executor, sandboxlifecycle.DefaultExternalAccessConfirm(cfg))
 	if err != nil {
 		return err
 	}

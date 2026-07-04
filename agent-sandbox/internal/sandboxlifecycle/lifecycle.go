@@ -19,9 +19,10 @@ type Sandbox interface {
 
 // Ensure makes sb running. If it is already running, Ensure does nothing and
 // reports startedByUs=false (the caller must not tear it down). If it was not
-// running, Ensure brings it up, reporting startedByUs=true. Any failure is
-// returned and startedByUs is false.
-func Ensure(ctx context.Context, sb Sandbox) (startedByUs bool, err error) {
+// running, Ensure invokes confirm (when non-nil) before calling Up; a non-nil
+// error from confirm aborts startup. On success, Ensure brings sb up and
+// reports startedByUs=true. Any failure is returned and startedByUs is false.
+func Ensure(ctx context.Context, sb Sandbox, confirm func() error) (startedByUs bool, err error) {
 	checkCtx, checkCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer checkCancel()
 	running, err := sb.IsRunning(checkCtx)
@@ -30,6 +31,12 @@ func Ensure(ctx context.Context, sb Sandbox) (startedByUs bool, err error) {
 	}
 	if running {
 		return false, nil
+	}
+
+	if confirm != nil {
+		if err := confirm(); err != nil {
+			return false, err
+		}
 	}
 
 	upCtx, upCancel := context.WithTimeout(ctx, 5*time.Minute)

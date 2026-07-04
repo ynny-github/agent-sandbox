@@ -74,6 +74,23 @@ func TestNewSandboxProject_Labels(t *testing.T) {
 	}
 }
 
+func TestNewSandboxProject_Init(t *testing.T) {
+	proj, err := container.NewSandboxProject(99, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, serviceName := range []string{container.SandboxServiceName, "gost"} {
+		svc := proj.Services[serviceName]
+		if svc.Init == nil {
+			t.Errorf("%s service Init = nil, want non-nil pointer to true", serviceName)
+			continue
+		}
+		if !*svc.Init {
+			t.Errorf("%s service Init = %v, want true", serviceName, *svc.Init)
+		}
+	}
+}
+
 func TestNewSandboxProject_VolumeMountsCwd(t *testing.T) {
 	proj, err := container.NewSandboxProject(1, 1000, 2000, "./ctx", "Dockerfile", "myapp", nil, nil, "")
 	if err != nil {

@@ -155,6 +155,8 @@ func NewSandboxProject(pid, uid, gid int, buildContext, dockerfile, image string
 		}
 	}
 
+	initTrue := true
+
 	return &composetypes.Project{
 		Name:       projectName,
 		WorkingDir: cwd,
@@ -200,6 +202,7 @@ func NewSandboxProject(pid, uid, gid int, buildContext, dockerfile, image string
 					"cr.project_dir": cwd,
 				},
 				Networks: workspaceNetworks,
+				Init:     &initTrue,
 			},
 			"gost": {
 				Name:         "gost",
@@ -221,6 +224,7 @@ func NewSandboxProject(pid, uid, gid int, buildContext, dockerfile, image string
 					"sandbox_internal": nil,
 					"default":          nil,
 				},
+				Init: &initTrue,
 			},
 		},
 	}, nil

@@ -40,18 +40,14 @@ func NewComposeExecutor(dockerCLI command.Cli, project *composetypes.Project) *C
 	}
 }
 
-// StartBackground runs Up and ApplyNetworkPolicy in a goroutine. Call WaitReady
-// before issuing commands to ensure the sandbox is available.
+// StartBackground runs Up in a goroutine. Call WaitReady before issuing commands
+// to ensure the sandbox is available.
 func (e *ComposeExecutor) StartBackground(ctx context.Context) {
 	e.readyCh = make(chan struct{})
 	go func() {
 		defer close(e.readyCh)
 		if err := e.Up(ctx); err != nil {
 			e.readyErr = fmt.Errorf("up: %w", err)
-			return
-		}
-		if err := e.ApplyNetworkPolicy(ctx); err != nil {
-			e.readyErr = fmt.Errorf("network policy: %w", err)
 		}
 	}()
 }
@@ -147,36 +143,6 @@ func (e *ComposeExecutor) CleanStale(ctx context.Context) (CleanResult, error) {
 		}
 	}
 	return result, nil
-}
-
-// ApplyNetworkPolicy disconnects the workspace container from the default network
-// and connects it to sandbox_internal, enforcing proxy-only outbound access.
-// Call this after Up() completes.
-func (e *ComposeExecutor) ApplyNetworkPolicy(ctx context.Context) error {
-	defaultNet := e.project.Name + "_default"
-	internalNet := e.project.Name + "_sandbox_internal"
-
-	containers, err := e.dockerCLI.Client().ContainerList(ctx, dockercontainer.ListOptions{
-		Filters: filters.NewArgs(
-			filters.Arg("label", fmt.Sprintf("com.docker.compose.project=%s", e.project.Name)),
-			filters.Arg("label", fmt.Sprintf("com.docker.compose.service=%s", SandboxServiceName)),
-		),
-	})
-	if err != nil {
-		return fmt.Errorf("executor: list workspace containers: %w", err)
-	}
-	if len(containers) == 0 {
-		return fmt.Errorf("executor: workspace container not found after Up")
-	}
-	containerID := containers[0].ID
-
-	if err := e.dockerCLI.Client().NetworkConnect(ctx, internalNet, containerID, nil); err != nil {
-		return fmt.Errorf("executor: connect workspace to sandbox_internal: %w", err)
-	}
-	if err := e.dockerCLI.Client().NetworkDisconnect(ctx, defaultNet, containerID, false); err != nil {
-		return fmt.Errorf("executor: disconnect workspace from default: %w", err)
-	}
-	return nil
 }
 
 func (e *ComposeExecutor) RunContainer(ctx context.Context, argv []string, env []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {

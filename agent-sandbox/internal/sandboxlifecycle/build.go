@@ -46,8 +46,7 @@ func NewExecutor(ctx context.Context, cfg *config.Config) (*container.ComposeExe
 		cfg.Sandbox.Container.BuildContext,
 		cfg.Sandbox.Container.Dockerfile,
 		cfg.Sandbox.Container.Image,
-		nil, // TODO(Task 2): signature changes — remove both nils and pass cfg.Sandbox.Network.AllowExternal in the new bool parameter
-		nil,
+		cfg.Sandbox.Network.AllowExternal,
 		externalNetwork,
 	)
 	if err != nil {

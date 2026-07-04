@@ -54,7 +54,18 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("config: %w", err)
 	}
 
-	if strings.TrimSpace(cfg.MCP.CommandOutputDir) == "" {
+	switch cfg.ToolMode {
+	case "":
+		cfg.ToolMode = "mcp"
+	case "mcp", "hook":
+		// valid
+	default:
+		return nil, fmt.Errorf("%w: %q", ErrInvalidToolMode, cfg.ToolMode)
+	}
+
+	// command_output_dir is only consumed by the MCP server path, so require it
+	// only in mcp mode. In hook mode it is optional and, if set, ignored.
+	if cfg.ToolMode == "mcp" && strings.TrimSpace(cfg.MCP.CommandOutputDir) == "" {
 		return nil, ErrMissingMCPCommandOutputDir
 	}
 	if strings.TrimSpace(cfg.Sandbox.Container.BuildContext) == "" {
@@ -65,14 +76,6 @@ func Load(path string) (*Config, error) {
 	}
 	if strings.TrimSpace(cfg.Sandbox.Container.Image) == "" {
 		return nil, ErrMissingContainerImage
-	}
-	switch cfg.ToolMode {
-	case "":
-		cfg.ToolMode = "mcp"
-	case "mcp", "hook":
-		// valid
-	default:
-		return nil, fmt.Errorf("%w: %q", ErrInvalidToolMode, cfg.ToolMode)
 	}
 	return &cfg, nil
 }

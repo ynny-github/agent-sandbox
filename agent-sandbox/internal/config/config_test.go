@@ -416,3 +416,32 @@ func TestLoad_ToolMode_InvalidRejected(t *testing.T) {
 		t.Errorf("err = %v, want ErrInvalidToolMode", err)
 	}
 }
+
+func TestLoad_HookModeAllowsMissingCommandOutputDir(t *testing.T) {
+	path := writeToml(t, `
+tool_mode = "hook"
+
+[sandbox.container]
+build_context = "./docker/sandbox"
+dockerfile = "Dockerfile"
+image = "mysandbox"
+`)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.MCP.CommandOutputDir != "" {
+		t.Errorf("CommandOutputDir = %q, want empty", cfg.MCP.CommandOutputDir)
+	}
+}
+
+func TestLoad_HookModeIgnoresCommandOutputDir(t *testing.T) {
+	path := writeToml(t, "tool_mode = \"hook\"\n"+validBase)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.MCP.CommandOutputDir != "/tmp/out" {
+		t.Errorf("CommandOutputDir = %q, want /tmp/out (kept but unused)", cfg.MCP.CommandOutputDir)
+	}
+}

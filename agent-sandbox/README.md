@@ -159,8 +159,10 @@ The configuration was reorganized; old keys are no longer accepted.
 | `sandbox.dockerfile` | `sandbox.container.dockerfile` |
 | `sandbox.image` | `sandbox.container.image` |
 | `sandbox.external_network` | `sandbox.container.external_network` |
-| `sandbox.allow_cidrs` | `sandbox.network.allow_cidrs` |
-| `sandbox.allow_hosts` | `sandbox.network.allow_hosts` |
+| `sandbox.allow_cidrs` | removed — network access is now the `sandbox.network.allow_external` bool |
+| `sandbox.allow_hosts` | removed — network access is now the `sandbox.network.allow_external` bool |
+| `sandbox.network.allow_cidrs` | removed — replaced by `sandbox.network.allow_external` (bool) |
+| `sandbox.network.allow_hosts` | removed — replaced by `sandbox.network.allow_external` (bool) |
 | `[allow_patterns] patterns` | `sandbox.command.allow` |
 | `[drop_patterns] patterns` | `sandbox.command.drop` |
 | `[deny_patterns] patterns` | removed — move destructive entries into `sandbox.command.drop` |

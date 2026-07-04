@@ -7,3 +7,4 @@ var ErrMissingContainerBuildContext = errors.New("missing required field: sandbo
 var ErrMissingContainerDockerfile = errors.New("missing required field: sandbox.container.dockerfile")
 var ErrMissingContainerImage = errors.New("missing required field: sandbox.container.image")
 var ErrInvalidToolMode = errors.New(`invalid tool_mode (must be "mcp" or "hook")`)
+var ErrDeprecatedNetworkKeys = errors.New("sandbox.network.allow_cidrs / allow_hosts are no longer supported; use allow_external (bool)")

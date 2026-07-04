@@ -7,8 +7,7 @@ tool_mode = "mcp"
 command_output_dir = "/tmp/mcp-output"
 
 [sandbox.network]
-allow_cidrs = []                     # optional: allowed destination CIDRs (default deny all)
-allow_hosts = []                     # optional: allowed destination hostnames (default deny all)
+allow_external = false               # true = unrestricted internet (prompts y/N at startup); false (default) = no external access
 
 [sandbox.command]
 allow = [

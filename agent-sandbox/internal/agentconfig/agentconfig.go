@@ -27,15 +27,13 @@ var explainTmplText string
 // template cannot fail, so template.Must is safe.
 var explainTmpl = template.Must(template.New("explain").Parse(explainTmplText))
 
-// explainView is the data handed to explain.tmpl. Network host/CIDR lists are
-// pre-joined so the template stays free of helper functions.
+// explainView is the data handed to explain.tmpl.
 type explainView struct {
-	Hook         bool
-	Allow        []string
-	Drop         []string
-	Image        string
-	NetworkHosts string
-	NetworkCIDRs string
+	Hook            bool
+	Allow           []string
+	Drop            []string
+	Image           string
+	NetworkExternal bool
 }
 
 // Explain renders a Markdown description of the sandbox environment from cfg,
@@ -48,12 +46,11 @@ func Explain(cfg *config.Config) string {
 	}
 
 	view := explainView{
-		Hook:         cfg.ToolMode == "hook",
-		Allow:        cfg.Sandbox.Command.Allow,
-		Drop:         cfg.Sandbox.Command.Drop,
-		Image:        image,
-		NetworkHosts: strings.Join(cfg.Sandbox.Network.AllowHosts, ", "),
-		NetworkCIDRs: strings.Join(cfg.Sandbox.Network.AllowCIDRs, ", "),
+		Hook:            cfg.ToolMode == "hook",
+		Allow:           cfg.Sandbox.Command.Allow,
+		Drop:            cfg.Sandbox.Command.Drop,
+		Image:           image,
+		NetworkExternal: cfg.Sandbox.Network.AllowExternal,
 	}
 
 	var buf bytes.Buffer

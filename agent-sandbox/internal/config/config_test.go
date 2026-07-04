@@ -289,59 +289,50 @@ func TestLoad_Container_EnvPassthroughOmitted_IsEmpty(t *testing.T) {
 	}
 }
 
-func TestLoad_AllowCIDRs_Loaded(t *testing.T) {
+func TestLoad_AllowExternal_Loaded(t *testing.T) {
 	path := writeToml(t, validBase+`
 [sandbox.network]
-allow_cidrs = ["192.168.0.0/16", "10.0.0.0/8"]
+allow_external = true
 `)
 	cfg, err := config.Load(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(cfg.Sandbox.Network.AllowCIDRs) != 2 {
-		t.Fatalf("AllowCIDRs len = %d, want 2", len(cfg.Sandbox.Network.AllowCIDRs))
-	}
-	if cfg.Sandbox.Network.AllowCIDRs[0] != "192.168.0.0/16" {
-		t.Errorf("AllowCIDRs[0] = %q, want 192.168.0.0/16", cfg.Sandbox.Network.AllowCIDRs[0])
+	if !cfg.Sandbox.Network.AllowExternal {
+		t.Error("AllowExternal = false, want true")
 	}
 }
 
-func TestLoad_AllowHosts_Loaded(t *testing.T) {
+func TestLoad_AllowExternal_OmittedDefaultsFalse(t *testing.T) {
+	path := writeToml(t, validBase)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Sandbox.Network.AllowExternal {
+		t.Error("AllowExternal = true, want false when omitted")
+	}
+}
+
+func TestLoad_DeprecatedAllowCIDRs_Rejected(t *testing.T) {
 	path := writeToml(t, validBase+`
 [sandbox.network]
-allow_hosts = ["api.github.com", "registry.npmjs.org"]
+allow_cidrs = ["10.0.0.0/8"]
 `)
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(cfg.Sandbox.Network.AllowHosts) != 2 {
-		t.Fatalf("AllowHosts len = %d, want 2", len(cfg.Sandbox.Network.AllowHosts))
-	}
-	if cfg.Sandbox.Network.AllowHosts[0] != "api.github.com" {
-		t.Errorf("AllowHosts[0] = %q, want api.github.com", cfg.Sandbox.Network.AllowHosts[0])
+	_, err := config.Load(path)
+	if !errors.Is(err, config.ErrDeprecatedNetworkKeys) {
+		t.Errorf("err = %v, want ErrDeprecatedNetworkKeys", err)
 	}
 }
 
-func TestLoad_AllowCIDRs_OmittedIsEmpty(t *testing.T) {
-	path := writeToml(t, validBase)
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(cfg.Sandbox.Network.AllowCIDRs) != 0 {
-		t.Errorf("AllowCIDRs = %v, want empty", cfg.Sandbox.Network.AllowCIDRs)
-	}
-}
-
-func TestLoad_AllowHosts_OmittedIsEmpty(t *testing.T) {
-	path := writeToml(t, validBase)
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(cfg.Sandbox.Network.AllowHosts) != 0 {
-		t.Errorf("AllowHosts = %v, want empty", cfg.Sandbox.Network.AllowHosts)
+func TestLoad_DeprecatedAllowHosts_Rejected(t *testing.T) {
+	path := writeToml(t, validBase+`
+[sandbox.network]
+allow_hosts = ["api.github.com"]
+`)
+	_, err := config.Load(path)
+	if !errors.Is(err, config.ErrDeprecatedNetworkKeys) {
+		t.Errorf("err = %v, want ErrDeprecatedNetworkKeys", err)
 	}
 }
 

@@ -58,32 +58,22 @@ func TestExplain_McpMode(t *testing.T) {
 	}
 }
 
-func TestExplain_EmptyListsRenderNone(t *testing.T) {
+func TestExplain_IsolatedByDefault(t *testing.T) {
 	cfg := &config.Config{ToolMode: "mcp"}
 	got := agentconfig.Explain(cfg)
-	if !strings.Contains(got, "- (none)") {
-		t.Errorf("Explain() should render (none) for empty allow/drop:\n%s", got)
-	}
-	if !strings.Contains(got, "- network: none") {
-		t.Errorf("Explain() should render network: none when unset:\n%s", got)
+	if !strings.Contains(got, "- network: isolated (no external access)") {
+		t.Errorf("Explain() should render isolated network when allow_external is false:\n%s", got)
 	}
 }
 
-func TestExplain_NetworkListed(t *testing.T) {
-	cfg := &config.Config{ToolMode: "hook"}
-	cfg.Sandbox.Network.AllowHosts = []string{"example.com", "api.example.com"}
-	cfg.Sandbox.Network.AllowCIDRs = []string{"10.0.0.0/8"}
-
+func TestExplain_ExternalAllowed(t *testing.T) {
+	cfg := &config.Config{ToolMode: "mcp"}
+	cfg.Sandbox.Network.AllowExternal = true
 	got := agentconfig.Explain(cfg)
-	for _, want := range []string{
-		"- network allow_hosts: example.com, api.example.com",
-		"- network allow_cidrs: 10.0.0.0/8",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("Explain() missing %q\nfull output:\n%s", want, got)
-		}
+	if !strings.Contains(got, "- network: external access allowed") {
+		t.Errorf("Explain() should render external access allowed when allow_external is true:\n%s", got)
 	}
-	if strings.Contains(got, "network: none") {
-		t.Errorf("Explain() should not render network: none when hosts/cidrs are set:\n%s", got)
+	if strings.Contains(got, "- network: isolated") {
+		t.Errorf("Explain() should not render isolated network when allow_external is true:\n%s", got)
 	}
 }

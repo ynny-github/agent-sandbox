@@ -25,8 +25,7 @@ type SandboxConfig struct {
 }
 
 type NetworkConfig struct {
-	AllowCIDRs []string `toml:"allow_cidrs"`
-	AllowHosts []string `toml:"allow_hosts"`
+	AllowExternal bool `toml:"allow_external"`
 }
 
 type CommandConfig struct {
@@ -50,8 +49,12 @@ func Load(path string) (*Config, error) {
 	defer f.Close()
 
 	var cfg Config
-	if _, err := toml.NewDecoder(f).Decode(&cfg); err != nil {
+	md, err := toml.NewDecoder(f).Decode(&cfg)
+	if err != nil {
 		return nil, fmt.Errorf("config: %w", err)
+	}
+	if md.IsDefined("sandbox", "network", "allow_cidrs") || md.IsDefined("sandbox", "network", "allow_hosts") {
+		return nil, ErrDeprecatedNetworkKeys
 	}
 
 	switch cfg.ToolMode {

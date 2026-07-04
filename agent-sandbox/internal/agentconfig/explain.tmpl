@@ -18,7 +18,6 @@ These run on neither host nor container:
 {{end}}
 ## Sandbox container
 - image: {{.Image}}
-{{if or .NetworkHosts .NetworkCIDRs}}{{if .NetworkHosts}}- network allow_hosts: {{.NetworkHosts}}
-{{end}}{{if .NetworkCIDRs}}- network allow_cidrs: {{.NetworkCIDRs}}
-{{end}}{{else}}- network: none
+{{if .NetworkExternal}}- network: external access allowed
+{{else}}- network: isolated (no external access)
 {{end}}

@@ -383,3 +383,24 @@ func TestRun_HookMode_WritesAndCleansSnapshot(t *testing.T) {
 		t.Errorf("cleanup called %d times, want 1", cleaned)
 	}
 }
+
+func TestRun_HookMode_CleansSnapshotBeforeExit(t *testing.T) {
+	makeFakeNono(t)
+	cleaned := 0
+	cleanedBeforeExit := false
+	h := &fakeHandle{started: false}
+	err := run(&config.Config{ToolMode: "hook"}, Options{}, runDeps{
+		writeSnapshot: func(*config.Config) (string, func(), error) {
+			return "/state/policy-1.json", func() { cleaned++ }, nil
+		},
+		ensureUp:  func(context.Context, *config.Config) (sandboxHandle, error) { return h, nil },
+		supervise: func(string, []string) int { return 0 },
+		exit:      func(int) { cleanedBeforeExit = cleaned == 1 },
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cleanedBeforeExit {
+		t.Error("snapshot cleanup must run before exit; os.Exit skips deferred cleanup in production")
+	}
+}

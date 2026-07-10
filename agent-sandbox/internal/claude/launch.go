@@ -147,14 +147,23 @@ func Run(cfg *config.Config, opts Options) error {
 
 func run(cfg *config.Config, opts Options, d runDeps) error {
 	var snapshotPath string
+	var cleanupSnapshot func()
 	if cfg.ToolMode == "hook" {
 		path, cleanup, err := d.writeSnapshot(cfg)
 		if err != nil {
 			return fmt.Errorf("policy snapshot: %w", err)
 		}
-		defer cleanup()
+		cleanupSnapshot = cleanup
 		snapshotPath = path
 	}
+	// The deferred cleanup covers early error returns. On the success path we
+	// call cleanupSnapshot explicitly before d.exit and nil it out, because
+	// d.exit is os.Exit in production and os.Exit skips deferred functions.
+	defer func() {
+		if cleanupSnapshot != nil {
+			cleanupSnapshot()
+		}
+	}()
 
 	nonoPath, nonoArgs, err := BuildArgs(cfg, opts, snapshotPath)
 	if err != nil {
@@ -178,6 +187,10 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 	}
 
 	handle.Close()
+	if cleanupSnapshot != nil {
+		cleanupSnapshot()
+		cleanupSnapshot = nil
+	}
 	d.exit(code)
 	return nil
 }

@@ -33,7 +33,7 @@ func updatedCommand(t *testing.T, out map[string]any) string {
 func TestRunHookCore_WrapsBashCommand(t *testing.T) {
 	in := strings.NewReader(`{"tool_name":"Bash","tool_input":{"command":"git status"}}`)
 	var out bytes.Buffer
-	if err := runHookCore(in, &out); err != nil {
+	if err := runHookCore(in, &out, ""); err != nil {
 		t.Fatalf("runHookCore error: %v", err)
 	}
 	parsed := decodeHookOutput(t, out.Bytes())
@@ -53,7 +53,7 @@ func TestRunHookCore_WrapsBashCommand(t *testing.T) {
 func TestRunHookCore_EscapesEmbeddedQuotes(t *testing.T) {
 	in := strings.NewReader(`{"tool_name":"Bash","tool_input":{"command":"git commit -m 'hi there'"}}`)
 	var out bytes.Buffer
-	if err := runHookCore(in, &out); err != nil {
+	if err := runHookCore(in, &out, ""); err != nil {
 		t.Fatalf("runHookCore error: %v", err)
 	}
 	parsed := decodeHookOutput(t, out.Bytes())
@@ -66,10 +66,23 @@ func TestRunHookCore_EscapesEmbeddedQuotes(t *testing.T) {
 func TestRunHookCore_EmptyCommand_EmitsNothing(t *testing.T) {
 	in := strings.NewReader(`{"tool_name":"Bash","tool_input":{"command":""}}`)
 	var out bytes.Buffer
-	if err := runHookCore(in, &out); err != nil {
+	if err := runHookCore(in, &out, ""); err != nil {
 		t.Fatalf("runHookCore error: %v", err)
 	}
 	if strings.TrimSpace(out.String()) != "" {
 		t.Errorf("output = %q, want empty (defensive passthrough)", out.String())
+	}
+}
+
+func TestRunHookCore_WithPolicyFile_ForwardsFlag(t *testing.T) {
+	in := strings.NewReader(`{"tool_name":"Bash","tool_input":{"command":"git status"}}`)
+	var out bytes.Buffer
+	if err := runHookCore(in, &out, "/state/policy-1.json"); err != nil {
+		t.Fatalf("runHookCore error: %v", err)
+	}
+	parsed := decodeHookOutput(t, out.Bytes())
+	want := `agent-sandbox exec --policy-file '/state/policy-1.json' -- 'git status'`
+	if got := updatedCommand(t, parsed); got != want {
+		t.Errorf("updatedInput.command = %q, want %q", got, want)
 	}
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/policysnapshot"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/router"
 )
 
@@ -19,7 +20,11 @@ var execCmd = &cobra.Command{
 	RunE:  runExec,
 }
 
+var execPolicyFile string
+
 func init() {
+	execCmd.Flags().StringVar(&execPolicyFile, "policy-file", "",
+		"read the frozen sandbox policy from this JSON snapshot instead of the config file")
 	rootCmd.AddCommand(execCmd)
 }
 
@@ -29,13 +34,32 @@ func runExec(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no command given after --")
 	}
 
-	cfg, err := config.Load(configPath)
+	cfg, err := resolveExecConfig(execPolicyFile, configPath)
 	if err != nil {
-		return fmt.Errorf("config error: %w", err)
+		return err
 	}
 
 	os.Exit(runExecCore(context.Background(), cfg, command, os.Stdout, os.Stderr))
 	return nil
+}
+
+// resolveExecConfig picks the config source: the frozen snapshot when a
+// policy file is given (hook mode), otherwise the on-disk TOML. A given but
+// unreadable snapshot is a hard error — exec fails closed rather than routing
+// against the mutable config.
+func resolveExecConfig(policyFile, configPath string) (*config.Config, error) {
+	if policyFile != "" {
+		cfg, err := policysnapshot.Load(policyFile)
+		if err != nil {
+			return nil, fmt.Errorf("policy snapshot: %w", err)
+		}
+		return cfg, nil
+	}
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("config error: %w", err)
+	}
+	return cfg, nil
 }
 
 // commandFromArgs returns the command string: everything after `--` if present,

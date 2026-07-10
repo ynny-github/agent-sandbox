@@ -2,11 +2,12 @@ package claude
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
 func TestHookSettingsJSON(t *testing.T) {
-	got, err := hookSettingsJSON()
+	got, err := hookSettingsJSON("")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -43,5 +44,15 @@ func TestHookSettingsJSON(t *testing.T) {
 	}
 	if len(got2) != 2 || got2[0] != "Bash" || got2[1] != "Monitor" {
 		t.Errorf("matchers = %v, want [Bash Monitor]", got2)
+	}
+}
+
+func TestHookSettingsJSON_WithPolicyFile(t *testing.T) {
+	got, err := hookSettingsJSON("/state/policy-1.json")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(got, "agent-sandbox hook --policy-file '/state/policy-1.json'") {
+		t.Errorf("settings missing policy-file hook command; got %q", got)
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/agentconfig"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/gitutil"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/policysnapshot"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandboxlifecycle"
 )
 
@@ -73,9 +74,11 @@ func ValidatePassthrough(claudeOpts []string) error {
 }
 
 // BuildArgs constructs the nono executable path and the argv used to launch
-// Claude under the sandbox for cfg. In hook mode it injects the PreToolUse hook
-// via `claude --settings`; otherwise it disables the Bash and Monitor tools.
-func BuildArgs(cfg *config.Config, opts Options) (string, []string, error) {
+// Claude under the sandbox for cfg. In hook mode it grants read-only access to
+// the frozen policy snapshot at snapshotPath and injects the PreToolUse hook
+// via `claude --settings`, routing it through that snapshot; otherwise it
+// disables the Bash and Monitor tools.
+func BuildArgs(cfg *config.Config, opts Options, snapshotPath string) (string, []string, error) {
 	nonoPath, err := exec.LookPath("nono")
 	if err != nil {
 		return "", nil, fmt.Errorf("nono not found in PATH: %w", err)
@@ -89,11 +92,16 @@ func BuildArgs(cfg *config.Config, opts Options) (string, []string, error) {
 			args = append(args, "--allow", mainGit)
 		}
 	}
+
+	if cfg.ToolMode == "hook" && snapshotPath != "" {
+		args = append(args, "--read-file", snapshotPath)
+	}
+
 	args = append(args, "claude")
 	args = append(args, "--append-system-prompt", agentconfig.Pointer())
 
 	if cfg.ToolMode == "hook" {
-		settingsJSON, err := hookSettingsJSON()
+		settingsJSON, err := hookSettingsJSON(snapshotPath)
 		if err != nil {
 			return "", nil, err
 		}
@@ -117,9 +125,10 @@ type sandboxHandle interface {
 // runDeps holds the launcher's collaborators so run can be tested without
 // touching Docker, the real process, or os.Exit.
 type runDeps struct {
-	ensureUp  func(context.Context, *config.Config) (sandboxHandle, error)
-	supervise func(path string, args []string) int
-	exit      func(code int)
+	writeSnapshot func(*config.Config) (string, func(), error)
+	ensureUp      func(context.Context, *config.Config) (sandboxHandle, error)
+	supervise     func(path string, args []string) int
+	exit          func(code int)
 }
 
 // Run ensures the sandbox is up, launches Claude under it, and — if this call
@@ -127,6 +136,7 @@ type runDeps struct {
 // syscall.Exec approach so the launcher can outlive Claude and run teardown.
 func Run(cfg *config.Config, opts Options) error {
 	return run(cfg, opts, runDeps{
+		writeSnapshot: policysnapshot.Write,
 		ensureUp: func(ctx context.Context, c *config.Config) (sandboxHandle, error) {
 			return sandboxlifecycle.EnsureUp(ctx, c)
 		},
@@ -136,7 +146,17 @@ func Run(cfg *config.Config, opts Options) error {
 }
 
 func run(cfg *config.Config, opts Options, d runDeps) error {
-	nonoPath, nonoArgs, err := BuildArgs(cfg, opts)
+	var snapshotPath string
+	if cfg.ToolMode == "hook" {
+		path, cleanup, err := d.writeSnapshot(cfg)
+		if err != nil {
+			return fmt.Errorf("policy snapshot: %w", err)
+		}
+		defer cleanup()
+		snapshotPath = path
+	}
+
+	nonoPath, nonoArgs, err := BuildArgs(cfg, opts, snapshotPath)
 	if err != nil {
 		return err
 	}

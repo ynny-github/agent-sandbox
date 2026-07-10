@@ -39,7 +39,7 @@ func TestValidatePassthrough_Empty(t *testing.T) {
 func TestBuildArgs_NonoNotInPath(t *testing.T) {
 	t.Setenv("PATH", "")
 	cfg := &config.Config{}
-	if _, _, err := BuildArgs(cfg, Options{}); err == nil {
+	if _, _, err := BuildArgs(cfg, Options{}, ""); err == nil {
 		t.Fatal("expected error when nono not in PATH, got nil")
 	}
 }
@@ -76,7 +76,7 @@ func argsIndex(args []string, target string) int {
 func TestBuildArgs_AlwaysUsesWrap(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{}
-	_, args, err := BuildArgs(cfg, Options{})
+	_, args, err := BuildArgs(cfg, Options{}, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestBuildArgs_AlwaysUsesWrap(t *testing.T) {
 func TestBuildArgs_McpMode_DisablesTools(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{})
+	_, args, err := BuildArgs(cfg, Options{}, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -106,30 +106,54 @@ func TestBuildArgs_McpMode_DisablesTools(t *testing.T) {
 func TestBuildArgs_HookMode_InjectsSettings(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "hook"}
-	_, args, err := BuildArgs(cfg, Options{})
+	_, args, err := BuildArgs(cfg, Options{}, "/state/policy-1.json")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if argsContain(args, "--disallowed-tools") {
 		t.Errorf("hook mode should not disable tools; got %v", args)
 	}
-	i := argsIndex(args, "--settings")
-	if i < 0 || i+1 >= len(args) {
+
+	ci := argsIndex(args, "claude")
+
+	ri := argsIndex(args, "--read-file")
+	if ri < 0 || ri+1 >= len(args) || args[ri+1] != "/state/policy-1.json" {
+		t.Fatalf("hook mode should grant --read-file for the snapshot; got %v", args)
+	}
+	if ri > ci {
+		t.Errorf("--read-file must appear before claude; got %v", args)
+	}
+
+	si := argsIndex(args, "--settings")
+	if si < 0 || si+1 >= len(args) {
 		t.Fatalf("hook mode should inject --settings with a value; got %v", args)
 	}
-	val := args[i+1]
-	if !strings.Contains(val, `"PreToolUse"`) || !strings.Contains(val, "agent-sandbox hook") {
-		t.Errorf("--settings value missing hook config; got %q", val)
+	val := args[si+1]
+	if !strings.Contains(val, `"PreToolUse"`) ||
+		!strings.Contains(val, "agent-sandbox hook --policy-file '/state/policy-1.json'") {
+		t.Errorf("--settings value missing policy-file hook config; got %q", val)
 	}
-	if ci := argsIndex(args, "claude"); ci < 0 || i < ci {
+	if si < ci {
 		t.Errorf("--settings must appear after claude; got %v", args)
+	}
+}
+
+func TestBuildArgs_McpMode_NoReadFile(t *testing.T) {
+	makeFakeNono(t)
+	cfg := &config.Config{ToolMode: "mcp"}
+	_, args, err := BuildArgs(cfg, Options{}, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if argsContain(args, "--read-file") {
+		t.Errorf("mcp mode should not grant --read-file; got %v", args)
 	}
 }
 
 func TestBuildArgs_NonoOptsBeforeClaude(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{NonoOpts: []string{"--profile", "nono.jsonc"}})
+	_, args, err := BuildArgs(cfg, Options{NonoOpts: []string{"--profile", "nono.jsonc"}}, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -146,7 +170,7 @@ func TestBuildArgs_NonoOptsBeforeClaude(t *testing.T) {
 func TestBuildArgs_ClaudeOptsAfterClaude(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{ClaudeOpts: []string{"--model", "opus"}})
+	_, args, err := BuildArgs(cfg, Options{ClaudeOpts: []string{"--model", "opus"}}, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -163,7 +187,7 @@ func TestBuildArgs_ClaudeOptsAfterClaude(t *testing.T) {
 func TestBuildArgs_InjectsSystemPrompt(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{})
+	_, args, err := BuildArgs(cfg, Options{}, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -333,5 +357,29 @@ func TestRun_DownError_StillPropagatesExitCode(t *testing.T) {
 	}
 	if h.downCalls != 1 {
 		t.Errorf("Down attempted %d times, want 1 in the down-error case", h.downCalls)
+	}
+}
+
+func TestRun_HookMode_WritesAndCleansSnapshot(t *testing.T) {
+	makeFakeNono(t)
+	wrote, cleaned := 0, 0
+	h := &fakeHandle{started: false}
+	err := run(&config.Config{ToolMode: "hook"}, Options{}, runDeps{
+		writeSnapshot: func(*config.Config) (string, func(), error) {
+			wrote++
+			return "/state/policy-1.json", func() { cleaned++ }, nil
+		},
+		ensureUp:  func(context.Context, *config.Config) (sandboxHandle, error) { return h, nil },
+		supervise: func(string, []string) int { return 0 },
+		exit:      func(int) {},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if wrote != 1 {
+		t.Errorf("writeSnapshot called %d times, want 1", wrote)
+	}
+	if cleaned != 1 {
+		t.Errorf("cleanup called %d times, want 1", cleaned)
 	}
 }

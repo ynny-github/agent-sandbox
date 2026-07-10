@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/claude"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/policysnapshot"
 )
 
 var debugCmd = &cobra.Command{
@@ -27,7 +28,18 @@ func runDebug(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("config error: %w", err)
 	}
-	_, nonoArgs, err := claude.BuildArgs(cfg, opts)
+
+	var snapshotPath string
+	if cfg.ToolMode == "hook" {
+		path, cleanup, werr := policysnapshot.Write(cfg)
+		if werr != nil {
+			return fmt.Errorf("policy snapshot: %w", werr)
+		}
+		defer cleanup()
+		snapshotPath = path
+	}
+
+	_, nonoArgs, err := claude.BuildArgs(cfg, opts, snapshotPath)
 	if err != nil {
 		return err
 	}

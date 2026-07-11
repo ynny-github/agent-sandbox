@@ -155,6 +155,9 @@ func (e *ContainerExecutor) Up(ctx context.Context) error {
 	if err := CheckNetworkConsistency(ctx, e.dockerCLI, !e.spec.Internal, e.spec.ExternalNetwork); err != nil {
 		return err
 	}
+	if err := e.reconcileDrift(ctx); err != nil {
+		return err
+	}
 	if err := e.ensureImage(ctx); err != nil {
 		return err
 	}
@@ -179,6 +182,38 @@ func (e *ContainerExecutor) Up(ctx context.Context) error {
 	}
 	if err := e.dockerCLI.Client().ContainerStart(ctx, id, dockercontainer.StartOptions{}); err != nil {
 		return fmt.Errorf("executor: start container: %w", err)
+	}
+	return nil
+}
+
+// reconcileDrift tears down the sandbox network (and any container attached to
+// it) when its egress posture no longer matches the spec, so Up rebuilds them
+// with the current allow_external setting. Without this, a reused network/
+// container from a previous allow_external value would silently persist —
+// defeating egress isolation. Mirrors Compose's recreate-on-config-change.
+func (e *ContainerExecutor) reconcileDrift(ctx context.Context) error {
+	inspect, err := e.dockerCLI.Client().NetworkInspect(ctx, e.spec.NetworkName, dockernetwork.InspectOptions{})
+	if err != nil {
+		if errdefs.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("executor: inspect sandbox network: %w", err)
+	}
+	if inspect.Internal == e.spec.Internal {
+		return nil
+	}
+	// Egress posture changed — remove container then network so Up recreates them.
+	id, err := e.findContainerID(ctx, false)
+	if err != nil {
+		return err
+	}
+	if id != "" {
+		if err := e.dockerCLI.Client().ContainerRemove(ctx, id, dockercontainer.RemoveOptions{Force: true}); err != nil && !errdefs.IsNotFound(err) {
+			return fmt.Errorf("executor: remove drifted container: %w", err)
+		}
+	}
+	if err := e.dockerCLI.Client().NetworkRemove(ctx, inspect.ID); err != nil && !errdefs.IsNotFound(err) {
+		return fmt.Errorf("executor: remove drifted network: %w", err)
 	}
 	return nil
 }

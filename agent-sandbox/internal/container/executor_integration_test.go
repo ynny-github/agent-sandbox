@@ -11,6 +11,9 @@ import (
 
 	"github.com/docker/cli/cli/command"
 	cliflags "github.com/docker/cli/cli/flags"
+	dockercontainer "github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
+	dockernetwork "github.com/docker/docker/api/types/network"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/container"
 )
 
@@ -115,6 +118,86 @@ func TestRunContainer_ExitCodeAndOutput(t *testing.T) {
 	}
 	if code != 3 {
 		t.Errorf("exit code = %d, want 3", code)
+	}
+}
+
+// TestUp_ReconcilesEgressDriftOnAllowExternalFlip reproduces the security
+// regression where a stopped container + a persistent sandbox network from a
+// previous allow_external=true session are silently reused by a later Up
+// with allow_external=false, leaving the sandbox on a non-internal network
+// despite the fail-closed intent. Up must detect the drift and recreate the
+// network (and container) with the current spec's egress posture.
+func TestUp_ReconcilesEgressDriftOnAllowExternalFlip(t *testing.T) {
+	cli := newITCli(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	spec1, err := container.NewSandboxSpec(1000, 1000, "../../../docker/sandbox", "Dockerfile", "drifttest", true, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ex1 := container.NewContainerExecutor(cli, spec1)
+	if err := ex1.Up(ctx); err != nil {
+		t.Fatalf("first Up: %v", err)
+	}
+
+	inspect, err := cli.Client().NetworkInspect(ctx, spec1.NetworkName, dockernetwork.InspectOptions{})
+	if err != nil {
+		t.Fatalf("inspect sandbox network after first Up: %v", err)
+	}
+	if inspect.Internal {
+		t.Fatalf("expected sandbox network Internal=false after allow_external=true Up, got Internal=true")
+	}
+
+	// Simulate the "stopped container, persistent network" state left behind
+	// by e.g. a host reboot: stop the managed container without removing it
+	// or its network.
+	containers, err := cli.Client().ContainerList(ctx, dockercontainer.ListOptions{
+		All: true,
+		Filters: filters.NewArgs(
+			filters.Arg("label", container.LabelManaged+"=true"),
+			filters.Arg("label", container.LabelProjectDir+"="+spec1.WorkingDir),
+		),
+	})
+	if err != nil {
+		t.Fatalf("list managed containers: %v", err)
+	}
+	if len(containers) == 0 {
+		t.Fatal("expected a managed container to stop")
+	}
+	if err := cli.Client().ContainerStop(ctx, containers[0].ID, dockercontainer.StopOptions{}); err != nil {
+		t.Fatalf("stop managed container: %v", err)
+	}
+
+	spec2, err := container.NewSandboxSpec(1000, 1000, "../../../docker/sandbox", "Dockerfile", "drifttest", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ex2 := container.NewContainerExecutor(cli, spec2)
+	t.Cleanup(func() {
+		dctx, dcancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer dcancel()
+		_ = ex2.Down(dctx)
+	})
+
+	if err := ex2.Up(ctx); err != nil {
+		t.Fatalf("second Up (allow_external=false): %v", err)
+	}
+
+	inspect, err = cli.Client().NetworkInspect(ctx, spec2.NetworkName, dockernetwork.InspectOptions{})
+	if err != nil {
+		t.Fatalf("inspect sandbox network after second Up: %v", err)
+	}
+	if !inspect.Internal {
+		t.Fatal("expected sandbox network Internal=true after reconciling drift to allow_external=false, got Internal=false")
+	}
+
+	running, err := ex2.IsRunning(ctx)
+	if err != nil {
+		t.Fatalf("IsRunning: %v", err)
+	}
+	if !running {
+		t.Fatal("expected sandbox running after second Up")
 	}
 }
 

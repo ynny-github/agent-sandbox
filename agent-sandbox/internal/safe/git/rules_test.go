@@ -89,6 +89,12 @@ func TestRules(t *testing.T) {
 		{"config-env ssh command blocked", []string{"--config-env=core.sshCommand=EV", "fetch"}, "config-exec-injection"},
 		{"unrelated -c allowed", []string{"-c", "color.ui=false", "status"}, ""},
 
+		// regression: parser fail-closed + more exec-capable config keys
+		{"unknown global then force push blocked", []string{"--no-advice", "push", "--force"}, "force-push"},
+		{"config credential helper blocked", []string{"-c", "credential.helper=!id", "fetch"}, "config-exec-injection"},
+		{"config askpass blocked", []string{"-c", "core.askpass=evil", "fetch"}, "config-exec-injection"},
+		{"config gpg program blocked", []string{"-c", "gpg.program=evil", "tag", "-s", "t"}, "config-exec-injection"},
+
 		// stash / remote / tag
 		{"stash drop", []string{"stash", "drop"}, "stash-destroy"},
 		{"stash clear", []string{"stash", "clear"}, "stash-destroy"},

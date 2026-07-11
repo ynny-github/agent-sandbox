@@ -58,9 +58,18 @@ func Parse(argv []string) Invocation {
 				i++
 			}
 		default:
-			inv.Subcommand = argv[i]
-			inv.Args = argv[i+1:]
-			return inv
+			// A token that is not a recognized global option: if it does not look
+			// like an option it is the subcommand, and the rest are its args. If it
+			// DOES start with "-", it is an UNRECOGNIZED global option — record it and
+			// keep scanning, so an unknown global (e.g. "--no-advice") cannot hide the
+			// real subcommand from the denylist. Fail closed, not open.
+			if !strings.HasPrefix(argv[i], "-") {
+				inv.Subcommand = argv[i]
+				inv.Args = argv[i+1:]
+				return inv
+			}
+			inv.Global = append(inv.Global, GlobalOpt{Name: name, Value: val})
+			i++
 		}
 	}
 	return inv

@@ -51,6 +51,8 @@ func TestParse(t *testing.T) {
 			[]git.GlobalOpt{{Name: "-p"}}},
 		{"two globals then sub", []string{"-c", "a=b", "-C", "/r", "reset", "--hard"}, "reset",
 			[]string{"--hard"}, []git.GlobalOpt{{Name: "-c", Value: "a=b"}, {Name: "-C", Value: "/r"}}},
+		{"unknown global kept, subcommand found", []string{"--no-advice", "push", "--force"}, "push",
+			[]string{"--force"}, []git.GlobalOpt{{Name: "--no-advice"}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -48,12 +48,15 @@ func isGitFalse(v string) bool {
 // command; injecting one via -c/--config-env is a code-execution vector.
 // (core.hooksPath is intentionally omitted — it is covered by bypass-hooks.)
 var execCapableConfigKeys = map[string]bool{
-	"core.sshcommand": true,
-	"core.pager":      true,
-	"core.fsmonitor":  true,
-	"core.editor":     true,
-	"sequence.editor": true,
-	"diff.external":   true,
+	"core.sshcommand":   true,
+	"core.pager":        true,
+	"core.fsmonitor":    true,
+	"core.editor":       true,
+	"core.askpass":      true,
+	"sequence.editor":   true,
+	"diff.external":     true,
+	"credential.helper": true,
+	"gpg.program":       true,
 }
 
 var rules = []Rule{

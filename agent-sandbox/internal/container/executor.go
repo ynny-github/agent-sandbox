@@ -19,9 +19,11 @@ import (
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/router"
 )
 
-// NOTE: CleanResult is already declared in container.go and reused here.
-// Do not redeclare it (duplicate package-level type = compile error). It is
-// relocated into this file in Task 9 when container.go is deleted.
+// CleanResult reports how many containers and networks a prune removed.
+type CleanResult struct {
+	Containers int
+	Networks   int
+}
 
 // ContainerExecutor manages one sandbox container through the Docker SDK.
 type ContainerExecutor struct {
@@ -283,7 +285,33 @@ func (e *ContainerExecutor) Down(ctx context.Context) error {
 	return nil
 }
 
-// (DownProject is introduced in Task 9, not here — see the Coexistence rule.)
+// DownProject stops and removes a sandbox by its project working directory,
+// without needing a full spec.
+func DownProject(ctx context.Context, dockerCLI command.Cli, workingDir string) error {
+	args := filters.NewArgs(
+		filters.Arg("label", LabelManaged+"=true"),
+		filters.Arg("label", LabelProjectDir+"="+workingDir),
+	)
+	containers, err := dockerCLI.Client().ContainerList(ctx, dockercontainer.ListOptions{All: true, Filters: args})
+	if err != nil {
+		return fmt.Errorf("executor: list containers: %w", err)
+	}
+	for _, c := range containers {
+		if err := dockerCLI.Client().ContainerRemove(ctx, c.ID, dockercontainer.RemoveOptions{Force: true}); err != nil && !errdefs.IsNotFound(err) {
+			return fmt.Errorf("executor: remove container %s: %w", c.ID[:12], err)
+		}
+	}
+	networks, err := dockerCLI.Client().NetworkList(ctx, dockernetwork.ListOptions{Filters: args})
+	if err != nil {
+		return fmt.Errorf("executor: list networks: %w", err)
+	}
+	for _, n := range networks {
+		if err := dockerCLI.Client().NetworkRemove(ctx, n.ID); err != nil && !errdefs.IsNotFound(err) {
+			return fmt.Errorf("executor: remove network %s: %w", n.Name, err)
+		}
+	}
+	return nil
+}
 
 // CleanStale removes all agent-sandbox managed containers and cr-sandbox- networks.
 func (e *ContainerExecutor) CleanStale(ctx context.Context) (CleanResult, error) {

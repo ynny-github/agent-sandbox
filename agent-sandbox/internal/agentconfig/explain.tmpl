@@ -6,6 +6,12 @@
 {{else}}- The Bash and Monitor tools are disabled; use the `run_command` MCP tool to run shell commands.
 - Command output is written to files; read the returned stdout/stderr paths.
 {{end}}- Allowed commands run on the host; all others run in an isolated container.
+
+## Filesystem: host vs container
+Host and container see the project at different paths, so the same absolute path does not mean the same place in both:
+- Host commands (the allow list below) run in the real project directory and use real host absolute paths.
+- Container commands run inside the sandbox, where that project directory is bind-mounted at `/workspace` (the working directory), and HOME is `/tmp`.
+- A host absolute path does not resolve inside the container, and vice versa. Refer to files by paths relative to the project root, or map them: host `<project-root>/foo` is container `/workspace/foo`.
 {{if .Safe}}
 ## Safe command wrappers
 Prefer these validated wrappers over running the tool directly; each refuses known-dangerous invocations before running:

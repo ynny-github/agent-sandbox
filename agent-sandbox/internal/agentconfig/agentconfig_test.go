@@ -58,6 +58,20 @@ func TestExplain_McpMode(t *testing.T) {
 	}
 }
 
+func TestExplain_FilesystemSection(t *testing.T) {
+	cfg := &config.Config{ToolMode: "hook"}
+	got := agentconfig.Explain(cfg)
+	for _, want := range []string{
+		"## Filesystem: host vs container",
+		"/workspace",
+		"HOME is `/tmp`",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Explain() missing filesystem note %q\nfull output:\n%s", want, got)
+		}
+	}
+}
+
 func TestExplain_SafeWrappers(t *testing.T) {
 	cfg := &config.Config{ToolMode: "hook"}
 	got := agentconfig.Explain(cfg,

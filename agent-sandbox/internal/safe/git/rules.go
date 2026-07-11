@@ -35,6 +35,15 @@ func Check(argv []string) []safe.Violation {
 	return out
 }
 
+// isGitFalse reports whether v is one of git's boolean-false spellings.
+func isGitFalse(v string) bool {
+	switch strings.ToLower(v) {
+	case "", "false", "0", "no", "off":
+		return true
+	}
+	return false
+}
+
 var rules = []Rule{
 	{
 		ID:      "force-push",
@@ -43,12 +52,7 @@ var rules = []Rule{
 			if inv.Subcommand != "push" {
 				return false
 			}
-			if hasLong(inv.Args, "--force-with-lease") || hasLong(inv.Args, "--force-if-includes") {
-				return false
-			}
-			if hasLong(inv.Args, "--force") || hasShort(inv.Args, 'f') {
-				return true
-			}
+			// Deletion / mirror / prune are destructive regardless of any lease flag.
 			if hasLong(inv.Args, "--delete") || hasShort(inv.Args, 'd') {
 				return true
 			}
@@ -60,6 +64,14 @@ var rules = []Rule{
 					return true
 				}
 			}
+			// Unconditional --force/-f is always blocked, even when a lease flag is
+			// also present: --force-with-lease / --force-if-includes do not neutralize
+			// a co-present --force, so git would still force-push unconditionally.
+			if hasLong(inv.Args, "--force") || hasShort(inv.Args, 'f') {
+				return true
+			}
+			// --force-with-lease / --force-if-includes without an unconditional
+			// --force is the sanctioned safe form.
 			return false
 		},
 	},
@@ -137,7 +149,9 @@ var rules = []Rule{
 				return true
 			}
 			for _, g := range inv.Global {
-				if g.Name != "-c" {
+				// -c <k>=<v> and --config-env=<k>=<envvar> both set config that can
+				// disable hooks or signing; git honors them identically.
+				if g.Name != "-c" && g.Name != "--config-env" {
 					continue
 				}
 				k, v, ok := strings.Cut(g.Value, "=")
@@ -148,9 +162,27 @@ var rules = []Rule{
 				case "core.hookspath":
 					return true
 				case "commit.gpgsign":
-					if strings.EqualFold(v, "false") {
+					// For --config-env the value is an env var name we cannot resolve,
+					// so treat any env-sourced gpgsign override as suspect.
+					if g.Name == "--config-env" || isGitFalse(v) {
 						return true
 					}
+				}
+			}
+			return false
+		},
+	},
+	{
+		ID:      "alias-injection",
+		Message: "injecting a git alias via -c/--config-env is not allowed",
+		Match: func(inv Invocation) bool {
+			for _, g := range inv.Global {
+				if g.Name != "-c" && g.Name != "--config-env" {
+					continue
+				}
+				if k, _, ok := strings.Cut(g.Value, "="); ok &&
+					strings.HasPrefix(strings.ToLower(k), "alias.") {
+					return true
 				}
 			}
 			return false

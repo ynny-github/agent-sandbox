@@ -69,6 +69,15 @@ func TestRules(t *testing.T) {
 		{"c hookspath", []string{"-c", "core.hooksPath=/dev/null", "push"}, "bypass-hooks"},
 		{"push dry-run n allowed", []string{"push", "-n"}, ""},
 
+		// regression: bypasses found in whole-branch review
+		{"force-if-includes plus force blocked", []string{"push", "--force-if-includes", "--force"}, "force-push"},
+		{"scoped lease plus force blocked", []string{"push", "--force-with-lease=other", "--force", "origin", "main"}, "force-push"},
+		{"lease plus delete blocked", []string{"push", "--force-with-lease", "--delete", "topic"}, "force-push"},
+		{"config-env hookspath blocked", []string{"--config-env=core.hooksPath=HP", "commit", "-m", "x"}, "bypass-hooks"},
+		{"gpgsign zero blocked", []string{"-c", "commit.gpgsign=0", "commit", "-m", "x"}, "bypass-hooks"},
+		{"gpgsign off blocked", []string{"-c", "commit.gpgsign=off", "commit", "-m", "x"}, "bypass-hooks"},
+		{"alias injection blocked", []string{"-c", "alias.x=push --force", "x"}, "alias-injection"},
+
 		// stash / remote / tag
 		{"stash drop", []string{"stash", "drop"}, "stash-destroy"},
 		{"stash clear", []string{"stash", "clear"}, "stash-destroy"},

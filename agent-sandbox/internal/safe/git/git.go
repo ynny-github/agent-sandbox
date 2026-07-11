@@ -25,6 +25,10 @@ var globalValueOpts = map[string]bool{
 	"-C": true, "-c": true,
 	"--git-dir": true, "--work-tree": true,
 	"--namespace": true, "--exec-path": true, "--config-env": true,
+	// --attr-source and --super-prefix accept a separate value; listing them
+	// keeps an unknown-looking global from shifting the detected subcommand
+	// (e.g. `git --attr-source HEAD push --force`).
+	"--attr-source": true, "--super-prefix": true,
 }
 
 // globalBoolOpts are git global options that take no value.

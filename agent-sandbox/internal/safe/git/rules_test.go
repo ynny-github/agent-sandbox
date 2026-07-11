@@ -94,6 +94,7 @@ func TestRules(t *testing.T) {
 		{"config credential helper blocked", []string{"-c", "credential.helper=!id", "fetch"}, "config-exec-injection"},
 		{"config askpass blocked", []string{"-c", "core.askpass=evil", "fetch"}, "config-exec-injection"},
 		{"config gpg program blocked", []string{"-c", "gpg.program=evil", "tag", "-s", "t"}, "config-exec-injection"},
+		{"attr-source separate then force push blocked", []string{"--attr-source", "HEAD", "push", "--force"}, "force-push"},
 
 		// stash / remote / tag
 		{"stash drop", []string{"stash", "drop"}, "stash-destroy"},

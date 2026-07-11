@@ -14,7 +14,9 @@ import (
 	"github.com/docker/docker/api/types/image"
 	dockernetwork "github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/errdefs"
+	"github.com/docker/docker/pkg/stdcopy"
 	archive "github.com/moby/go-archive"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/router"
 )
 
 // NOTE: CleanResult is already declared in container.go and reused here.
@@ -92,6 +94,55 @@ func (e *ContainerExecutor) findContainerID(ctx context.Context, running bool) (
 		return "", nil
 	}
 	return containers[0].ID, nil
+}
+
+// RunContainer execs argv inside the running sandbox container, streaming
+// stdout/stderr and optionally forwarding stdin, and returns the process exit
+// code. It returns router.ErrSandboxNotRunning if the sandbox container is
+// not currently running.
+func (e *ContainerExecutor) RunContainer(ctx context.Context, argv []string, env []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	if err := e.WaitReady(ctx); err != nil {
+		return 0, fmt.Errorf("executor: sandbox not ready: %w", err)
+	}
+	id, err := e.findContainerID(ctx, true)
+	if err != nil {
+		return 0, fmt.Errorf("executor: check sandbox status: %w", err)
+	}
+	if id == "" {
+		return 0, router.ErrSandboxNotRunning
+	}
+	execResp, err := e.dockerCLI.Client().ContainerExecCreate(ctx, id, dockercontainer.ExecOptions{
+		Cmd:          argv,
+		Env:          env,
+		AttachStdout: true,
+		AttachStderr: true,
+		AttachStdin:  stdin != nil,
+		Tty:          false,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("executor: exec create: %w", err)
+	}
+	att, err := e.dockerCLI.Client().ContainerExecAttach(ctx, execResp.ID, dockercontainer.ExecAttachOptions{})
+	if err != nil {
+		return 0, fmt.Errorf("executor: exec attach: %w", err)
+	}
+	defer att.Close()
+
+	if stdin != nil {
+		go func() {
+			_, _ = io.Copy(att.Conn, stdin)
+			_ = att.CloseWrite()
+		}()
+	}
+	// Non-TTY streams are multiplexed; demux into stdout/stderr.
+	if _, err := stdcopy.StdCopy(stdout, stderr, att.Reader); err != nil {
+		return 0, fmt.Errorf("executor: copy exec output: %w", err)
+	}
+	inspect, err := e.dockerCLI.Client().ContainerExecInspect(ctx, execResp.ID)
+	if err != nil {
+		return 0, fmt.Errorf("executor: exec inspect: %w", err)
+	}
+	return inspect.ExitCode, nil
 }
 
 // Up runs the fail-closed consistency check, then ensures the image, sandbox

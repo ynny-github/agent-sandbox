@@ -3,7 +3,9 @@
 package container_test
 
 import (
+	"bytes"
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -74,5 +76,44 @@ func TestUp_StartsAndIsRunning(t *testing.T) {
 	}
 	if !running {
 		t.Fatal("expected sandbox running after Up")
+	}
+}
+
+func TestRunContainer_ExitCodeAndOutput(t *testing.T) {
+	cli := newITCli(t)
+	spec, err := container.NewSandboxSpec(1000, 1000, "../../../docker/sandbox", "Dockerfile", "exectest", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ex := container.NewContainerExecutor(cli, spec)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	t.Cleanup(func() {
+		dctx, dcancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer dcancel()
+		_ = ex.Down(dctx)
+	})
+	if err := ex.Up(ctx); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	var out bytes.Buffer
+	code, err := ex.RunContainer(ctx, []string{"echo", "hello"}, nil, nil, &out, &out)
+	if err != nil {
+		t.Fatalf("RunContainer: %v", err)
+	}
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0", code)
+	}
+	if !strings.Contains(out.String(), "hello") {
+		t.Errorf("output = %q, want to contain hello", out.String())
+	}
+
+	code, err = ex.RunContainer(ctx, []string{"sh", "-c", "exit 3"}, nil, nil, &out, &out)
+	if err != nil {
+		t.Fatalf("RunContainer(exit 3): %v", err)
+	}
+	if code != 3 {
+		t.Errorf("exit code = %d, want 3", code)
 	}
 }

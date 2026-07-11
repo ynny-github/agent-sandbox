@@ -46,3 +46,33 @@ func TestIsRunning_FalseWhenAbsent(t *testing.T) {
 		t.Fatal("expected not running for a sandbox that was never started")
 	}
 }
+
+func TestUp_StartsAndIsRunning(t *testing.T) {
+	cli := newITCli(t)
+	spec, err := container.NewSandboxSpec(1000, 1000, "../../../docker/sandbox", "Dockerfile", "uptest", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ex := container.NewContainerExecutor(cli, spec)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	t.Cleanup(func() {
+		dctx, dcancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer dcancel()
+		_ = ex.Down(dctx)
+	})
+	if err := ex.Up(ctx); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	// Idempotent second Up must not error.
+	if err := ex.Up(ctx); err != nil {
+		t.Fatalf("second Up: %v", err)
+	}
+	running, err := ex.IsRunning(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !running {
+		t.Fatal("expected sandbox running after Up")
+	}
+}

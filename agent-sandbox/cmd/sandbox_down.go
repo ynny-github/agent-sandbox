@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/docker/cli/cli/command"
@@ -37,6 +38,12 @@ func runSandboxDown(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("--path must not be empty")
 	}
 
+	absTarget, err := filepath.Abs(targetDir)
+	if err != nil {
+		return fmt.Errorf("resolve path: %w", err)
+	}
+	targetDir = absTarget
+
 	dockerCli, err := command.NewDockerCli()
 	if err != nil {
 		return fmt.Errorf("docker cli error: %w", err)
@@ -52,14 +59,12 @@ func runSandboxDown(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("docker daemon error: %w", err)
 	}
 
-	projectName := container.ProjectSandboxName(targetDir)
-
 	downCtx, downCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer downCancel()
-	if err := container.DownProject(downCtx, dockerCli, projectName); err != nil {
+	if err := container.DownProject(downCtx, dockerCli, targetDir); err != nil {
 		return fmt.Errorf("sandbox down: %w", err)
 	}
 
-	fmt.Fprintf(cmd.ErrOrStderr(), "sandbox %s stopped\n", projectName)
+	fmt.Fprintf(cmd.ErrOrStderr(), "sandbox for %s stopped\n", targetDir)
 	return nil
 }

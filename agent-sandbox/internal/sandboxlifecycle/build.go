@@ -12,10 +12,10 @@ import (
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/container"
 )
 
-// NewExecutor connects to Docker and builds a compose executor for cfg's
+// NewExecutor connects to Docker and builds a container executor for cfg's
 // sandbox project (named deterministically from the current directory). The
 // returned cleanup closes the Docker client and must be called by the caller.
-func NewExecutor(ctx context.Context, cfg *config.Config) (*container.ComposeExecutor, string, func(), error) {
+func NewExecutor(ctx context.Context, cfg *config.Config) (*container.ContainerExecutor, string, func(), error) {
 	dockerCli, err := command.NewDockerCli(
 		command.WithOutputStream(os.Stderr),
 		command.WithErrorStream(os.Stderr),
@@ -39,8 +39,7 @@ func NewExecutor(ctx context.Context, cfg *config.Config) (*container.ComposeExe
 	defer detectCancel()
 	externalNetwork := container.DetectProjectNetwork(detectCtx, dockerCli, cfg.Sandbox.Container.ExternalNetwork)
 
-	project, err := container.NewSandboxProject(
-		os.Getpid(),
+	spec, err := container.NewSandboxSpec(
 		os.Getuid(),
 		os.Getgid(),
 		cfg.Sandbox.Container.BuildContext,
@@ -51,16 +50,24 @@ func NewExecutor(ctx context.Context, cfg *config.Config) (*container.ComposeExe
 	)
 	if err != nil {
 		cleanup()
-		return nil, "", nil, fmt.Errorf("sandbox project: %w", err)
+		return nil, "", nil, fmt.Errorf("sandbox spec: %w", err)
 	}
 
-	return container.NewComposeExecutor(dockerCli, project), project.Name, cleanup, nil
+	// Fail closed before we ever start: refuse an egress-leaking attachment.
+	checkCtx, checkCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer checkCancel()
+	if err := container.CheckNetworkConsistency(checkCtx, dockerCli, cfg.Sandbox.Network.AllowExternal, externalNetwork); err != nil {
+		cleanup()
+		return nil, "", nil, err
+	}
+
+	return container.NewContainerExecutor(dockerCli, spec), spec.Name, cleanup, nil
 }
 
 // Result carries the outcome of EnsureUp: the executor to run/tear down the
 // sandbox, its project name, and whether this call started it.
 type Result struct {
-	Executor    *container.ComposeExecutor
+	Executor    *container.ContainerExecutor
 	ProjectName string
 	StartedByUs bool
 

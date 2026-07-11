@@ -10,7 +10,7 @@ import (
 )
 
 // Sandbox is the subset of the compose executor the lifecycle logic needs.
-// *container.ComposeExecutor satisfies it.
+// *container.ContainerExecutor satisfies it.
 type Sandbox interface {
 	IsRunning(context.Context) (bool, error)
 	Up(context.Context) error

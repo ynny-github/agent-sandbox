@@ -117,3 +117,27 @@ func TestRunContainer_ExitCodeAndOutput(t *testing.T) {
 		t.Errorf("exit code = %d, want 3", code)
 	}
 }
+
+func TestDown_RemovesContainerAndNetwork(t *testing.T) {
+	cli := newITCli(t)
+	spec, err := container.NewSandboxSpec(1000, 1000, "../../../docker/sandbox", "Dockerfile", "downtest", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ex := container.NewContainerExecutor(cli, spec)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	if err := ex.Up(ctx); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if err := ex.Down(ctx); err != nil {
+		t.Fatalf("Down: %v", err)
+	}
+	running, err := ex.IsRunning(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if running {
+		t.Fatal("expected not running after Down")
+	}
+}

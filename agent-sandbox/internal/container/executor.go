@@ -265,6 +265,62 @@ func (e *ContainerExecutor) createContainer(ctx context.Context) (string, error)
 	return created.ID, nil
 }
 
-// Down is a TEMPORARY stub; Task 6 replaces it with real teardown
-// (stop/remove container and sandbox network).
-func (e *ContainerExecutor) Down(ctx context.Context) error { return nil }
+// Down stops and removes the sandbox container and its network.
+// The external project network is never touched.
+func (e *ContainerExecutor) Down(ctx context.Context) error {
+	id, err := e.findContainerID(ctx, false)
+	if err != nil {
+		return err
+	}
+	if id != "" {
+		if err := e.dockerCLI.Client().ContainerRemove(ctx, id, dockercontainer.RemoveOptions{Force: true}); err != nil && !errdefs.IsNotFound(err) {
+			return fmt.Errorf("executor: remove container: %w", err)
+		}
+	}
+	if err := e.dockerCLI.Client().NetworkRemove(ctx, e.spec.NetworkName); err != nil && !errdefs.IsNotFound(err) {
+		return fmt.Errorf("executor: remove sandbox network: %w", err)
+	}
+	return nil
+}
+
+// (DownProject is introduced in Task 9, not here — see the Coexistence rule.)
+
+// CleanStale removes all agent-sandbox managed containers and cr-sandbox- networks.
+func (e *ContainerExecutor) CleanStale(ctx context.Context) (CleanResult, error) {
+	var result CleanResult
+	containers, err := e.dockerCLI.Client().ContainerList(ctx, dockercontainer.ListOptions{
+		All:     true,
+		Filters: filters.NewArgs(filters.Arg("label", LabelManaged+"=true")),
+	})
+	if err != nil {
+		return result, fmt.Errorf("executor: list containers: %w", err)
+	}
+	for _, c := range containers {
+		if err := e.dockerCLI.Client().ContainerRemove(ctx, c.ID, dockercontainer.RemoveOptions{Force: true}); err != nil {
+			if !errdefs.IsNotFound(err) {
+				fmt.Fprintf(os.Stderr, "executor: remove managed container %s: %v\n", c.ID[:12], err)
+			}
+		} else {
+			result.Containers++
+		}
+	}
+	networks, err := e.dockerCLI.Client().NetworkList(ctx, dockernetwork.ListOptions{
+		Filters: filters.NewArgs(filters.Arg("name", "cr-sandbox-")),
+	})
+	if err != nil {
+		return result, fmt.Errorf("executor: list networks: %w", err)
+	}
+	for _, n := range networks {
+		if !strings.HasPrefix(n.Name, "cr-sandbox-") {
+			continue
+		}
+		if err := e.dockerCLI.Client().NetworkRemove(ctx, n.ID); err != nil {
+			if !errdefs.IsNotFound(err) {
+				fmt.Fprintf(os.Stderr, "executor: remove network %s: %v\n", n.Name, err)
+			}
+		} else {
+			result.Networks++
+		}
+	}
+	return result, nil
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/docker/cli/cli/command"
@@ -36,6 +37,12 @@ func runSandboxDown(cmd *cobra.Command, args []string) error {
 	} else if targetDir == "" {
 		return fmt.Errorf("--path must not be empty")
 	}
+
+	absTarget, err := filepath.Abs(targetDir)
+	if err != nil {
+		return fmt.Errorf("resolve path: %w", err)
+	}
+	targetDir = absTarget
 
 	dockerCli, err := command.NewDockerCli()
 	if err != nil {

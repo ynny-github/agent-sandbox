@@ -58,6 +58,30 @@ func TestExplain_McpMode(t *testing.T) {
 	}
 }
 
+func TestExplain_SafeWrappers(t *testing.T) {
+	cfg := &config.Config{ToolMode: "hook"}
+	got := agentconfig.Explain(cfg,
+		agentconfig.SafeCommand{Use: "git [args...]", Short: "Run git, refusing known-dangerous invocations"},
+		agentconfig.SafeCommand{Use: "docker-compose [args...]", Short: "Run docker compose only after safety validation"},
+	)
+	for _, want := range []string{
+		"## Safe command wrappers",
+		"`agent-sandbox safe git [args...]` — Run git, refusing known-dangerous invocations",
+		"`agent-sandbox safe docker-compose [args...]` — Run docker compose only after safety validation",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Explain() missing %q\nfull output:\n%s", want, got)
+		}
+	}
+}
+
+func TestExplain_NoSafeWrappersSection_WhenNone(t *testing.T) {
+	cfg := &config.Config{ToolMode: "hook"}
+	if got := agentconfig.Explain(cfg); strings.Contains(got, "Safe command wrappers") {
+		t.Errorf("Explain() should omit the safe wrappers section when none are passed:\n%s", got)
+	}
+}
+
 func TestExplain_IsolatedByDefault(t *testing.T) {
 	cfg := &config.Config{ToolMode: "mcp"}
 	got := agentconfig.Explain(cfg)

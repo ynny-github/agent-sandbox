@@ -6,7 +6,11 @@
 {{else}}- The Bash and Monitor tools are disabled; use the `run_command` MCP tool to run shell commands.
 - Command output is written to files; read the returned stdout/stderr paths.
 {{end}}- Allowed commands run on the host; all others run in an isolated container.
-
+{{if .Safe}}
+## Safe command wrappers
+Prefer these validated wrappers over running the tool directly; each refuses known-dangerous invocations before running:
+{{range .Safe}}- `agent-sandbox safe {{.Use}}` — {{.Short}}
+{{end}}{{end}}
 ## Commands that run on the host (allow)
 {{range .Allow}}- {{.}}
 {{else}}- (none)

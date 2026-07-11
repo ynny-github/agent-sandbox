@@ -27,19 +27,30 @@ var explainTmplText string
 // template cannot fail, so template.Must is safe.
 var explainTmpl = template.Must(template.New("explain").Parse(explainTmplText))
 
+// SafeCommand describes one `agent-sandbox safe <tool>` wrapper for the explain
+// output. Use is the subcommand's usage (e.g. "git [args...]"); Short is its
+// one-line description.
+type SafeCommand struct {
+	Use   string
+	Short string
+}
+
 // explainView is the data handed to explain.tmpl.
 type explainView struct {
 	Hook            bool
 	Allow           []string
 	Drop            []string
+	Safe            []SafeCommand
 	Image           string
 	NetworkExternal bool
 }
 
 // Explain renders a Markdown description of the sandbox environment from cfg,
 // for the AI agent to read on demand via `agent-sandbox ai explain`. The prose
-// lives in explain.tmpl; this function only prepares the view data.
-func Explain(cfg *config.Config) string {
+// lives in explain.tmpl; this function only prepares the view data. The caller
+// passes the available `safe` wrappers (from the live command tree) so the
+// explain output points agents at them.
+func Explain(cfg *config.Config, safe ...SafeCommand) string {
 	image := strings.TrimSpace(cfg.Sandbox.Container.Image)
 	if image == "" {
 		image = "(none)"
@@ -49,6 +60,7 @@ func Explain(cfg *config.Config) string {
 		Hook:            cfg.ToolMode == "hook",
 		Allow:           cfg.Sandbox.Command.Allow,
 		Drop:            cfg.Sandbox.Command.Drop,
+		Safe:            safe,
 		Image:           image,
 		NetworkExternal: cfg.Sandbox.Network.AllowExternal,
 	}

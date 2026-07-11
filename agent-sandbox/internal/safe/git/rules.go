@@ -44,6 +44,18 @@ func isGitFalse(v string) bool {
 	return false
 }
 
+// execCapableConfigKeys are git config keys whose value git executes as a
+// command; injecting one via -c/--config-env is a code-execution vector.
+// (core.hooksPath is intentionally omitted — it is covered by bypass-hooks.)
+var execCapableConfigKeys = map[string]bool{
+	"core.sshcommand": true,
+	"core.pager":      true,
+	"core.fsmonitor":  true,
+	"core.editor":     true,
+	"sequence.editor": true,
+	"diff.external":   true,
+}
+
 var rules = []Rule{
 	{
 		ID:      "force-push",
@@ -60,7 +72,9 @@ var rules = []Rule{
 				return true
 			}
 			for _, a := range inv.Args {
-				if strings.HasPrefix(a, ":") { // refspec deletion: push origin :branch
+				// A leading ":" deletes a ref; a leading "+" force-updates it. Both
+				// are destructive refspecs that need no --force flag.
+				if strings.HasPrefix(a, ":") || strings.HasPrefix(a, "+") {
 					return true
 				}
 			}
@@ -182,6 +196,21 @@ var rules = []Rule{
 				}
 				if k, _, ok := strings.Cut(g.Value, "="); ok &&
 					strings.HasPrefix(strings.ToLower(k), "alias.") {
+					return true
+				}
+			}
+			return false
+		},
+	},
+	{
+		ID:      "config-exec-injection",
+		Message: "injecting an exec-capable git config key via -c/--config-env is not allowed",
+		Match: func(inv Invocation) bool {
+			for _, g := range inv.Global {
+				if g.Name != "-c" && g.Name != "--config-env" {
+					continue
+				}
+				if k, _, ok := strings.Cut(g.Value, "="); ok && execCapableConfigKeys[strings.ToLower(k)] {
 					return true
 				}
 			}

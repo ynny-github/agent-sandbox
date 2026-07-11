@@ -78,6 +78,17 @@ func TestRules(t *testing.T) {
 		{"gpgsign off blocked", []string{"-c", "commit.gpgsign=off", "commit", "-m", "x"}, "bypass-hooks"},
 		{"alias injection blocked", []string{"-c", "alias.x=push --force", "x"}, "alias-injection"},
 
+		// regression: +refspec force-push and exec-capable config-key injection
+		{"push plus refspec blocked", []string{"push", "origin", "+main"}, "force-push"},
+		{"push plus full refspec blocked", []string{"push", "origin", "+HEAD:refs/heads/main"}, "force-push"},
+		{"push normal refspec allowed", []string{"push", "origin", "HEAD:refs/heads/main"}, ""},
+		{"config ssh command blocked", []string{"-c", "core.sshCommand=touch x", "fetch"}, "config-exec-injection"},
+		{"config pager blocked", []string{"-c", "core.pager=evil", "log"}, "config-exec-injection"},
+		{"config fsmonitor blocked", []string{"-c", "core.fsmonitor=evil", "status"}, "config-exec-injection"},
+		{"config diff external blocked", []string{"-c", "diff.external=evil", "diff"}, "config-exec-injection"},
+		{"config-env ssh command blocked", []string{"--config-env=core.sshCommand=EV", "fetch"}, "config-exec-injection"},
+		{"unrelated -c allowed", []string{"-c", "color.ui=false", "status"}, ""},
+
 		// stash / remote / tag
 		{"stash drop", []string{"stash", "drop"}, "stash-destroy"},
 		{"stash clear", []string{"stash", "clear"}, "stash-destroy"},

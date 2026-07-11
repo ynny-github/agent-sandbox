@@ -1,0 +1,48 @@
+//go:build integration
+
+package container_test
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/docker/cli/cli/command"
+	cliflags "github.com/docker/cli/cli/flags"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/container"
+)
+
+func newITCli(t *testing.T) command.Cli {
+	t.Helper()
+	cli, err := command.NewDockerCli()
+	if err != nil {
+		t.Skipf("docker cli unavailable: %v", err)
+	}
+	if err := cli.Initialize(cliflags.NewClientOptions()); err != nil {
+		t.Skipf("docker cli initialize: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := cli.Client().Ping(ctx); err != nil {
+		t.Skipf("docker daemon unavailable: %v", err)
+	}
+	return cli
+}
+
+func TestIsRunning_FalseWhenAbsent(t *testing.T) {
+	cli := newITCli(t)
+	spec, err := container.NewSandboxSpec(1000, 1000, "../../../docker/sandbox", "Dockerfile", "notrunning-xyz", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ex := container.NewContainerExecutor(cli, spec)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	running, err := ex.IsRunning(ctx)
+	if err != nil {
+		t.Fatalf("IsRunning: %v", err)
+	}
+	if running {
+		t.Fatal("expected not running for a sandbox that was never started")
+	}
+}

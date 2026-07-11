@@ -58,6 +58,9 @@ func refuse(inv Invocation) string {
 			"gh %s is outside the safe scope; only issue, pr, and project are permitted",
 			inv.Command)
 	}
+	if inv.Subcommand == "" {
+		return "" // bare in-scope command → gh prints help, no side effect
+	}
 	if !verbs[inv.Subcommand] {
 		return fmt.Sprintf(
 			"gh %s %s is not permitted (only read and non-destructive operations are allowed)",
@@ -67,12 +70,11 @@ func refuse(inv Invocation) string {
 }
 
 // isHelp reports whether the invocation only prints help and has no side effect:
-// a bare command with no verb, or any invocation carrying --help/-h.
+// no command at all, or any invocation carrying --help/-h. A bare in-scope command
+// (command with no verb) is handled in refuse, so it is NOT treated as help here —
+// that keeps a bare OUT-OF-scope command (e.g. "gh browse") from slipping through.
 func isHelp(inv Invocation) bool {
-	if inv.Command == "" || inv.Subcommand == "" {
-		return true
-	}
-	return hasHelpFlag(inv.Global) || hasHelpFlag(inv.Args)
+	return inv.Command == "" || hasHelpFlag(inv.Global) || hasHelpFlag(inv.Args)
 }
 
 func hasHelpFlag(args []string) bool {

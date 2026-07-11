@@ -72,9 +72,16 @@ func TestCheck(t *testing.T) {
 		{"secret list", []string{"secret", "list"}, "outside the safe scope"},
 		{"auth token", []string{"auth", "token"}, "outside the safe scope"},
 		{"unknown command", []string{"frobnicate", "x"}, "outside the safe scope"},
+		// bare out-of-scope command must be refused, not treated as help
+		{"bare out-of-scope refused", []string{"browse"}, "outside the safe scope"},
+		{"bare secret refused", []string{"secret"}, "outside the safe scope"},
+		{"bare api refused", []string{"api"}, "gh api"},
 
 		// help passthrough
 		{"bare command help", []string{"pr"}, ""},
+		// bare in-scope command still prints help (allowed)
+		{"bare issue help", []string{"issue"}, ""},
+		{"bare project help", []string{"project"}, ""},
 		{"verb help flag", []string{"pr", "merge", "--help"}, ""},
 		{"short help flag", []string{"issue", "delete", "-h"}, ""},
 		{"version", []string{"--version"}, ""},

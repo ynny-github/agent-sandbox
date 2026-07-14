@@ -36,6 +36,34 @@ func TestAllowPatterns_RoutesAiExplainToHost(t *testing.T) {
 	}
 }
 
+func TestAllowPatterns_IncludesBuiltinSafeSelfAllow(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Sandbox.Command.Allow = []string{"git *"}
+
+	got := allowPatterns(cfg)
+	for _, want := range []string{"agent-sandbox safe", "agent-sandbox safe *"} {
+		if !argsContain(got, want) {
+			t.Errorf("allowPatterns missing %q; got %v", want, got)
+		}
+	}
+}
+
+func TestAllowPatterns_RoutesSafeWrappersToHost(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Sandbox.Command.Drop = []string{"git push --force*"}
+
+	for _, cmd := range []string{
+		"agent-sandbox safe git status",
+		"agent-sandbox safe gh pr list",
+		"agent-sandbox safe git push --force",
+	} {
+		decision, _ := router.Route(cmd, allowPatterns(cfg), cfg.Sandbox.Command.Drop)
+		if decision != "host" {
+			t.Errorf("%q routed to %q, want host", cmd, decision)
+		}
+	}
+}
+
 func argsContain(args []string, target string) bool {
 	for _, a := range args {
 		if a == target {

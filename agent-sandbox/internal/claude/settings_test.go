@@ -7,7 +7,7 @@ import (
 )
 
 func TestHookSettingsJSON(t *testing.T) {
-	got, err := hookSettingsJSON("")
+	got, err := settingsJSON("", "", true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -48,11 +48,53 @@ func TestHookSettingsJSON(t *testing.T) {
 }
 
 func TestHookSettingsJSON_WithPolicyFile(t *testing.T) {
-	got, err := hookSettingsJSON("/state/policy-1.json")
+	got, err := settingsJSON("/state/policy-1.json", "", true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(got, "agent-sandbox hook --policy-file '/state/policy-1.json'") {
 		t.Errorf("settings missing policy-file hook command; got %q", got)
+	}
+}
+
+func TestSettingsJSON_DenyRuleForMCPPath(t *testing.T) {
+	got, err := settingsJSON("", "/tmp/asb-mcp-1.json", false)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if !strings.Contains(got, `"deny"`) || !strings.Contains(got, "Read(//tmp/asb-mcp-1.json)") {
+		t.Errorf("settings missing deny rule for the mcp path; got %q", got)
+	}
+	if strings.Contains(got, "PreToolUse") {
+		t.Errorf("non-hook settings should not contain hooks; got %q", got)
+	}
+}
+
+func TestSettingsJSON_HookAndDenyCombined(t *testing.T) {
+	got, err := settingsJSON("/state/p.json", "/tmp/asb-mcp-1.json", true)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if !strings.Contains(got, "PreToolUse") {
+		t.Errorf("hook mode should include PreToolUse; got %q", got)
+	}
+	if !strings.Contains(got, "Read(//tmp/asb-mcp-1.json)") {
+		t.Errorf("should include the deny rule; got %q", got)
+	}
+}
+
+func TestSettingsJSON_EmptyWhenNothing(t *testing.T) {
+	got, err := settingsJSON("", "", false)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if got != "" {
+		t.Errorf("expected empty settings, got %q", got)
+	}
+}
+
+func TestDenyReadRule(t *testing.T) {
+	if r := denyReadRule("/tmp/x.json"); r != "Read(//tmp/x.json)" {
+		t.Errorf("denyReadRule = %q, want Read(//tmp/x.json)", r)
 	}
 }

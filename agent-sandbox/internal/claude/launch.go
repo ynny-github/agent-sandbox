@@ -101,11 +101,11 @@ func BuildArgs(cfg *config.Config, opts Options, snapshotPath string) (string, [
 	args = append(args, "--append-system-prompt", agentconfig.Pointer())
 
 	if cfg.ToolMode == "hook" {
-		settingsJSON, err := hookSettingsJSON(snapshotPath)
+		settingsStr, err := settingsJSON(snapshotPath, "", true)
 		if err != nil {
 			return "", nil, err
 		}
-		args = append(args, "--settings", settingsJSON)
+		args = append(args, "--settings", settingsStr)
 	} else {
 		args = append(args, "--disallowed-tools", "Bash,Monitor")
 	}

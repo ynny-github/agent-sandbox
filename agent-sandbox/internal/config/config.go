@@ -52,22 +52,74 @@ type ContainerConfig struct {
 	EnvPassthrough  []string `toml:"env_passthrough"`
 }
 
+// Load composes the optional user-scope config
+// (~/.config/agent-sandbox/config.toml) with the project-scope config at path,
+// then validates the merged result. Scalars: project overrides user. Lists
+// (command.allow, command.drop, container.env_passthrough): de-duplicated union.
 func Load(path string) (*Config, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("config: %w", err)
-	}
-	defer f.Close()
-
 	var cfg Config
-	md, err := toml.NewDecoder(f).Decode(&cfg)
-	if err != nil {
-		return nil, fmt.Errorf("config: %w", err)
-	}
-	if md.IsDefined("sandbox", "network", "allow_cidrs") || md.IsDefined("sandbox", "network", "allow_hosts") {
-		return nil, ErrDeprecatedNetworkKeys
+
+	// 1. User config is the base (optional). Snapshot its list fields before the
+	//    project decode can replace them.
+	var userAllow, userDrop, userEnv []string
+	if up, err := userConfigPath(); err == nil {
+		if _, statErr := os.Stat(up); statErr == nil {
+			md, derr := decodeInto(up, &cfg)
+			if derr != nil {
+				return nil, derr
+			}
+			if derr := checkDeprecated(md); derr != nil {
+				return nil, derr
+			}
+			userAllow = cfg.Sandbox.Command.Allow
+			userDrop = cfg.Sandbox.Command.Drop
+			userEnv = cfg.Sandbox.Container.EnvPassthrough
+		}
 	}
 
+	// 2. Project config overrides the scalars it defines; fields it omits keep the
+	//    user values. Lists it defines replace the user's (unioned back in step 3).
+	md, derr := decodeInto(path, &cfg)
+	if derr != nil {
+		return nil, derr
+	}
+	if derr := checkDeprecated(md); derr != nil {
+		return nil, derr
+	}
+
+	// 3. Union the list fields. When the project omits a list, cfg still holds the
+	//    user's, so the union de-dupes back to the user's list (no change).
+	cfg.Sandbox.Command.Allow = dedupUnion(userAllow, cfg.Sandbox.Command.Allow)
+	cfg.Sandbox.Command.Drop = dedupUnion(userDrop, cfg.Sandbox.Command.Drop)
+	cfg.Sandbox.Container.EnvPassthrough = dedupUnion(userEnv, cfg.Sandbox.Container.EnvPassthrough)
+
+	// 4. Validate the merged config.
+	return validate(&cfg)
+}
+
+// decodeInto decodes the TOML file at path into cfg, wrapping errors so callers
+// can still match os.ErrNotExist. It returns the decode metadata for the
+// deprecated-key check.
+func decodeInto(path string, cfg *Config) (toml.MetaData, error) {
+	md, err := toml.DecodeFile(path, cfg)
+	if err != nil {
+		return md, fmt.Errorf("config: %w", err)
+	}
+	return md, nil
+}
+
+// checkDeprecated rejects the removed sandbox.network.allow_cidrs / allow_hosts
+// keys. It is applied per-file because the keys are not representable in Config.
+func checkDeprecated(md toml.MetaData) error {
+	if md.IsDefined("sandbox", "network", "allow_cidrs") || md.IsDefined("sandbox", "network", "allow_hosts") {
+		return ErrDeprecatedNetworkKeys
+	}
+	return nil
+}
+
+// validate applies the tool_mode default and all required-field checks to the
+// merged config, returning it unchanged on success.
+func validate(cfg *Config) (*Config, error) {
 	switch cfg.ToolMode {
 	case "":
 		cfg.ToolMode = "mcp"
@@ -94,7 +146,7 @@ func Load(path string) (*Config, error) {
 	if cfg.Claude.GithubMCP.Enabled && strings.TrimSpace(cfg.Claude.GithubMCP.Secret) == "" {
 		return nil, ErrMissingGithubMCPSecret
 	}
-	return &cfg, nil
+	return cfg, nil
 }
 
 // dedupUnion returns the concatenation of a and b with duplicates removed,

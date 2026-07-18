@@ -9,6 +9,20 @@ import (
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 )
 
+// TestMain isolates HOME to an empty temp dir so tests never pick up a real
+// ~/.config/agent-sandbox/config.toml. Tests that need a user config override
+// HOME via t.Setenv.
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "agent-sandbox-home")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("HOME", dir)
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
+}
+
 func writeToml(t *testing.T, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.toml")
@@ -489,5 +503,53 @@ enabled = true
 `)
 	if _, err := config.Load(p); !errors.Is(err, config.ErrMissingGithubMCPSecret) {
 		t.Fatalf("err = %v, want ErrMissingGithubMCPSecret", err)
+	}
+}
+
+// writeUserToml points HOME at an isolated temp dir and writes a user-scope
+// config there, so config.Load discovers it at ~/.config/agent-sandbox/config.toml.
+func writeUserToml(t *testing.T, content string) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, ".config", "agent-sandbox")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLoad_Compose_ScalarProjectWins(t *testing.T) {
+	writeUserToml(t, `
+tool_mode = "mcp"
+[mcp]
+command_output_dir = "/u/out"
+[sandbox.container]
+build_context = "./uc"
+dockerfile = "UserDockerfile"
+image = "userimg"
+`)
+	project := writeToml(t, `
+tool_mode = "hook"
+[sandbox.container]
+image = "projimg"
+`)
+	cfg, err := config.Load(project)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.ToolMode != "hook" {
+		t.Errorf("ToolMode = %q, want \"hook\" (project wins)", cfg.ToolMode)
+	}
+	if cfg.Sandbox.Container.Image != "projimg" {
+		t.Errorf("Image = %q, want \"projimg\" (project wins)", cfg.Sandbox.Container.Image)
+	}
+	if cfg.Sandbox.Container.Dockerfile != "UserDockerfile" {
+		t.Errorf("Dockerfile = %q, want \"UserDockerfile\" (user retained)", cfg.Sandbox.Container.Dockerfile)
+	}
+	if cfg.Sandbox.Container.BuildContext != "./uc" {
+		t.Errorf("BuildContext = %q, want \"./uc\" (user retained)", cfg.Sandbox.Container.BuildContext)
 	}
 }

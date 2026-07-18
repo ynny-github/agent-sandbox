@@ -34,6 +34,7 @@ type SandboxConfig struct {
 	Network   NetworkConfig   `toml:"network"`
 	Command   CommandConfig   `toml:"command"`
 	Container ContainerConfig `toml:"container"`
+	Host      HostConfig      `toml:"host"`
 }
 
 type NetworkConfig struct {
@@ -53,6 +54,18 @@ type ContainerConfig struct {
 	EnvPassthrough  []string `toml:"env_passthrough"`
 }
 
+// HostConfig declares, in nono-agnostic terms, the host-side access the
+// sandboxed agent process gets. Capabilities are named bundles expanded by
+// internal/sandboxhost; the remaining lists are raw grants.
+type HostConfig struct {
+	Capabilities []string `toml:"capabilities"`
+	Allow        []string `toml:"allow"`
+	Read         []string `toml:"read"`
+	AllowFile    []string `toml:"allow_file"`
+	ReadFile     []string `toml:"read_file"`
+	AllowEnv     []string `toml:"allow_env"`
+}
+
 // Load composes the optional user-scope config
 // (~/.config/agent-sandbox/config.toml) with the project-scope config at path,
 // then validates the merged result. Scalars: project overrides user. Lists
@@ -66,6 +79,7 @@ func Load(path string) (*Config, error) {
 	//    large enough, so a plain header copy would be corrupted by the project
 	//    decode below.
 	var userAllow, userDrop, userEnv []string
+	var hostSnap hostLists
 	if up, err := userConfigPath(); err == nil {
 		if _, statErr := os.Stat(up); statErr == nil {
 			md, derr := decodeInto(up, &cfg)
@@ -78,6 +92,13 @@ func Load(path string) (*Config, error) {
 			userAllow = slices.Clone(cfg.Sandbox.Command.Allow)
 			userDrop = slices.Clone(cfg.Sandbox.Command.Drop)
 			userEnv = slices.Clone(cfg.Sandbox.Container.EnvPassthrough)
+			userHostCaps := slices.Clone(cfg.Sandbox.Host.Capabilities)
+			userHostAllow := slices.Clone(cfg.Sandbox.Host.Allow)
+			userHostRead := slices.Clone(cfg.Sandbox.Host.Read)
+			userHostAllowFile := slices.Clone(cfg.Sandbox.Host.AllowFile)
+			userHostReadFile := slices.Clone(cfg.Sandbox.Host.ReadFile)
+			userHostAllowEnv := slices.Clone(cfg.Sandbox.Host.AllowEnv)
+			hostSnap = hostLists{userHostCaps, userHostAllow, userHostRead, userHostAllowFile, userHostReadFile, userHostAllowEnv}
 		}
 	}
 
@@ -96,6 +117,12 @@ func Load(path string) (*Config, error) {
 	cfg.Sandbox.Command.Allow = dedupUnion(userAllow, cfg.Sandbox.Command.Allow)
 	cfg.Sandbox.Command.Drop = dedupUnion(userDrop, cfg.Sandbox.Command.Drop)
 	cfg.Sandbox.Container.EnvPassthrough = dedupUnion(userEnv, cfg.Sandbox.Container.EnvPassthrough)
+	cfg.Sandbox.Host.Capabilities = dedupUnion(hostSnap.caps, cfg.Sandbox.Host.Capabilities)
+	cfg.Sandbox.Host.Allow = dedupUnion(hostSnap.allow, cfg.Sandbox.Host.Allow)
+	cfg.Sandbox.Host.Read = dedupUnion(hostSnap.read, cfg.Sandbox.Host.Read)
+	cfg.Sandbox.Host.AllowFile = dedupUnion(hostSnap.allowFile, cfg.Sandbox.Host.AllowFile)
+	cfg.Sandbox.Host.ReadFile = dedupUnion(hostSnap.readFile, cfg.Sandbox.Host.ReadFile)
+	cfg.Sandbox.Host.AllowEnv = dedupUnion(hostSnap.allowEnv, cfg.Sandbox.Host.AllowEnv)
 
 	// 4. Validate the merged config.
 	return validate(&cfg)
@@ -151,6 +178,12 @@ func validate(cfg *Config) (*Config, error) {
 		return nil, ErrMissingGithubMCPSecret
 	}
 	return cfg, nil
+}
+
+// hostLists snapshots the user-scope sandbox.host list fields so they can be
+// unioned with the project-scope values after the project decode.
+type hostLists struct {
+	caps, allow, read, allowFile, readFile, allowEnv []string
 }
 
 // dedupUnion returns the concatenation of a and b with duplicates removed,

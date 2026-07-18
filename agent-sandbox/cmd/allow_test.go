@@ -54,7 +54,7 @@ func TestAllowPatterns_RoutesSafeWrappersToHost(t *testing.T) {
 
 	for _, cmd := range []string{
 		"agent-sandbox safe git status",
-		"agent-sandbox safe gh pr list",
+		"agent-sandbox safe docker compose ps",
 		"agent-sandbox safe git push --force",
 	} {
 		decision, _ := router.Route(cmd, allowPatterns(cfg), cfg.Sandbox.Command.Drop)

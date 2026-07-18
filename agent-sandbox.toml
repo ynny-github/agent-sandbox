@@ -5,6 +5,13 @@
   [mcp]
   command_output_dir = "./tmp/agent-sandbox/command-router"
 
+  # Built-in GitHub MCP server for the launched Claude. When enabled,
+  # `agent-sandbox claude` generates a strict --mcp-config (token embedded from
+  # `secret`) and denies the agent from reading the generated file.
+  # [claude.github_mcp]
+  # enabled = true
+  # secret  = "file:///home/you/.config/agent-sandbox/gh-token"
+
   [sandbox.container]
   build_context = "./docker/sandbox"
   dockerfile = "Dockerfile"

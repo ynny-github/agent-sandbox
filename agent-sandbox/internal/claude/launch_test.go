@@ -13,26 +13,41 @@ import (
 )
 
 func TestValidatePassthrough_SettingsBlocked(t *testing.T) {
-	if err := ValidatePassthrough([]string{"--settings", "foo.json"}); err == nil {
+	if err := ValidatePassthrough([]string{"--settings", "foo.json"}, false); err == nil {
 		t.Fatal("expected error for --settings, got nil")
 	}
 }
 
 func TestValidatePassthrough_SettingsEqualBlocked(t *testing.T) {
-	if err := ValidatePassthrough([]string{"--settings=foo.json"}); err == nil {
+	if err := ValidatePassthrough([]string{"--settings=foo.json"}, false); err == nil {
 		t.Fatal("expected error for --settings=..., got nil")
 	}
 }
 
 func TestValidatePassthrough_AllowsOtherArgs(t *testing.T) {
-	if err := ValidatePassthrough([]string{"--print", "--model", "opus"}); err != nil {
+	if err := ValidatePassthrough([]string{"--print", "--model", "opus"}, false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func TestValidatePassthrough_Empty(t *testing.T) {
-	if err := ValidatePassthrough(nil); err != nil {
+	if err := ValidatePassthrough(nil, false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidatePassthrough_MCPConfigBlockedWhenEnabled(t *testing.T) {
+	if err := ValidatePassthrough([]string{"--mcp-config", "x.json"}, true); err == nil {
+		t.Fatal("expected error for --mcp-config when github_mcp enabled, got nil")
+	}
+	if err := ValidatePassthrough([]string{"--strict-mcp-config"}, true); err == nil {
+		t.Fatal("expected error for --strict-mcp-config when enabled, got nil")
+	}
+}
+
+func TestValidatePassthrough_MCPConfigAllowedWhenDisabled(t *testing.T) {
+	if err := ValidatePassthrough([]string{"--mcp-config", "x.json"}, false); err != nil {
+		t.Fatalf("unexpected error when github_mcp disabled: %v", err)
 	}
 }
 
@@ -460,5 +475,50 @@ func TestRun_HookMode_CleansSnapshotBeforeExit(t *testing.T) {
 	}
 	if !cleanedBeforeExit {
 		t.Error("snapshot cleanup must run before exit; os.Exit skips deferred cleanup in production")
+	}
+}
+
+func TestRun_GithubMCPEnabled_WritesAndCleansConfig(t *testing.T) {
+	makeFakeNono(t)
+	wrote, cleaned := 0, 0
+	h := &fakeHandle{started: false}
+	cfg := &config.Config{ToolMode: "mcp"}
+	cfg.Claude.GithubMCP.Enabled = true
+	cfg.Claude.GithubMCP.Secret = "file:///unused/in/fake"
+	err := run(cfg, Options{}, runDeps{
+		writeMCPConfig: func(*config.Config) (string, func(), error) {
+			wrote++
+			return "/tmp/asb-mcp-1.json", func() { cleaned++ }, nil
+		},
+		ensureUp:  func(context.Context, *config.Config) (sandboxHandle, error) { return h, nil },
+		supervise: func(string, []string) int { return 0 },
+		exit:      func(int) {},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if wrote != 1 {
+		t.Errorf("writeMCPConfig called %d times, want 1", wrote)
+	}
+	if cleaned != 1 {
+		t.Errorf("mcp config cleanup called %d times, want 1", cleaned)
+	}
+}
+
+func TestRun_GithubMCPDisabled_SkipsConfig(t *testing.T) {
+	makeFakeNono(t)
+	wrote := 0
+	h := &fakeHandle{started: false}
+	err := run(&config.Config{ToolMode: "mcp"}, Options{}, runDeps{
+		writeMCPConfig: func(*config.Config) (string, func(), error) { wrote++; return "", func() {}, nil },
+		ensureUp:       func(context.Context, *config.Config) (sandboxHandle, error) { return h, nil },
+		supervise:      func(string, []string) int { return 0 },
+		exit:           func(int) {},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if wrote != 0 {
+		t.Errorf("writeMCPConfig called %d times, want 0 when disabled", wrote)
 	}
 }

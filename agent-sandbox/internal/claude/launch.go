@@ -63,11 +63,16 @@ func ParseArgs(args []string, defaultConfig string) (configFile string, opts Opt
 }
 
 // ValidatePassthrough rejects claude passthrough options that agent-sandbox
-// reserves for itself (currently --settings, used to inject the hook config).
-func ValidatePassthrough(claudeOpts []string) error {
+// reserves for itself: --settings always, and --mcp-config / --strict-mcp-config
+// when the built-in GitHub MCP config is enabled.
+func ValidatePassthrough(claudeOpts []string, githubMCPEnabled bool) error {
 	for _, arg := range claudeOpts {
 		if strings.HasPrefix(arg, "--settings") {
 			return fmt.Errorf("--settings is not allowed")
+		}
+		if githubMCPEnabled &&
+			(strings.HasPrefix(arg, "--mcp-config") || strings.HasPrefix(arg, "--strict-mcp-config")) {
+			return fmt.Errorf("%s is not allowed when [claude.github_mcp] is enabled", arg)
 		}
 	}
 	return nil
@@ -132,10 +137,11 @@ type sandboxHandle interface {
 // runDeps holds the launcher's collaborators so run can be tested without
 // touching Docker, the real process, or os.Exit.
 type runDeps struct {
-	writeSnapshot func(*config.Config) (string, func(), error)
-	ensureUp      func(context.Context, *config.Config) (sandboxHandle, error)
-	supervise     func(path string, args []string) int
-	exit          func(code int)
+	writeSnapshot  func(*config.Config) (string, func(), error)
+	writeMCPConfig func(*config.Config) (string, func(), error)
+	ensureUp       func(context.Context, *config.Config) (sandboxHandle, error)
+	supervise      func(path string, args []string) int
+	exit           func(code int)
 }
 
 // Run ensures the sandbox is up, launches Claude under it, and — if this call
@@ -143,7 +149,8 @@ type runDeps struct {
 // syscall.Exec approach so the launcher can outlive Claude and run teardown.
 func Run(cfg *config.Config, opts Options) error {
 	return run(cfg, opts, runDeps{
-		writeSnapshot: policysnapshot.Write,
+		writeSnapshot:  policysnapshot.Write,
+		writeMCPConfig: writeGithubMCPConfig,
 		ensureUp: func(ctx context.Context, c *config.Config) (sandboxHandle, error) {
 			return sandboxlifecycle.EnsureUp(ctx, c)
 		},
@@ -172,7 +179,23 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 		}
 	}()
 
-	nonoPath, nonoArgs, err := BuildArgs(cfg, opts, snapshotPath, "")
+	var mcpConfigPath string
+	var cleanupMCP func()
+	if cfg.Claude.GithubMCP.Enabled {
+		path, cleanup, err := d.writeMCPConfig(cfg)
+		if err != nil {
+			return fmt.Errorf("github mcp config: %w", err)
+		}
+		cleanupMCP = cleanup
+		mcpConfigPath = path
+	}
+	defer func() {
+		if cleanupMCP != nil {
+			cleanupMCP()
+		}
+	}()
+
+	nonoPath, nonoArgs, err := BuildArgs(cfg, opts, snapshotPath, mcpConfigPath)
 	if err != nil {
 		return err
 	}
@@ -197,6 +220,10 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 	if cleanupSnapshot != nil {
 		cleanupSnapshot()
 		cleanupSnapshot = nil
+	}
+	if cleanupMCP != nil {
+		cleanupMCP()
+		cleanupMCP = nil
 	}
 	d.exit(code)
 	return nil

@@ -24,13 +24,13 @@ func init() {
 func runClaude(cmd *cobra.Command, args []string) error {
 	configFile, opts := claude.ParseArgs(args, configPath)
 
-	if err := claude.ValidatePassthrough(opts.ClaudeOpts); err != nil {
-		return err
-	}
-
 	cfg, err := config.Load(configFile)
 	if err != nil {
 		return fmt.Errorf("config error: %w", err)
+	}
+
+	if err := claude.ValidatePassthrough(opts.ClaudeOpts, cfg.Claude.GithubMCP.Enabled); err != nil {
+		return err
 	}
 
 	return claude.Run(cfg, opts)

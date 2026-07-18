@@ -95,3 +95,24 @@ func Load(path string) (*Config, error) {
 	}
 	return &cfg, nil
 }
+
+// dedupUnion returns the concatenation of a and b with duplicates removed,
+// preserving first-occurrence order (a's items first). It returns nil when both
+// inputs are empty so an omitted list stays nil, matching prior behavior.
+func dedupUnion(a, b []string) []string {
+	if len(a) == 0 && len(b) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(a)+len(b))
+	out := make([]string, 0, len(a)+len(b))
+	for _, list := range [][]string{a, b} {
+		for _, v := range list {
+			if _, ok := seen[v]; ok {
+				continue
+			}
+			seen[v] = struct{}{}
+			out = append(out, v)
+		}
+	}
+	return out
+}

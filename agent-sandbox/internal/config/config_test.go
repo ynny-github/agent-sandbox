@@ -436,3 +436,58 @@ func TestLoad_HookModeIgnoresCommandOutputDir(t *testing.T) {
 		t.Errorf("CommandOutputDir = %q, want /tmp/out (kept but unused)", cfg.MCP.CommandOutputDir)
 	}
 }
+
+func TestLoad_GithubMCP_Parsed(t *testing.T) {
+	p := writeToml(t, `
+tool_mode = "hook"
+[sandbox.container]
+build_context = "./docker/sandbox"
+dockerfile = "Dockerfile"
+image = "sandbox:0.1.0"
+[claude.github_mcp]
+enabled = true
+secret = "file:///home/x/tok"
+`)
+	cfg, err := config.Load(p)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if !cfg.Claude.GithubMCP.Enabled {
+		t.Error("Enabled = false, want true")
+	}
+	if cfg.Claude.GithubMCP.Secret != "file:///home/x/tok" {
+		t.Errorf("Secret = %q", cfg.Claude.GithubMCP.Secret)
+	}
+}
+
+func TestLoad_GithubMCP_DefaultsDisabled(t *testing.T) {
+	p := writeToml(t, `
+tool_mode = "hook"
+[sandbox.container]
+build_context = "./docker/sandbox"
+dockerfile = "Dockerfile"
+image = "sandbox:0.1.0"
+`)
+	cfg, err := config.Load(p)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if cfg.Claude.GithubMCP.Enabled {
+		t.Error("Enabled = true, want false when section absent")
+	}
+}
+
+func TestLoad_GithubMCP_EnabledRequiresSecret(t *testing.T) {
+	p := writeToml(t, `
+tool_mode = "hook"
+[sandbox.container]
+build_context = "./docker/sandbox"
+dockerfile = "Dockerfile"
+image = "sandbox:0.1.0"
+[claude.github_mcp]
+enabled = true
+`)
+	if _, err := config.Load(p); !errors.Is(err, config.ErrMissingGithubMCPSecret) {
+		t.Fatalf("err = %v, want ErrMissingGithubMCPSecret", err)
+	}
+}

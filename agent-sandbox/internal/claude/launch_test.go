@@ -39,7 +39,7 @@ func TestValidatePassthrough_Empty(t *testing.T) {
 func TestBuildArgs_NonoNotInPath(t *testing.T) {
 	t.Setenv("PATH", "")
 	cfg := &config.Config{}
-	if _, _, err := BuildArgs(cfg, Options{}, ""); err == nil {
+	if _, _, err := BuildArgs(cfg, Options{}, "", ""); err == nil {
 		t.Fatal("expected error when nono not in PATH, got nil")
 	}
 }
@@ -76,7 +76,7 @@ func argsIndex(args []string, target string) int {
 func TestBuildArgs_AlwaysUsesWrap(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{}
-	_, args, err := BuildArgs(cfg, Options{}, "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestBuildArgs_AlwaysUsesWrap(t *testing.T) {
 func TestBuildArgs_McpMode_DisablesTools(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{}, "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestBuildArgs_McpMode_DisablesTools(t *testing.T) {
 func TestBuildArgs_HookMode_InjectsSettings(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "hook"}
-	_, args, err := BuildArgs(cfg, Options{}, "/state/policy-1.json")
+	_, args, err := BuildArgs(cfg, Options{}, "/state/policy-1.json", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestBuildArgs_HookMode_InjectsSettings(t *testing.T) {
 func TestBuildArgs_McpMode_NoReadFile(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{}, "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestBuildArgs_McpMode_NoReadFile(t *testing.T) {
 func TestBuildArgs_NonoOptsBeforeClaude(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{NonoOpts: []string{"--profile", "nono.jsonc"}}, "")
+	_, args, err := BuildArgs(cfg, Options{NonoOpts: []string{"--profile", "nono.jsonc"}}, "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestBuildArgs_NonoOptsBeforeClaude(t *testing.T) {
 func TestBuildArgs_ClaudeOptsAfterClaude(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{ClaudeOpts: []string{"--model", "opus"}}, "")
+	_, args, err := BuildArgs(cfg, Options{ClaudeOpts: []string{"--model", "opus"}}, "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestBuildArgs_ClaudeOptsAfterClaude(t *testing.T) {
 func TestBuildArgs_InjectsSystemPrompt(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{}, "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -200,6 +200,64 @@ func TestBuildArgs_InjectsSystemPrompt(t *testing.T) {
 	}
 	if ci := argsIndex(args, "claude"); ci < 0 || i < ci {
 		t.Errorf("--append-system-prompt must appear after claude; got %v", args)
+	}
+}
+
+func TestBuildArgs_InjectsMCPConfig(t *testing.T) {
+	makeFakeNono(t)
+	cfg := &config.Config{ToolMode: "mcp"}
+	_, args, err := BuildArgs(cfg, Options{}, "", "/tmp/asb-mcp-1.json")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	ci := argsIndex(args, "claude")
+
+	ri := argsIndex(args, "--read-file")
+	if ri < 0 || args[ri+1] != "/tmp/asb-mcp-1.json" || ri > ci {
+		t.Fatalf("expected --read-file <mcp path> before claude; got %v", args)
+	}
+	if !argsContain(args, "--strict-mcp-config") {
+		t.Errorf("missing --strict-mcp-config; got %v", args)
+	}
+	mi := argsIndex(args, "--mcp-config")
+	if mi < 0 || args[mi+1] != "/tmp/asb-mcp-1.json" || mi < ci {
+		t.Errorf("expected --mcp-config <path> after claude; got %v", args)
+	}
+	si := argsIndex(args, "--settings")
+	if si < 0 || !strings.Contains(args[si+1], "Read(//tmp/asb-mcp-1.json)") {
+		t.Errorf("expected --settings with a deny rule for the mcp path; got %v", args)
+	}
+}
+
+func TestBuildArgs_HookMode_MCPConfig_DenyAndHooks(t *testing.T) {
+	makeFakeNono(t)
+	cfg := &config.Config{ToolMode: "hook"}
+	_, args, err := BuildArgs(cfg, Options{}, "/state/p.json", "/tmp/asb-mcp-1.json")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	si := argsIndex(args, "--settings")
+	if si < 0 {
+		t.Fatal("expected --settings")
+	}
+	val := args[si+1]
+	if !strings.Contains(val, "PreToolUse") || !strings.Contains(val, "Read(//tmp/asb-mcp-1.json)") {
+		t.Errorf("hook+mcp settings should contain both hooks and deny; got %q", val)
+	}
+}
+
+func TestBuildArgs_NoMCPConfig_Unchanged(t *testing.T) {
+	makeFakeNono(t)
+	cfg := &config.Config{ToolMode: "mcp"}
+	_, args, err := BuildArgs(cfg, Options{}, "", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if argsContain(args, "--mcp-config") || argsContain(args, "--strict-mcp-config") {
+		t.Errorf("no mcp flags expected when path empty; got %v", args)
+	}
+	if argsContain(args, "--settings") {
+		t.Errorf("mcp mode with no mcp path should have no --settings; got %v", args)
 	}
 }
 

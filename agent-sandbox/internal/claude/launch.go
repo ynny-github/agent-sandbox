@@ -78,7 +78,7 @@ func ValidatePassthrough(claudeOpts []string) error {
 // the frozen policy snapshot at snapshotPath and injects the PreToolUse hook
 // via `claude --settings`, routing it through that snapshot; otherwise it
 // disables the Bash and Monitor tools.
-func BuildArgs(cfg *config.Config, opts Options, snapshotPath string) (string, []string, error) {
+func BuildArgs(cfg *config.Config, opts Options, snapshotPath, mcpConfigPath string) (string, []string, error) {
 	nonoPath, err := exec.LookPath("nono")
 	if err != nil {
 		return "", nil, fmt.Errorf("nono not found in PATH: %w", err)
@@ -96,18 +96,25 @@ func BuildArgs(cfg *config.Config, opts Options, snapshotPath string) (string, [
 	if cfg.ToolMode == "hook" && snapshotPath != "" {
 		args = append(args, "--read-file", snapshotPath)
 	}
+	if mcpConfigPath != "" {
+		args = append(args, "--read-file", mcpConfigPath)
+	}
 
 	args = append(args, "claude")
 	args = append(args, "--append-system-prompt", agentconfig.Pointer())
 
-	if cfg.ToolMode == "hook" {
-		settingsStr, err := settingsJSON(snapshotPath, "", true)
-		if err != nil {
-			return "", nil, err
-		}
+	settingsStr, err := settingsJSON(snapshotPath, mcpConfigPath, cfg.ToolMode == "hook")
+	if err != nil {
+		return "", nil, err
+	}
+	if settingsStr != "" {
 		args = append(args, "--settings", settingsStr)
-	} else {
+	}
+	if cfg.ToolMode != "hook" {
 		args = append(args, "--disallowed-tools", "Bash,Monitor")
+	}
+	if mcpConfigPath != "" {
+		args = append(args, "--strict-mcp-config", "--mcp-config", mcpConfigPath)
 	}
 
 	args = append(args, opts.ClaudeOpts...)
@@ -165,7 +172,7 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 		}
 	}()
 
-	nonoPath, nonoArgs, err := BuildArgs(cfg, opts, snapshotPath)
+	nonoPath, nonoArgs, err := BuildArgs(cfg, opts, snapshotPath, "")
 	if err != nil {
 		return err
 	}

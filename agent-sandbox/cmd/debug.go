@@ -39,7 +39,7 @@ func runDebug(cmd *cobra.Command, args []string) error {
 		snapshotPath = path
 	}
 
-	_, nonoArgs, err := claude.BuildArgs(cfg, opts, snapshotPath)
+	_, nonoArgs, err := claude.BuildArgs(cfg, opts, snapshotPath, "")
 	if err != nil {
 		return err
 	}

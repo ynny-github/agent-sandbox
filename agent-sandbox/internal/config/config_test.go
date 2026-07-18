@@ -9,6 +9,7 @@ import (
 
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 )
+
 // TestMain isolates HOME to an empty temp dir so tests never pick up a real
 // ~/.config/agent-sandbox/config.toml. Tests that need a user config override
 // HOME via t.Setenv.
@@ -555,6 +556,9 @@ image = "projimg"
 }
 
 func TestLoad_Compose_ListUnion(t *testing.T) {
+	// The user lists are >= the project lists in length on purpose: TOML decode
+	// reuses the user snapshot's backing array in place when its cap suffices, so
+	// these cases only pass if Load clones the snapshot before the project decode.
 	writeUserToml(t, `
 [mcp]
 command_output_dir = "/u/out"
@@ -562,7 +566,7 @@ command_output_dir = "/u/out"
 build_context = "./uc"
 dockerfile = "Dockerfile"
 image = "userimg"
-env_passthrough = ["HOME"]
+env_passthrough = ["HOME", "AWS_PROFILE"]
 [sandbox.command]
 allow = ["git *", "make *"]
 drop = ["rm *"]
@@ -570,7 +574,7 @@ drop = ["rm *"]
 	project := writeToml(t, `
 [sandbox.container]
 image = "projimg"
-env_passthrough = ["HOME", "AWS_PROFILE"]
+env_passthrough = ["CI"]
 [sandbox.command]
 allow = ["make *", "npm *"]
 drop = ["sudo *"]
@@ -585,8 +589,8 @@ drop = ["sudo *"]
 	if got := cfg.Sandbox.Command.Drop; !slices.Equal(got, []string{"rm *", "sudo *"}) {
 		t.Errorf("Drop = %v, want [rm * sudo *]", got)
 	}
-	if got := cfg.Sandbox.Container.EnvPassthrough; !slices.Equal(got, []string{"HOME", "AWS_PROFILE"}) {
-		t.Errorf("EnvPassthrough = %v, want [HOME AWS_PROFILE]", got)
+	if got := cfg.Sandbox.Container.EnvPassthrough; !slices.Equal(got, []string{"HOME", "AWS_PROFILE", "CI"}) {
+		t.Errorf("EnvPassthrough = %v, want [HOME AWS_PROFILE CI]", got)
 	}
 }
 

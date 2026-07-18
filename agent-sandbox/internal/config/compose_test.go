@@ -8,9 +8,9 @@ import (
 
 func TestDedupUnion(t *testing.T) {
 	tests := []struct {
-		name    string
-		a, b    []string
-		want    []string
+		name string
+		a, b []string
+		want []string
 	}{
 		{"both empty", nil, nil, nil},
 		{"a only", []string{"x", "y"}, nil, []string{"x", "y"}},

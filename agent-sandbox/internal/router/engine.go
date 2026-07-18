@@ -62,7 +62,13 @@ func Run(ctx context.Context, req Request) (int, error) {
 	}
 
 	// Fallback: $(), backtick, or lone & — must run whole line in a shell.
+	// The per-segment gh drop below is skipped on this path, so scan the raw
+	// line here too (fail closed) and refuse any gh invocation it embeds.
 	if line.Fallback {
+		if containsGhCommand(req.Command) {
+			fmt.Fprintln(req.Stderr, ghDisabledMessage)
+			return 1, nil
+		}
 		return runContainerWhole(ctx, req, req.Command)
 	}
 

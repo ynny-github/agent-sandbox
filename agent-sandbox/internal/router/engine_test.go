@@ -480,6 +480,74 @@ func TestRun_GhInPipeline_Dropped(t *testing.T) {
 	}
 }
 
+func TestRun_GhInCommandSubstitution_Dropped(t *testing.T) {
+	var out, errBuf bytes.Buffer
+	runner := &mockRunner{}
+	code, err := router.Run(context.Background(), router.Request{
+		Command:         "echo $(gh pr view 42)",
+		ContainerRunner: runner,
+		Stdout:          &out,
+		Stderr:          &errBuf,
+	})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if code != 1 {
+		t.Errorf("exitCode = %d, want 1", code)
+	}
+	if runner.called {
+		t.Error("container runner must not be called for a dropped gh command substitution")
+	}
+	want := "gh is disabled in this sandbox. Use the GitHub MCP server's tools instead.\n"
+	if errBuf.String() != want {
+		t.Errorf("stderr = %q, want %q", errBuf.String(), want)
+	}
+}
+
+func TestRun_GhBackgrounded_Dropped(t *testing.T) {
+	var out, errBuf bytes.Buffer
+	runner := &mockRunner{}
+	code, err := router.Run(context.Background(), router.Request{
+		Command:         "gh pr view 42 &",
+		ContainerRunner: runner,
+		Stdout:          &out,
+		Stderr:          &errBuf,
+	})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if code != 1 {
+		t.Errorf("exitCode = %d, want 1", code)
+	}
+	if runner.called {
+		t.Error("container runner must not be called for a dropped backgrounded gh command")
+	}
+	if !strings.Contains(errBuf.String(), "gh is disabled in this sandbox") {
+		t.Errorf("stderr = %q, want the gh guidance message", errBuf.String())
+	}
+}
+
+func TestRun_GithubInSubstitution_NotDropped(t *testing.T) {
+	var out, errBuf bytes.Buffer
+	runner := &mockRunner{}
+	code, err := router.Run(context.Background(), router.Request{
+		Command:         "echo $(github --version)", // github is not gh; fallback runs whole line
+		ContainerRunner: runner,
+		Stdout:          &out,
+		Stderr:          &errBuf,
+	})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if strings.Contains(errBuf.String(), "gh is disabled") {
+		t.Errorf("github must not be treated as gh; stderr = %q", errBuf.String())
+	}
+	if !runner.called {
+		t.Error("a non-gh fallback line should route to the container runner")
+	}
+	_ = code
+}
+
 func TestRun_GhPrefix_NotDropped(t *testing.T) {
 	var out, errBuf bytes.Buffer
 	runner := &mockRunner{}

@@ -75,6 +75,10 @@ func Run(ctx context.Context, req Request) (int, error) {
 	plDecisions := make([][]routedSeg, len(line.Pipelines))
 	for i, pl := range line.Pipelines {
 		for _, seg := range pl.Segments {
+			if isGhInvocation(seg) {
+				fmt.Fprintln(req.Stderr, ghDisabledMessage)
+				return 1, nil
+			}
 			decision, matched := Route(strings.TrimSpace(seg.Raw), req.AllowPatterns, req.DropPatterns)
 			if decision == "drop" {
 				fmt.Fprintf(req.Stderr, "dropped: command matches drop pattern %q\n", matched)

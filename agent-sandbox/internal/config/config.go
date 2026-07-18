@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -60,7 +61,10 @@ func Load(path string) (*Config, error) {
 	var cfg Config
 
 	// 1. User config is the base (optional). Snapshot its list fields before the
-	//    project decode can replace them.
+	//    project decode can replace them. The snapshots must be *clones*: TOML
+	//    decode reuses an existing slice's backing array in place when its cap is
+	//    large enough, so a plain header copy would be corrupted by the project
+	//    decode below.
 	var userAllow, userDrop, userEnv []string
 	if up, err := userConfigPath(); err == nil {
 		if _, statErr := os.Stat(up); statErr == nil {
@@ -71,9 +75,9 @@ func Load(path string) (*Config, error) {
 			if derr := checkDeprecated(md); derr != nil {
 				return nil, derr
 			}
-			userAllow = cfg.Sandbox.Command.Allow
-			userDrop = cfg.Sandbox.Command.Drop
-			userEnv = cfg.Sandbox.Container.EnvPassthrough
+			userAllow = slices.Clone(cfg.Sandbox.Command.Allow)
+			userDrop = slices.Clone(cfg.Sandbox.Command.Drop)
+			userEnv = slices.Clone(cfg.Sandbox.Container.EnvPassthrough)
 		}
 	}
 

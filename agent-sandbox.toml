@@ -14,19 +14,6 @@
   allow = [
     "git *",
     "taskgate ai *",
-    # gh CLI — restricted to the operations the github MCP exposes:
-    #   pr_* (create/view/list/edit/merge/review/comment/diff/update-branch)
-    #   issue_* (create/view/list/edit/close/comment)
-    #   search_prs / search_issues
-    #   label list/get
-    # Deliberately omitted (no MCP equivalent, broader scope, or destructive):
-    #   gh api *, gh repo *, gh workflow *, gh run *, gh release *,
-    #   gh secret *, gh variable *, gh auth *, gh gist *, gh ssh-key *
-    "gh pr *",
-    "gh issue *",
-    "gh search prs *",
-    "gh search issues *",
-    "gh label *",
     "go *"
   ]
 

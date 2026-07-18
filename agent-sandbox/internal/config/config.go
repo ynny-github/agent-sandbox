@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -115,4 +116,15 @@ func dedupUnion(a, b []string) []string {
 		}
 	}
 	return out
+}
+
+// userConfigPath returns the fixed user-scope config location,
+// ~/.config/agent-sandbox/config.toml. It errors only when the home directory
+// cannot be resolved (e.g. $HOME unset); callers treat that as "no user config".
+func userConfigPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".config", "agent-sandbox", "config.toml"), nil
 }

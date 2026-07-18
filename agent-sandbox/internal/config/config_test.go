@@ -4,11 +4,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 )
-
 // TestMain isolates HOME to an empty temp dir so tests never pick up a real
 // ~/.config/agent-sandbox/config.toml. Tests that need a user config override
 // HOME via t.Setenv.
@@ -551,5 +551,128 @@ image = "projimg"
 	}
 	if cfg.Sandbox.Container.BuildContext != "./uc" {
 		t.Errorf("BuildContext = %q, want \"./uc\" (user retained)", cfg.Sandbox.Container.BuildContext)
+	}
+}
+
+func TestLoad_Compose_ListUnion(t *testing.T) {
+	writeUserToml(t, `
+[mcp]
+command_output_dir = "/u/out"
+[sandbox.container]
+build_context = "./uc"
+dockerfile = "Dockerfile"
+image = "userimg"
+env_passthrough = ["HOME"]
+[sandbox.command]
+allow = ["git *", "make *"]
+drop = ["rm *"]
+`)
+	project := writeToml(t, `
+[sandbox.container]
+image = "projimg"
+env_passthrough = ["HOME", "AWS_PROFILE"]
+[sandbox.command]
+allow = ["make *", "npm *"]
+drop = ["sudo *"]
+`)
+	cfg, err := config.Load(project)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := cfg.Sandbox.Command.Allow; !slices.Equal(got, []string{"git *", "make *", "npm *"}) {
+		t.Errorf("Allow = %v, want [git * make * npm *]", got)
+	}
+	if got := cfg.Sandbox.Command.Drop; !slices.Equal(got, []string{"rm *", "sudo *"}) {
+		t.Errorf("Drop = %v, want [rm * sudo *]", got)
+	}
+	if got := cfg.Sandbox.Container.EnvPassthrough; !slices.Equal(got, []string{"HOME", "AWS_PROFILE"}) {
+		t.Errorf("EnvPassthrough = %v, want [HOME AWS_PROFILE]", got)
+	}
+}
+
+func TestLoad_Compose_GithubMCP_SecretUserEnabledProject(t *testing.T) {
+	writeUserToml(t, `
+tool_mode = "hook"
+[sandbox.container]
+build_context = "./uc"
+dockerfile = "Dockerfile"
+image = "userimg"
+[claude.github_mcp]
+secret = "file:///home/x/tok"
+`)
+	project := writeToml(t, `
+tool_mode = "hook"
+[sandbox.container]
+image = "projimg"
+[claude.github_mcp]
+enabled = true
+`)
+	cfg, err := config.Load(project)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.Claude.GithubMCP.Enabled {
+		t.Error("Enabled = false, want true (from project)")
+	}
+	if cfg.Claude.GithubMCP.Secret != "file:///home/x/tok" {
+		t.Errorf("Secret = %q, want the user's secret", cfg.Claude.GithubMCP.Secret)
+	}
+}
+
+func TestLoad_Compose_NoHome_ProjectOnly(t *testing.T) {
+	t.Setenv("HOME", "")
+	project := writeToml(t, validBase)
+	cfg, err := config.Load(project)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Sandbox.Container.Image != "mysandbox" {
+		t.Errorf("Image = %q, want mysandbox (project-only)", cfg.Sandbox.Container.Image)
+	}
+}
+
+func TestLoad_Compose_DeprecatedKeyInUserFile(t *testing.T) {
+	writeUserToml(t, `
+[sandbox.network]
+allow_cidrs = ["10.0.0.0/8"]
+`)
+	project := writeToml(t, validBase)
+	if _, err := config.Load(project); !errors.Is(err, config.ErrDeprecatedNetworkKeys) {
+		t.Errorf("err = %v, want ErrDeprecatedNetworkKeys", err)
+	}
+}
+
+func TestLoad_Compose_ValidationOnMerged_UserSuppliesRequired(t *testing.T) {
+	writeUserToml(t, `
+[mcp]
+command_output_dir = "/u/out"
+[sandbox.container]
+build_context = "./uc"
+dockerfile = "Dockerfile"
+image = "userimg"
+`)
+	// Project omits every required field; the merge must satisfy validation.
+	project := writeToml(t, `
+tool_mode = "mcp"
+`)
+	if _, err := config.Load(project); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoad_Compose_ValidationOnMerged_MissingEverywhere(t *testing.T) {
+	writeUserToml(t, `
+[mcp]
+command_output_dir = "/u/out"
+[sandbox.container]
+build_context = "./uc"
+dockerfile = "Dockerfile"
+`)
+	// image is absent from both scopes -> merged config fails validation.
+	project := writeToml(t, `
+tool_mode = "mcp"
+`)
+	if _, err := config.Load(project); !errors.Is(err, config.ErrMissingContainerImage) {
+		t.Errorf("err = %v, want ErrMissingContainerImage", err)
 	}
 }

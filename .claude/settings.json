@@ -16,19 +16,6 @@
     "GIT_COMMITTER_NAME": "Claude Code"
   },
   "permissions": {
-    "defaultMode": "auto",
-    "deny": [
-      "Read(~/.config/gh/**)",
-      "Glob(~/.config/gh/**)",
-      "Grep(~/.config/gh/**)",
-      "Read(~/.ssh/**)",
-      "Glob(~/.ssh/**)",
-      "Grep(~/.ssh/**)",
-      "Write(~/.ssh/known_hosts)",
-      "Update(~/.ssh/known_hosts)",
-      "Read(~/.docker/**)",
-      "Glob(~/.docker/**)",
-      "Grep(~/.docker/**)"
-    ]
+    "defaultMode": "auto"
   }
 }

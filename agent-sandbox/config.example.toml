@@ -29,3 +29,13 @@ env_passthrough = [
   # "AWS_PROFILE",
   # "HOME",
 ]
+
+[sandbox.host]
+# Named capability bundles (go, python, docker, ssh, mise, taskgate).
+capabilities = ["go", "python"]
+# Raw host grants for anything not covered by a capability (optional):
+# allow      = []   # read+write host directories
+# read       = []   # read-only host directories
+# allow_file = []   # single file, read+write
+# read_file  = []   # single file, read-only
+# allow_env  = []   # extra env vars (beyond the always-on PATH/HOME/... baseline)

@@ -90,3 +90,11 @@
     "git config --remove-*",
     "git config --replace-all *"
   ]
+
+  # Host-side access for the sandboxed agent (translated into the nono profile
+  # generated at launch; nono.jsonc is no longer used). Capabilities are named
+  # bundles (go/python -> runtime groups; docker/ssh -> credential reads + the
+  # matching agent read-block; mise/taskgate -> tool state). Raw grants
+  # (allow/read/allow_file/read_file/allow_env) cover anything not bundled.
+  [sandbox.host]
+  capabilities = ["go", "python", "docker", "ssh", "mise", "taskgate"]

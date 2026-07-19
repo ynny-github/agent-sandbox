@@ -72,11 +72,12 @@ agent-sandbox doctor
 
 `doctor` verifies that `nono` is on `PATH`, that `docker compose version` works (which also accepts compatible CLIs like colima or podman that alias `docker`), and that the Docker daemon is reachable. Exits 0 when all checks pass, 1 otherwise.
 
-Run Claude inside the nono sandbox. Options before `--` go to `nono wrap`
-(including `--profile`); options after `--` go to `claude`:
+Run Claude inside the nono sandbox. Options after `--` go to `claude`; the
+sandbox profile is generated from `[sandbox.host]` in `agent-sandbox.toml`,
+and `agent-sandbox` no longer forwards options to `nono`:
 
 ```bash
-agent-sandbox claude --profile nono.jsonc -- --model opus
+agent-sandbox claude -- --model opus
 ```
 
 `agent-sandbox claude` manages the sandbox container automatically: on launch it
@@ -111,6 +112,17 @@ router:
   `agent-sandbox exec -- <command>` by `agent-sandbox hook`. No prior setup is
   needed and nothing is written to `.claude/settings.json`. `agent-sandbox` must
   be on `PATH`.
+
+### `[sandbox.host]`
+
+`sandbox.host` in `agent-sandbox.toml` controls the host-side access granted
+to the sandboxed agent; it is translated into the nono profile generated at
+launch. `capabilities` are named bundles — `go`, `python`, `docker`, `ssh`,
+`mise`, `taskgate` — each expanding to the directories, files, and env vars
+that capability needs. Raw grants (`allow`, `read`, `allow_file`, `read_file`,
+`allow_env`) cover anything not already covered by a capability. The common
+`PATH`/`HOME`/... env vars and `/dev/null` are always granted from a built-in
+baseline.
 
 ## Safe wrappers
 
@@ -167,6 +179,6 @@ The configuration was reorganized; old keys are no longer accepted.
 | `[drop_patterns] patterns` | `sandbox.command.drop` |
 | `[deny_patterns] patterns` | removed — move destructive entries into `sandbox.command.drop` |
 | `[container] env_passthrough` | `sandbox.container.env_passthrough` |
-| `[nono] profile` | removed — pass `--profile <name>` to `agent-sandbox claude` instead |
+| `[nono] profile` | removed — configure the sandbox profile in `[sandbox.host]` (nono options are no longer forwarded) |
 
 The `deny` routing axis is gone. Patterns that previously forced a host-allowed command into the sandbox now have two options: leave them out of `allow` (so they default to the sandbox), or add them to `drop` if they should be refused entirely.

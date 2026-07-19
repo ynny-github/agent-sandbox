@@ -9,6 +9,7 @@ package sandboxhost
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
@@ -166,4 +167,35 @@ func sortDedup(in []string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// WriteProfile marshals the profile to a 0600 temp file and returns its path
+// plus a cleanup func that removes it. The file is read by nono itself on the
+// host before the sandbox applies, so callers do NOT grant --read-file for it.
+func (r *Resolved) WriteProfile() (string, func(), error) {
+	data, err := r.ProfileJSON()
+	if err != nil {
+		return "", nil, err
+	}
+	f, err := os.CreateTemp("", "agent-sandbox-profile-*.json")
+	if err != nil {
+		return "", nil, fmt.Errorf("sandboxhost: temp file: %w", err)
+	}
+	path := f.Name()
+	cleanup := func() { os.Remove(path) }
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		cleanup()
+		return "", nil, fmt.Errorf("sandboxhost: chmod: %w", err)
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		cleanup()
+		return "", nil, fmt.Errorf("sandboxhost: write: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("sandboxhost: close: %w", err)
+	}
+	return path, cleanup, nil
 }

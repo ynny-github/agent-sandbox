@@ -11,8 +11,23 @@ import (
 
 const (
 	githubMCPImage    = "ghcr.io/github/github-mcp-server"
-	githubMCPToolsets = "pull_requests,issues,repos"
+	githubMCPToolsets = "pull_requests,issues,repos,projects"
 )
+
+// githubMCPWriteDenyRules are the mutating tools of the github MCP `repos`
+// toolset, blocked via Claude's permissions.deny so the agent cannot write to
+// GitHub through the API and bypass the sandbox's routed local git. The read and
+// search tools of `repos` (and the other toolsets) remain available. Tools are
+// named mcp__<server>__<tool>; the generated config registers the server as
+// "github".
+var githubMCPWriteDenyRules = []string{
+	"mcp__github__create_or_update_file",
+	"mcp__github__delete_file",
+	"mcp__github__push_files",
+	"mcp__github__create_branch",
+	"mcp__github__create_repository",
+	"mcp__github__fork_repository",
+}
 
 // githubMCPConfigJSON renders the single-server MCP config for the GitHub MCP
 // server, with the token embedded in the server env. The docker args reference

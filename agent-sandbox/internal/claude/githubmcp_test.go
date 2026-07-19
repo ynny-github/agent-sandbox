@@ -26,7 +26,7 @@ func TestRedactedGithubMCPConfigJSON_RedactsToken(t *testing.T) {
 	if env["GITHUB_PERSONAL_ACCESS_TOKEN"] != "***redacted***" {
 		t.Errorf("token = %v, want ***redacted***", env["GITHUB_PERSONAL_ACCESS_TOKEN"])
 	}
-	if env["GITHUB_TOOLSETS"] != "pull_requests,issues,repos" {
+	if env["GITHUB_TOOLSETS"] != "pull_requests,issues,repos,projects" {
 		t.Errorf("toolsets = %v", env["GITHUB_TOOLSETS"])
 	}
 }
@@ -48,7 +48,7 @@ func TestGithubMCPConfigJSON_EmbedsToken(t *testing.T) {
 	if env["GITHUB_PERSONAL_ACCESS_TOKEN"] != "ghp_tok" {
 		t.Errorf("token = %v, want ghp_tok", env["GITHUB_PERSONAL_ACCESS_TOKEN"])
 	}
-	if env["GITHUB_TOOLSETS"] != "pull_requests,issues,repos" {
+	if env["GITHUB_TOOLSETS"] != "pull_requests,issues,repos,projects" {
 		t.Errorf("toolsets = %v", env["GITHUB_TOOLSETS"])
 	}
 	args := srv["args"].([]any)

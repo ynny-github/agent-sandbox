@@ -130,3 +130,32 @@ func TestSettingsJSON_EmptyWhenNoDenyNoHook(t *testing.T) {
 		t.Errorf("expected empty settings; got %q", got)
 	}
 }
+
+func TestSettingsJSON_BlocksGithubRepoWritesWhenMCPActive(t *testing.T) {
+	got, err := settingsJSON("", "/tmp/asb-mcp-1.json", false, nil)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	for _, tool := range []string{
+		"mcp__github__create_or_update_file",
+		"mcp__github__delete_file",
+		"mcp__github__push_files",
+		"mcp__github__create_branch",
+		"mcp__github__create_repository",
+		"mcp__github__fork_repository",
+	} {
+		if !strings.Contains(got, tool) {
+			t.Errorf("expected deny rule for %s; got %q", tool, got)
+		}
+	}
+}
+
+func TestSettingsJSON_NoGithubDenyWithoutMCP(t *testing.T) {
+	got, err := settingsJSON("/state/p.json", "", true, nil)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if strings.Contains(got, "mcp__github__") {
+		t.Errorf("no github write deny expected when MCP config absent; got %q", got)
+	}
+}

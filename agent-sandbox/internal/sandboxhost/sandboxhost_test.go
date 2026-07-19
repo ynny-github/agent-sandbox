@@ -65,10 +65,11 @@ func TestResolve_Parity(t *testing.T) {
 func TestResolve_DenyRulesFromCapabilities(t *testing.T) {
 	r := resolve(t, config.HostConfig{Capabilities: []string{"ssh", "docker"}}, "claude")
 	want := []string{
+		"Edit(~/.ssh/known_hosts)",
 		"Glob(~/.docker/**)", "Glob(~/.ssh/**)",
 		"Grep(~/.docker/**)", "Grep(~/.ssh/**)",
 		"Read(~/.docker/**)", "Read(~/.ssh/**)",
-		"Update(~/.ssh/known_hosts)", "Write(~/.ssh/known_hosts)",
+		"Write(~/.ssh/known_hosts)",
 	}
 	if !reflect.DeepEqual(r.DenyRules, want) {
 		t.Errorf("DenyRules = %v\nwant %v", r.DenyRules, want)

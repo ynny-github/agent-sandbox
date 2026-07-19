@@ -27,7 +27,7 @@ var catalog = map[string]capability{
 		allowFile: []string{"~/.ssh/known_hosts"},
 		deny: []string{
 			"Read(~/.ssh/**)", "Glob(~/.ssh/**)", "Grep(~/.ssh/**)",
-			"Write(~/.ssh/known_hosts)", "Update(~/.ssh/known_hosts)",
+			"Write(~/.ssh/known_hosts)", "Edit(~/.ssh/known_hosts)",
 		},
 	},
 	"mise": {

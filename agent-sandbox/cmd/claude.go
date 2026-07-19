@@ -10,7 +10,7 @@ import (
 )
 
 var claudeCmd = &cobra.Command{
-	Use:                "claude [nono-opts...] -- [claude-args...]",
+	Use:                "claude [--config <path>] -- [claude-args...]",
 	Short:              "Run Claude via nono sandbox",
 	Args:               cobra.ArbitraryArgs,
 	DisableFlagParsing: true,
@@ -22,7 +22,10 @@ func init() {
 }
 
 func runClaude(cmd *cobra.Command, args []string) error {
-	configFile, opts := claude.ParseArgs(args, configPath)
+	configFile, opts, err := claude.ParseArgs(args, configPath)
+	if err != nil {
+		return err
+	}
 
 	cfg, err := config.Load(configFile)
 	if err != nil {

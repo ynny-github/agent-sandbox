@@ -13,7 +13,7 @@ import (
 )
 
 var debugCmd = &cobra.Command{
-	Use:                "debug [nono-opts...] -- [claude-args...]",
+	Use:                "debug [--config <path>] -- [claude-args...]",
 	Short:              "Show the command that would be used to run Claude",
 	DisableFlagParsing: true,
 	RunE:               runDebug,
@@ -24,7 +24,10 @@ func init() {
 }
 
 func runDebug(cmd *cobra.Command, args []string) error {
-	configFile, opts := claude.ParseArgs(args, configPath)
+	configFile, opts, err := claude.ParseArgs(args, configPath)
+	if err != nil {
+		return err
+	}
 	cfg, err := config.Load(configFile)
 	if err != nil {
 		return fmt.Errorf("config error: %w", err)

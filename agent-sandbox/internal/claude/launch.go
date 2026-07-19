@@ -23,23 +23,22 @@ import (
 // "claude" exists today; new agents pass their own identifier.
 const agentName = "claude"
 
-// Options is the split invocation for the claude launcher: options passed
-// through to `nono wrap` and options passed through to `claude`.
+// Options carries the claude passthrough options (everything after "--").
+// agent-sandbox no longer forwards options to nono.
 type Options struct {
-	NonoOpts   []string
 	ClaudeOpts []string
 }
 
-// ParseArgs splits the raw args passed to the claude/debug command into the
-// config-file path and the nono/claude passthrough options. The first
-// standalone "--" separates nono options (before) from claude options (after);
-// with no "--", every token is a nono option. A "--config <val>" or
-// "--config=<val>" appearing in the nono region sets the config path and is
-// removed from the nono options. defaultConfig is used when no "--config" is
-// given. This is needed because the command disables cobra flag parsing to pass
-// options verbatim.
-func ParseArgs(args []string, defaultConfig string) (configFile string, opts Options) {
-	configFile = defaultConfig
+// ParseArgs splits the raw args into the config-file path and the claude
+// passthrough options. The first standalone "--" separates agent-sandbox's own
+// region (before) from claude options (after). Only "--config <val>" /
+// "--config=<val>" is accepted before "--"; any other pre-"--" token is an
+// error, because agent-sandbox no longer forwards options to nono (the sandbox
+// profile is configured in [sandbox.host]). defaultConfig is used when no
+// "--config" is given.
+func ParseArgs(args []string, defaultConfig string) (string, Options, error) {
+	configFile := defaultConfig
+	var opts Options
 
 	pre := args
 	for i, a := range args {
@@ -60,11 +59,13 @@ func ParseArgs(args []string, defaultConfig string) (configFile string, opts Opt
 			}
 		case strings.HasPrefix(a, "--config="):
 			configFile = strings.TrimPrefix(a, "--config=")
+		case a == "--profile" || a == "-p" || strings.HasPrefix(a, "--profile="):
+			return "", Options{}, fmt.Errorf("--profile is no longer accepted; configure the sandbox profile in [sandbox.host] of agent-sandbox.toml")
 		default:
-			opts.NonoOpts = append(opts.NonoOpts, a)
+			return "", Options{}, fmt.Errorf("unexpected option %q before \"--\": agent-sandbox no longer forwards options to nono; only --config is accepted before \"--\", and claude options go after \"--\"", a)
 		}
 	}
-	return configFile, opts
+	return configFile, opts, nil
 }
 
 // ValidatePassthrough rejects claude passthrough options that agent-sandbox

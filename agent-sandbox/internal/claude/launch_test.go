@@ -289,66 +289,53 @@ func TestBuildArgs_NoMCPConfig_Unchanged(t *testing.T) {
 	}
 }
 
-func TestParseArgs_SplitsOnFirstDash(t *testing.T) {
-	cfgFile, opts := ParseArgs([]string{"--profile", "nono.jsonc", "--", "--model", "opus"}, "default.toml")
-	if cfgFile != "default.toml" {
-		t.Errorf("configFile = %q, want default.toml", cfgFile)
+func TestParseArgs_ClaudeOptsAfterDash(t *testing.T) {
+	cfgFile, opts, err := ParseArgs([]string{"--config", "custom.toml", "--", "--model", "opus"}, "default.toml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if strings.Join(opts.NonoOpts, " ") != "--profile nono.jsonc" {
-		t.Errorf("NonoOpts = %v", opts.NonoOpts)
+	if cfgFile != "custom.toml" {
+		t.Errorf("configFile = %q, want custom.toml", cfgFile)
 	}
 	if strings.Join(opts.ClaudeOpts, " ") != "--model opus" {
 		t.Errorf("ClaudeOpts = %v", opts.ClaudeOpts)
 	}
 }
 
-func TestParseArgs_NoDash_AllNono(t *testing.T) {
-	_, opts := ParseArgs([]string{"--profile", "nono.jsonc"}, "default.toml")
-	if strings.Join(opts.NonoOpts, " ") != "--profile nono.jsonc" {
-		t.Errorf("NonoOpts = %v", opts.NonoOpts)
-	}
-	if len(opts.ClaudeOpts) != 0 {
-		t.Errorf("ClaudeOpts = %v, want empty", opts.ClaudeOpts)
-	}
-}
-
-func TestParseArgs_ConfigSpaceForm(t *testing.T) {
-	cfgFile, opts := ParseArgs([]string{"--config", "custom.toml", "--profile", "p", "--", "--print"}, "default.toml")
-	if cfgFile != "custom.toml" {
-		t.Errorf("configFile = %q, want custom.toml", cfgFile)
-	}
-	if strings.Join(opts.NonoOpts, " ") != "--profile p" {
-		t.Errorf("NonoOpts = %v, want [--profile p]", opts.NonoOpts)
-	}
-}
-
 func TestParseArgs_ConfigEqualsForm(t *testing.T) {
-	cfgFile, opts := ParseArgs([]string{"--config=custom.toml", "--allow", "/repo"}, "default.toml")
+	cfgFile, _, err := ParseArgs([]string{"--config=custom.toml", "--", "--print"}, "default.toml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if cfgFile != "custom.toml" {
 		t.Errorf("configFile = %q, want custom.toml", cfgFile)
-	}
-	if strings.Join(opts.NonoOpts, " ") != "--allow /repo" {
-		t.Errorf("NonoOpts = %v, want [--allow /repo]", opts.NonoOpts)
-	}
-}
-
-func TestParseArgs_DashAtEnd_EmptyClaudeOpts(t *testing.T) {
-	_, opts := ParseArgs([]string{"--profile", "p", "--"}, "default.toml")
-	if strings.Join(opts.NonoOpts, " ") != "--profile p" {
-		t.Errorf("NonoOpts = %v", opts.NonoOpts)
-	}
-	if len(opts.ClaudeOpts) != 0 {
-		t.Errorf("ClaudeOpts = %v, want empty", opts.ClaudeOpts)
 	}
 }
 
 func TestParseArgs_Empty(t *testing.T) {
-	cfgFile, opts := ParseArgs(nil, "default.toml")
+	cfgFile, opts, err := ParseArgs(nil, "default.toml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if cfgFile != "default.toml" {
 		t.Errorf("configFile = %q, want default", cfgFile)
 	}
-	if len(opts.NonoOpts) != 0 || len(opts.ClaudeOpts) != 0 {
-		t.Errorf("expected empty groups, got nono=%v claude=%v", opts.NonoOpts, opts.ClaudeOpts)
+	if len(opts.ClaudeOpts) != 0 {
+		t.Errorf("ClaudeOpts = %v, want empty", opts.ClaudeOpts)
+	}
+}
+
+func TestParseArgs_ProfileRejected(t *testing.T) {
+	_, _, err := ParseArgs([]string{"--profile", "nono.jsonc"}, "default.toml")
+	if err == nil || !strings.Contains(err.Error(), "sandbox.host") {
+		t.Fatalf("expected --profile rejection pointing to [sandbox.host], got %v", err)
+	}
+}
+
+func TestParseArgs_UnknownNonoOptRejected(t *testing.T) {
+	_, _, err := ParseArgs([]string{"--allow", "/repo"}, "default.toml")
+	if err == nil {
+		t.Fatal("expected error for a pre-'--' nono option, got nil")
 	}
 }
 

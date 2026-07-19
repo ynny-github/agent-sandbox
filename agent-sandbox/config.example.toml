@@ -24,7 +24,9 @@ drop = [
 build_context = "./docker/sandbox"   # required: path to Docker build context
 dockerfile = "Dockerfile"            # required: Dockerfile name within build_context
 image = "myapp"                      # required: image name (actual tag: agent-sandbox/<image>)
-external_network = "default"         # optional: join this network from the workdir project
+# external_network = "default"       # opt-in: join the project's "<project>_<suffix>" compose
+                                     # network (e.g. "default" -> "<project>_default"). Unset =
+                                     # join no project network.
 env_passthrough = [
   # "AWS_PROFILE",
   # "HOME",

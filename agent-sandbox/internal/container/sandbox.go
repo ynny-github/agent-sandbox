@@ -49,10 +49,12 @@ func ProjectSandboxName(cwd string) string {
 
 // DetectProjectNetwork checks whether a Docker network named "<cwd-project>_<suffix>" exists.
 // Returns the full network name if found, "" otherwise.
-// If suffix is empty, "default" is used.
+// An empty suffix means "join no project network": it returns "" without
+// inspecting, so the sandbox attaches to a compose network only when one is
+// explicitly configured via sandbox.container.external_network.
 func DetectProjectNetwork(ctx context.Context, dockerCLI command.Cli, suffix string) string {
 	if suffix == "" {
-		suffix = "default"
+		return ""
 	}
 	cwd, err := os.Getwd()
 	if err != nil {

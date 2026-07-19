@@ -1,12 +1,23 @@
 package container_test
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/container"
 )
+
+// TestDetectProjectNetwork_EmptySuffixJoinsNothing verifies that an unspecified
+// external_network (empty suffix) joins no project compose network: it returns
+// "" without touching Docker (a nil client is safe because the empty case
+// returns before any client call).
+func TestDetectProjectNetwork_EmptySuffixJoinsNothing(t *testing.T) {
+	if got := container.DetectProjectNetwork(context.Background(), nil, ""); got != "" {
+		t.Errorf("empty suffix must yield no project network; got %q", got)
+	}
+}
 
 func TestProjectSandboxName_StableForSameCWD(t *testing.T) {
 	cwd := filepath.Join("tmp", "my project")

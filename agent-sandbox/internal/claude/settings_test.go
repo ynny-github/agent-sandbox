@@ -7,7 +7,7 @@ import (
 )
 
 func TestHookSettingsJSON(t *testing.T) {
-	got, err := settingsJSON("", "", true)
+	got, err := settingsJSON("", "", true, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestHookSettingsJSON(t *testing.T) {
 }
 
 func TestHookSettingsJSON_WithPolicyFile(t *testing.T) {
-	got, err := settingsJSON("/state/policy-1.json", "", true)
+	got, err := settingsJSON("/state/policy-1.json", "", true, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestHookSettingsJSON_WithPolicyFile(t *testing.T) {
 }
 
 func TestSettingsJSON_DenyRuleForMCPPath(t *testing.T) {
-	got, err := settingsJSON("", "/tmp/asb-mcp-1.json", false)
+	got, err := settingsJSON("", "/tmp/asb-mcp-1.json", false, nil)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestSettingsJSON_DenyRuleForMCPPath(t *testing.T) {
 }
 
 func TestSettingsJSON_HookAndDenyCombined(t *testing.T) {
-	got, err := settingsJSON("/state/p.json", "/tmp/asb-mcp-1.json", true)
+	got, err := settingsJSON("/state/p.json", "/tmp/asb-mcp-1.json", true, nil)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestSettingsJSON_HookAndDenyCombined(t *testing.T) {
 }
 
 func TestSettingsJSON_EmptyWhenNothing(t *testing.T) {
-	got, err := settingsJSON("", "", false)
+	got, err := settingsJSON("", "", false, nil)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -96,5 +96,37 @@ func TestSettingsJSON_EmptyWhenNothing(t *testing.T) {
 func TestDenyReadRule(t *testing.T) {
 	if r := denyReadRule("/tmp/x.json"); r != "Read(//tmp/x.json)" {
 		t.Errorf("denyReadRule = %q, want Read(//tmp/x.json)", r)
+	}
+}
+
+func TestSettingsJSON_DenyRulesFromCapabilities(t *testing.T) {
+	got, err := settingsJSON("", "", false, []string{"Read(~/.ssh/**)", "Grep(~/.ssh/**)"})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if !strings.Contains(got, `"deny"`) ||
+		!strings.Contains(got, "Read(~/.ssh/**)") ||
+		!strings.Contains(got, "Grep(~/.ssh/**)") {
+		t.Errorf("expected capability deny rules; got %q", got)
+	}
+}
+
+func TestSettingsJSON_MergesCapabilityAndMCPDeny(t *testing.T) {
+	got, err := settingsJSON("", "/tmp/asb-mcp-1.json", false, []string{"Read(~/.ssh/**)"})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if !strings.Contains(got, "Read(~/.ssh/**)") || !strings.Contains(got, "Read(//tmp/asb-mcp-1.json)") {
+		t.Errorf("expected both capability and mcp deny rules; got %q", got)
+	}
+}
+
+func TestSettingsJSON_EmptyWhenNoDenyNoHook(t *testing.T) {
+	got, err := settingsJSON("", "", false, nil)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if got != "" {
+		t.Errorf("expected empty settings; got %q", got)
 	}
 }

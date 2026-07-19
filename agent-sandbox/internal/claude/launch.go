@@ -108,7 +108,7 @@ func BuildArgs(cfg *config.Config, opts Options, snapshotPath, mcpConfigPath str
 	args = append(args, "claude")
 	args = append(args, "--append-system-prompt", agentconfig.Pointer())
 
-	settingsStr, err := settingsJSON(snapshotPath, mcpConfigPath, cfg.ToolMode == "hook")
+	settingsStr, err := settingsJSON(snapshotPath, mcpConfigPath, cfg.ToolMode == "hook", nil)
 	if err != nil {
 		return "", nil, err
 	}

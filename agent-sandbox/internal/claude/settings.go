@@ -19,11 +19,12 @@ func denyReadRule(absPath string) string {
 // settingsJSON builds the compact Claude Code settings JSON injected via
 // `claude --settings`. In hook mode it registers the PreToolUse hook for Bash
 // and Monitor (routing through `agent-sandbox hook`, adding --policy-file when
-// policyFile is non-empty). When mcpConfigPath is non-empty it adds a
-// permissions.deny rule so the agent cannot read the generated MCP config file
-// (which embeds the token). It returns "" when neither applies, signaling the
-// caller to inject no --settings flag.
-func settingsJSON(policyFile, mcpConfigPath string, hookMode bool) (string, error) {
+// policyFile is non-empty). denyRules (capability-derived permission deny
+// rules) are merged into permissions.deny alongside the MCP-config deny rule
+// added when mcpConfigPath is non-empty (which blocks reading the generated
+// MCP config file, since it embeds the token). It returns "" when nothing
+// applies, signaling the caller to inject no --settings flag.
+func settingsJSON(policyFile, mcpConfigPath string, hookMode bool, denyRules []string) (string, error) {
 	settings := map[string]any{}
 	if hookMode {
 		command := hookCommand
@@ -40,11 +41,15 @@ func settingsJSON(policyFile, mcpConfigPath string, hookMode bool) (string, erro
 			"PreToolUse": []any{entry("Bash"), entry("Monitor")},
 		}
 	}
+
+	deny := append([]string{}, denyRules...)
 	if mcpConfigPath != "" {
-		settings["permissions"] = map[string]any{
-			"deny": []string{denyReadRule(mcpConfigPath)},
-		}
+		deny = append(deny, denyReadRule(mcpConfigPath))
 	}
+	if len(deny) > 0 {
+		settings["permissions"] = map[string]any{"deny": deny}
+	}
+
 	if len(settings) == 0 {
 		return "", nil
 	}

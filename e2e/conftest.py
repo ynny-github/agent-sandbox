@@ -77,9 +77,6 @@ env_passthrough = []
 
 @pytest.fixture()
 def docker_config(tmp_path: Path, output_dir: Path) -> Path:
-    nono_output_dir = tmp_path / "nono-output"
-    nono_output_dir.mkdir()
-
     config = tmp_path / "agent-sandbox.toml"
     config.write_text(
         f"""
@@ -100,11 +97,6 @@ dockerfile = "Dockerfile"
 image = "e2e"
 external_network = ""
 env_passthrough = []
-
-[nono]
-config = {toml_string(REPO_ROOT / "nono.toml")}
-yolo_config = {toml_string(REPO_ROOT / "nono-yolo.toml")}
-output_dir = {toml_string(nono_output_dir)}
 """.strip()
         + "\n",
         encoding="utf-8",

@@ -4,6 +4,8 @@ tmp/
 # python
 .venv/
 .pytest_cache/
+__pycache__/
+*.pyc
 
 # javascript / typescript
 node_modules/

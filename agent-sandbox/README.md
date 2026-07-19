@@ -90,7 +90,8 @@ daemon unreachable or the build fails), Claude is not launched; run
 longer required.
 
 `agent-sandbox debug` accepts the same form and prints the resulting `nono`
-command without running it.
+command without running it, followed by the generated nono profile JSON and the
+GitHub MCP config JSON (with the token redacted) for inspection.
 
 Register as an MCP tool in your Claude Code settings.
 

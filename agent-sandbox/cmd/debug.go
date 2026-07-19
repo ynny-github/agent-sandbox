@@ -2,6 +2,8 @@
 package cmd
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -58,5 +60,45 @@ func runDebug(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	fmt.Println(strings.Join(nonoArgs, " "))
+
+	profileJSON, err := r.ProfileJSON()
+	if err != nil {
+		return err
+	}
+	mcpJSON, err := claude.RedactedGithubMCPConfigJSON()
+	if err != nil {
+		return err
+	}
+	fmt.Print(formatGeneratedConfigs(profilePath, profileJSON, cfg.Claude.GithubMCP.Enabled, mcpJSON))
 	return nil
+}
+
+// formatGeneratedConfigs renders the generated nono profile (no secrets) and
+// the token-redacted GitHub MCP config for display under the debug command, so
+// the exact files the launcher writes can be inspected without hunting for temp
+// files. The MCP token is always redacted — it never reaches the terminal.
+func formatGeneratedConfigs(profilePath string, profileJSON []byte, mcpEnabled bool, mcpJSON []byte) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "\n# generated nono profile (%s):\n", profilePath)
+	b.WriteString(indentJSON(profileJSON))
+	b.WriteString("\n")
+
+	state := "disabled"
+	if mcpEnabled {
+		state = "enabled"
+	}
+	fmt.Fprintf(&b, "\n# github mcp config (%s; token redacted):\n", state)
+	b.WriteString(indentJSON(mcpJSON))
+	b.WriteString("\n")
+	return b.String()
+}
+
+// indentJSON pretty-prints compact JSON; on any error it returns the input
+// unchanged so display never fails.
+func indentJSON(raw []byte) string {
+	var buf bytes.Buffer
+	if err := json.Indent(&buf, raw, "", "  "); err != nil {
+		return string(raw)
+	}
+	return buf.String()
 }

@@ -81,3 +81,10 @@ func writeGithubMCPConfig(cfg *config.Config) (string, func(), error) {
 	}
 	return path, cleanup, nil
 }
+
+// RedactedGithubMCPConfigJSON renders the GitHub MCP config the launcher would
+// generate, with the token replaced by a placeholder. It is for display (e.g.
+// `agent-sandbox debug`) so the real PAT never reaches the terminal or logs.
+func RedactedGithubMCPConfigJSON() ([]byte, error) {
+	return githubMCPConfigJSON("***redacted***")
+}

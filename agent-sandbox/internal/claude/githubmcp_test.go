@@ -4,10 +4,32 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 )
+
+func TestRedactedGithubMCPConfigJSON_RedactsToken(t *testing.T) {
+	data, err := RedactedGithubMCPConfigJSON()
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if strings.Contains(string(data), "ghp_") {
+		t.Errorf("redacted config must not contain a token; got %s", data)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("not valid JSON: %v", err)
+	}
+	env := m["mcpServers"].(map[string]any)["github"].(map[string]any)["env"].(map[string]any)
+	if env["GITHUB_PERSONAL_ACCESS_TOKEN"] != "***redacted***" {
+		t.Errorf("token = %v, want ***redacted***", env["GITHUB_PERSONAL_ACCESS_TOKEN"])
+	}
+	if env["GITHUB_TOOLSETS"] != "pull_requests,issues,repos" {
+		t.Errorf("toolsets = %v", env["GITHUB_TOOLSETS"])
+	}
+}
 
 func TestGithubMCPConfigJSON_EmbedsToken(t *testing.T) {
 	data, err := githubMCPConfigJSON("ghp_tok")

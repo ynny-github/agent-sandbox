@@ -15,8 +15,13 @@ import (
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/gitutil"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/policysnapshot"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandboxhost"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandboxlifecycle"
 )
+
+// agentName identifies the launched agent for host-policy resolution. Only
+// "claude" exists today; new agents pass their own identifier.
+const agentName = "claude"
 
 // Options is the split invocation for the claude launcher: options passed
 // through to `nono wrap` and options passed through to `claude`.
@@ -79,17 +84,19 @@ func ValidatePassthrough(claudeOpts []string, githubMCPEnabled bool) error {
 }
 
 // BuildArgs constructs the nono executable path and the argv used to launch
-// Claude under the sandbox for cfg. In hook mode it grants read-only access to
-// the frozen policy snapshot at snapshotPath and injects the PreToolUse hook
-// via `claude --settings`, routing it through that snapshot; otherwise it
-// disables the Bash and Monitor tools.
-func BuildArgs(cfg *config.Config, opts Options, snapshotPath, mcpConfigPath string) (string, []string, error) {
+// Claude under the sandbox for cfg. It injects the generated profile at
+// profilePath via `--profile` (no user nono options are forwarded) and, in
+// hook mode, grants read-only access to the frozen policy snapshot at
+// snapshotPath and injects the PreToolUse hook via `claude --settings`,
+// routing it through that snapshot; otherwise it disables the Bash and
+// Monitor tools. denyRules are folded into the injected settings as
+// additional capability denies.
+func BuildArgs(cfg *config.Config, opts Options, snapshotPath, mcpConfigPath, profilePath string, denyRules []string) (string, []string, error) {
 	nonoPath, err := exec.LookPath("nono")
 	if err != nil {
 		return "", nil, fmt.Errorf("nono not found in PATH: %w", err)
 	}
 	args := []string{"nono", "wrap"}
-	args = append(args, opts.NonoOpts...)
 
 	cwd, cwdErr := os.Getwd()
 	if cwdErr == nil {
@@ -104,11 +111,14 @@ func BuildArgs(cfg *config.Config, opts Options, snapshotPath, mcpConfigPath str
 	if mcpConfigPath != "" {
 		args = append(args, "--read-file", mcpConfigPath)
 	}
+	if profilePath != "" {
+		args = append(args, "--profile", profilePath)
+	}
 
 	args = append(args, "claude")
 	args = append(args, "--append-system-prompt", agentconfig.Pointer())
 
-	settingsStr, err := settingsJSON(snapshotPath, mcpConfigPath, cfg.ToolMode == "hook", nil)
+	settingsStr, err := settingsJSON(snapshotPath, mcpConfigPath, cfg.ToolMode == "hook", denyRules)
 	if err != nil {
 		return "", nil, err
 	}
@@ -139,6 +149,7 @@ type sandboxHandle interface {
 type runDeps struct {
 	writeSnapshot  func(*config.Config) (string, func(), error)
 	writeMCPConfig func(*config.Config) (string, func(), error)
+	writeProfile   func(*config.Config) (path string, deny []string, cleanup func(), err error)
 	ensureUp       func(context.Context, *config.Config) (sandboxHandle, error)
 	supervise      func(path string, args []string) int
 	exit           func(code int)
@@ -151,6 +162,17 @@ func Run(cfg *config.Config, opts Options) error {
 	return run(cfg, opts, runDeps{
 		writeSnapshot:  policysnapshot.Write,
 		writeMCPConfig: writeGithubMCPConfig,
+		writeProfile: func(c *config.Config) (string, []string, func(), error) {
+			r, err := sandboxhost.Resolve(c, agentName)
+			if err != nil {
+				return "", nil, nil, err
+			}
+			path, cleanup, err := r.WriteProfile()
+			if err != nil {
+				return "", nil, nil, err
+			}
+			return path, r.DenyRules, cleanup, nil
+		},
 		ensureUp: func(ctx context.Context, c *config.Config) (sandboxHandle, error) {
 			return sandboxlifecycle.EnsureUp(ctx, c)
 		},
@@ -195,7 +217,17 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 		}
 	}()
 
-	nonoPath, nonoArgs, err := BuildArgs(cfg, opts, snapshotPath, mcpConfigPath)
+	profilePath, denyRules, cleanupProfile, err := d.writeProfile(cfg)
+	if err != nil {
+		return fmt.Errorf("sandbox host profile: %w", err)
+	}
+	defer func() {
+		if cleanupProfile != nil {
+			cleanupProfile()
+		}
+	}()
+
+	nonoPath, nonoArgs, err := BuildArgs(cfg, opts, snapshotPath, mcpConfigPath, profilePath, denyRules)
 	if err != nil {
 		return err
 	}
@@ -224,6 +256,10 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 	if cleanupMCP != nil {
 		cleanupMCP()
 		cleanupMCP = nil
+	}
+	if cleanupProfile != nil {
+		cleanupProfile()
+		cleanupProfile = nil
 	}
 	d.exit(code)
 	return nil

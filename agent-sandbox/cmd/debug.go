@@ -9,6 +9,7 @@ import (
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/claude"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/policysnapshot"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandboxhost"
 )
 
 var debugCmd = &cobra.Command{
@@ -39,7 +40,17 @@ func runDebug(cmd *cobra.Command, args []string) error {
 		snapshotPath = path
 	}
 
-	_, nonoArgs, err := claude.BuildArgs(cfg, opts, snapshotPath, "")
+	r, err := sandboxhost.Resolve(cfg, "claude")
+	if err != nil {
+		return err
+	}
+	profilePath, cleanupProfile, err := r.WriteProfile()
+	if err != nil {
+		return err
+	}
+	defer cleanupProfile()
+
+	_, nonoArgs, err := claude.BuildArgs(cfg, opts, snapshotPath, "", profilePath, r.DenyRules)
 	if err != nil {
 		return err
 	}

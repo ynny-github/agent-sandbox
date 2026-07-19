@@ -54,7 +54,7 @@ func TestValidatePassthrough_MCPConfigAllowedWhenDisabled(t *testing.T) {
 func TestBuildArgs_NonoNotInPath(t *testing.T) {
 	t.Setenv("PATH", "")
 	cfg := &config.Config{}
-	if _, _, err := BuildArgs(cfg, Options{}, "", ""); err == nil {
+	if _, _, err := BuildArgs(cfg, Options{}, "", "", "", nil); err == nil {
 		t.Fatal("expected error when nono not in PATH, got nil")
 	}
 }
@@ -91,7 +91,7 @@ func argsIndex(args []string, target string) int {
 func TestBuildArgs_AlwaysUsesWrap(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{}
-	_, args, err := BuildArgs(cfg, Options{}, "", "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "", "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestBuildArgs_AlwaysUsesWrap(t *testing.T) {
 func TestBuildArgs_McpMode_DisablesTools(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{}, "", "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "", "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestBuildArgs_McpMode_DisablesTools(t *testing.T) {
 func TestBuildArgs_HookMode_InjectsSettings(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "hook"}
-	_, args, err := BuildArgs(cfg, Options{}, "/state/policy-1.json", "")
+	_, args, err := BuildArgs(cfg, Options{}, "/state/policy-1.json", "", "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestBuildArgs_HookMode_InjectsSettings(t *testing.T) {
 func TestBuildArgs_McpMode_NoReadFile(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{}, "", "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "", "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -165,10 +165,10 @@ func TestBuildArgs_McpMode_NoReadFile(t *testing.T) {
 	}
 }
 
-func TestBuildArgs_NonoOptsBeforeClaude(t *testing.T) {
+func TestBuildArgs_InjectsProfileBeforeClaude(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{NonoOpts: []string{"--profile", "nono.jsonc"}}, "", "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "", "/tmp/asb-profile-1.json", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -177,15 +177,28 @@ func TestBuildArgs_NonoOptsBeforeClaude(t *testing.T) {
 	if pi < 0 || ci < 0 || pi > ci {
 		t.Errorf("--profile must appear before claude; got %v", args)
 	}
-	if args[pi+1] != "nono.jsonc" {
+	if args[pi+1] != "/tmp/asb-profile-1.json" {
 		t.Errorf("--profile value misplaced; got %v", args)
+	}
+}
+
+func TestBuildArgs_InjectsCapabilityDeny(t *testing.T) {
+	makeFakeNono(t)
+	cfg := &config.Config{ToolMode: "mcp"}
+	_, args, err := BuildArgs(cfg, Options{}, "", "", "/tmp/p.json", []string{"Read(~/.ssh/**)"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	si := argsIndex(args, "--settings")
+	if si < 0 || !strings.Contains(args[si+1], "Read(~/.ssh/**)") {
+		t.Errorf("expected --settings with capability deny rule; got %v", args)
 	}
 }
 
 func TestBuildArgs_ClaudeOptsAfterClaude(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{ClaudeOpts: []string{"--model", "opus"}}, "", "")
+	_, args, err := BuildArgs(cfg, Options{ClaudeOpts: []string{"--model", "opus"}}, "", "", "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -202,7 +215,7 @@ func TestBuildArgs_ClaudeOptsAfterClaude(t *testing.T) {
 func TestBuildArgs_InjectsSystemPrompt(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{}, "", "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "", "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -221,7 +234,7 @@ func TestBuildArgs_InjectsSystemPrompt(t *testing.T) {
 func TestBuildArgs_InjectsMCPConfig(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{}, "", "/tmp/asb-mcp-1.json")
+	_, args, err := BuildArgs(cfg, Options{}, "", "/tmp/asb-mcp-1.json", "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -247,7 +260,7 @@ func TestBuildArgs_InjectsMCPConfig(t *testing.T) {
 func TestBuildArgs_HookMode_MCPConfig_DenyAndHooks(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "hook"}
-	_, args, err := BuildArgs(cfg, Options{}, "/state/p.json", "/tmp/asb-mcp-1.json")
+	_, args, err := BuildArgs(cfg, Options{}, "/state/p.json", "/tmp/asb-mcp-1.json", "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -264,7 +277,7 @@ func TestBuildArgs_HookMode_MCPConfig_DenyAndHooks(t *testing.T) {
 func TestBuildArgs_NoMCPConfig_Unchanged(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{}, "", "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "", "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -357,6 +370,9 @@ func TestRun_EnsureUpFailure_DoesNotLaunch(t *testing.T) {
 	superviseCalls := 0
 	exitCalls := 0
 	err := run(&config.Config{ToolMode: "mcp"}, Options{}, runDeps{
+		writeProfile: func(*config.Config) (string, []string, func(), error) {
+			return "/tmp/asb-profile-1.json", nil, func() {}, nil
+		},
 		ensureUp: func(context.Context, *config.Config) (sandboxHandle, error) {
 			return nil, errors.New("docker daemon error")
 		},
@@ -379,6 +395,9 @@ func TestRun_StartedByUs_CallsDown(t *testing.T) {
 	h := &fakeHandle{started: true}
 	gotExit := -1
 	err := run(&config.Config{ToolMode: "mcp"}, Options{}, runDeps{
+		writeProfile: func(*config.Config) (string, []string, func(), error) {
+			return "/tmp/asb-profile-1.json", nil, func() {}, nil
+		},
 		ensureUp:  func(context.Context, *config.Config) (sandboxHandle, error) { return h, nil },
 		supervise: func(string, []string) int { return 3 },
 		exit:      func(code int) { gotExit = code },
@@ -401,6 +420,9 @@ func TestRun_NotStartedByUs_SkipsDown(t *testing.T) {
 	makeFakeNono(t)
 	h := &fakeHandle{started: false}
 	err := run(&config.Config{ToolMode: "mcp"}, Options{}, runDeps{
+		writeProfile: func(*config.Config) (string, []string, func(), error) {
+			return "/tmp/asb-profile-1.json", nil, func() {}, nil
+		},
 		ensureUp:  func(context.Context, *config.Config) (sandboxHandle, error) { return h, nil },
 		supervise: func(string, []string) int { return 0 },
 		exit:      func(int) {},
@@ -418,6 +440,9 @@ func TestRun_DownError_StillPropagatesExitCode(t *testing.T) {
 	h := &fakeHandle{started: true, downErr: errors.New("down failed")}
 	gotExit := -1
 	err := run(&config.Config{ToolMode: "mcp"}, Options{}, runDeps{
+		writeProfile: func(*config.Config) (string, []string, func(), error) {
+			return "/tmp/asb-profile-1.json", nil, func() {}, nil
+		},
 		ensureUp:  func(context.Context, *config.Config) (sandboxHandle, error) { return h, nil },
 		supervise: func(string, []string) int { return 5 },
 		exit:      func(code int) { gotExit = code },
@@ -441,6 +466,9 @@ func TestRun_HookMode_WritesAndCleansSnapshot(t *testing.T) {
 		writeSnapshot: func(*config.Config) (string, func(), error) {
 			wrote++
 			return "/state/policy-1.json", func() { cleaned++ }, nil
+		},
+		writeProfile: func(*config.Config) (string, []string, func(), error) {
+			return "/tmp/asb-profile-1.json", nil, func() {}, nil
 		},
 		ensureUp:  func(context.Context, *config.Config) (sandboxHandle, error) { return h, nil },
 		supervise: func(string, []string) int { return 0 },
@@ -466,6 +494,9 @@ func TestRun_HookMode_CleansSnapshotBeforeExit(t *testing.T) {
 		writeSnapshot: func(*config.Config) (string, func(), error) {
 			return "/state/policy-1.json", func() { cleaned++ }, nil
 		},
+		writeProfile: func(*config.Config) (string, []string, func(), error) {
+			return "/tmp/asb-profile-1.json", nil, func() {}, nil
+		},
 		ensureUp:  func(context.Context, *config.Config) (sandboxHandle, error) { return h, nil },
 		supervise: func(string, []string) int { return 0 },
 		exit:      func(int) { cleanedBeforeExit = cleaned == 1 },
@@ -490,6 +521,9 @@ func TestRun_GithubMCPEnabled_WritesAndCleansConfig(t *testing.T) {
 			wrote++
 			return "/tmp/asb-mcp-1.json", func() { cleaned++ }, nil
 		},
+		writeProfile: func(*config.Config) (string, []string, func(), error) {
+			return "/tmp/asb-profile-1.json", nil, func() {}, nil
+		},
 		ensureUp:  func(context.Context, *config.Config) (sandboxHandle, error) { return h, nil },
 		supervise: func(string, []string) int { return 0 },
 		exit:      func(int) {},
@@ -511,9 +545,12 @@ func TestRun_GithubMCPDisabled_SkipsConfig(t *testing.T) {
 	h := &fakeHandle{started: false}
 	err := run(&config.Config{ToolMode: "mcp"}, Options{}, runDeps{
 		writeMCPConfig: func(*config.Config) (string, func(), error) { wrote++; return "", func() {}, nil },
-		ensureUp:       func(context.Context, *config.Config) (sandboxHandle, error) { return h, nil },
-		supervise:      func(string, []string) int { return 0 },
-		exit:           func(int) {},
+		writeProfile: func(*config.Config) (string, []string, func(), error) {
+			return "/tmp/asb-profile-1.json", nil, func() {}, nil
+		},
+		ensureUp:  func(context.Context, *config.Config) (sandboxHandle, error) { return h, nil },
+		supervise: func(string, []string) int { return 0 },
+		exit:      func(int) {},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

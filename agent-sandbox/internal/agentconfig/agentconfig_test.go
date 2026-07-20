@@ -62,8 +62,8 @@ func TestExplain_FilesystemSection(t *testing.T) {
 	cfg := &config.Config{ToolMode: "hook"}
 	got := agentconfig.Explain(cfg)
 	for _, want := range []string{
-		"## Filesystem: host vs container",
-		"/workspace",
+		"## Filesystem: host and container share the same paths",
+		"identity mount",
 		"HOME is `/tmp`",
 	} {
 		if !strings.Contains(got, want) {

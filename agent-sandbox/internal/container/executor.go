@@ -280,12 +280,15 @@ func (e *ContainerExecutor) createContainer(ctx context.Context) (string, error)
 		&dockercontainer.Config{
 			Image:      e.spec.ImageTag,
 			User:       fmt.Sprintf("%d:%d", e.spec.UID, e.spec.GID),
-			WorkingDir: "/workspace",
+			WorkingDir: e.spec.WorkingDir,
 			Env:        []string{"HOME=/tmp"},
 			Labels:     e.spec.Labels,
 		},
 		&dockercontainer.HostConfig{
-			Binds: []string{e.spec.WorkingDir + ":/workspace"},
+			// Identity mount: the project lives at the same absolute path inside
+			// the container as on the host, so paths the agent sees from
+			// container-routed shell commands are valid for host-side file tools.
+			Binds: []string{e.spec.WorkingDir + ":" + e.spec.WorkingDir},
 			Init:  &initTrue,
 		},
 		&dockernetwork.NetworkingConfig{

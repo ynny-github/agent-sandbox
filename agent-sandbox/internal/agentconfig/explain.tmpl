@@ -7,11 +7,11 @@
 - Command output is written to files; read the returned stdout/stderr paths.
 {{end}}- Allowed commands run on the host; all others run in an isolated container.
 
-## Filesystem: host vs container
-Host and container see the project at different paths, so the same absolute path does not mean the same place in both:
-- Host commands (the allow list below) run in the real project directory and use real host absolute paths.
-- Container commands run inside the sandbox, where that project directory is bind-mounted at `/workspace` (the working directory), and HOME is `/tmp`.
-- A host absolute path does not resolve inside the container, and vice versa. Refer to files by paths relative to the project root, or map them: host `<project-root>/foo` is container `/workspace/foo`.
+## Filesystem: host and container share the same paths
+The project directory is bind-mounted into the container at the same absolute path it has on the host (an identity mount), so a project path means the same file everywhere:
+- Host commands (the allow list below) run in the real project directory using real host absolute paths.
+- Container commands run inside the sandbox with the project mounted at that same path (the working directory); HOME is `/tmp`.
+- A project absolute path you see from a container command is equally valid for host-side file tools and host commands — no translation needed. Only paths outside the project (e.g. under HOME) differ between host and container.
 {{if .Safe}}
 ## Safe command wrappers
 Prefer these validated wrappers over running the tool directly; each refuses known-dangerous invocations before running:

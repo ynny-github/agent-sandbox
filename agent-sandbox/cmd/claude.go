@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/claude"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/envflag"
 )
 
 var claudeCmd = &cobra.Command{
@@ -27,6 +28,11 @@ func runClaude(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	envKeys, err := envflag.Load(opts.EnvRefs)
+	if err != nil {
+		return err
+	}
+
 	cfg, err := config.Load(configFile)
 	if err != nil {
 		return fmt.Errorf("config error: %w", err)
@@ -35,6 +41,11 @@ func runClaude(cmd *cobra.Command, args []string) error {
 	if err := claude.ValidatePassthrough(opts.ClaudeOpts, claude.GithubMCPEnabled()); err != nil {
 		return err
 	}
+
+	// Expose the --env keys to the sandboxed agent: nono forwards only vars
+	// listed in the profile's allow_vars, and the values are already in this
+	// process's env from envflag.Load above.
+	cfg.Sandbox.Host.AllowEnv = append(cfg.Sandbox.Host.AllowEnv, envKeys...)
 
 	return claude.Run(cfg, opts)
 }

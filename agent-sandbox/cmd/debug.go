@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/claude"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/envflag"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/policysnapshot"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandboxhost"
 )
@@ -30,10 +31,15 @@ func runDebug(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	envKeys, err := envflag.Load(opts.EnvRefs)
+	if err != nil {
+		return err
+	}
 	cfg, err := config.Load(configFile)
 	if err != nil {
 		return fmt.Errorf("config error: %w", err)
 	}
+	cfg.Sandbox.Host.AllowEnv = append(cfg.Sandbox.Host.AllowEnv, envKeys...)
 
 	var snapshotPath string
 	if cfg.ToolMode == "hook" {

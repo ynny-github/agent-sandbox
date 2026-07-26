@@ -452,61 +452,6 @@ func TestLoad_HookModeIgnoresCommandOutputDir(t *testing.T) {
 	}
 }
 
-func TestLoad_GithubMCP_Parsed(t *testing.T) {
-	p := writeToml(t, `
-tool_mode = "hook"
-[sandbox.container]
-build_context = "./docker/sandbox"
-dockerfile = "Dockerfile"
-image = "sandbox:0.1.0"
-[claude.github_mcp]
-enabled = true
-secret = "file:///home/x/tok"
-`)
-	cfg, err := config.Load(p)
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
-	if !cfg.Claude.GithubMCP.Enabled {
-		t.Error("Enabled = false, want true")
-	}
-	if cfg.Claude.GithubMCP.Secret != "file:///home/x/tok" {
-		t.Errorf("Secret = %q", cfg.Claude.GithubMCP.Secret)
-	}
-}
-
-func TestLoad_GithubMCP_DefaultsDisabled(t *testing.T) {
-	p := writeToml(t, `
-tool_mode = "hook"
-[sandbox.container]
-build_context = "./docker/sandbox"
-dockerfile = "Dockerfile"
-image = "sandbox:0.1.0"
-`)
-	cfg, err := config.Load(p)
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
-	if cfg.Claude.GithubMCP.Enabled {
-		t.Error("Enabled = true, want false when section absent")
-	}
-}
-
-func TestLoad_GithubMCP_EnabledRequiresSecret(t *testing.T) {
-	p := writeToml(t, `
-tool_mode = "hook"
-[sandbox.container]
-build_context = "./docker/sandbox"
-dockerfile = "Dockerfile"
-image = "sandbox:0.1.0"
-[claude.github_mcp]
-enabled = true
-`)
-	if _, err := config.Load(p); !errors.Is(err, config.ErrMissingGithubMCPSecret) {
-		t.Fatalf("err = %v, want ErrMissingGithubMCPSecret", err)
-	}
-}
-
 // writeUserToml points HOME at an isolated temp dir and writes a user-scope
 // config there, so config.Load discovers it at ~/.config/agent-sandbox/config.toml.
 func writeUserToml(t *testing.T, content string) {
@@ -591,35 +536,6 @@ drop = ["sudo *"]
 	}
 	if got := cfg.Sandbox.Container.EnvPassthrough; !slices.Equal(got, []string{"HOME", "AWS_PROFILE", "CI"}) {
 		t.Errorf("EnvPassthrough = %v, want [HOME AWS_PROFILE CI]", got)
-	}
-}
-
-func TestLoad_Compose_GithubMCP_SecretUserEnabledProject(t *testing.T) {
-	writeUserToml(t, `
-tool_mode = "hook"
-[sandbox.container]
-build_context = "./uc"
-dockerfile = "Dockerfile"
-image = "userimg"
-[claude.github_mcp]
-secret = "file:///home/x/tok"
-`)
-	project := writeToml(t, `
-tool_mode = "hook"
-[sandbox.container]
-image = "projimg"
-[claude.github_mcp]
-enabled = true
-`)
-	cfg, err := config.Load(project)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !cfg.Claude.GithubMCP.Enabled {
-		t.Error("Enabled = false, want true (from project)")
-	}
-	if cfg.Claude.GithubMCP.Secret != "file:///home/x/tok" {
-		t.Errorf("Secret = %q, want the user's secret", cfg.Claude.GithubMCP.Secret)
 	}
 }
 

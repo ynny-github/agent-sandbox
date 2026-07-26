@@ -13,21 +13,11 @@ import (
 type Config struct {
 	ToolMode string        `toml:"tool_mode"`
 	MCP      MCPConfig     `toml:"mcp"`
-	Claude   ClaudeConfig  `toml:"claude"`
 	Sandbox  SandboxConfig `toml:"sandbox"`
 }
 
 type MCPConfig struct {
 	CommandOutputDir string `toml:"command_output_dir"`
-}
-
-type ClaudeConfig struct {
-	GithubMCP GithubMCPConfig `toml:"github_mcp"`
-}
-
-type GithubMCPConfig struct {
-	Enabled bool   `toml:"enabled"`
-	Secret  string `toml:"secret"`
 }
 
 type SandboxConfig struct {
@@ -174,9 +164,6 @@ func validate(cfg *Config) (*Config, error) {
 	}
 	if strings.TrimSpace(cfg.Sandbox.Container.Image) == "" {
 		return nil, ErrMissingContainerImage
-	}
-	if cfg.Claude.GithubMCP.Enabled && strings.TrimSpace(cfg.Claude.GithubMCP.Secret) == "" {
-		return nil, ErrMissingGithubMCPSecret
 	}
 	return cfg, nil
 }

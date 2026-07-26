@@ -69,7 +69,7 @@ func runDebug(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Print(formatGeneratedConfigs(profilePath, profileJSON, cfg.Claude.GithubMCP.Enabled, mcpJSON))
+	fmt.Print(formatGeneratedConfigs(profilePath, profileJSON, claude.GithubMCPEnabled(), mcpJSON))
 	return nil
 }
 

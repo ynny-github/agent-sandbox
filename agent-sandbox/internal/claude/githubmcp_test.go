@@ -3,11 +3,8 @@ package claude
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 )
 
 func TestRedactedGithubMCPConfigJSON_RedactsToken(t *testing.T) {
@@ -58,19 +55,28 @@ func TestGithubMCPConfigJSON_EmbedsToken(t *testing.T) {
 	}
 }
 
-func TestWriteGithubMCPConfig_WritesTempAndCleans(t *testing.T) {
-	secretPath := filepath.Join(t.TempDir(), "tok")
-	if err := os.WriteFile(secretPath, []byte("ghp_from_file\n"), 0600); err != nil {
-		t.Fatal(err)
+func TestGithubMCPEnabled(t *testing.T) {
+	t.Setenv("GITHUB_MCP_TOKEN", "")
+	if GithubMCPEnabled() {
+		t.Error("want disabled when GITHUB_MCP_TOKEN empty")
 	}
-	cfg := &config.Config{}
-	cfg.Claude.GithubMCP.Enabled = true
-	cfg.Claude.GithubMCP.Secret = secretPath
+	t.Setenv("GITHUB_MCP_TOKEN", "  ")
+	if GithubMCPEnabled() {
+		t.Error("want disabled when GITHUB_MCP_TOKEN is whitespace")
+	}
+	t.Setenv("GITHUB_MCP_TOKEN", "ghp_x")
+	if !GithubMCPEnabled() {
+		t.Error("want enabled when GITHUB_MCP_TOKEN set")
+	}
+}
 
-	path, cleanup, err := writeGithubMCPConfig(cfg)
+func TestWriteGithubMCPConfig_UsesEnvToken(t *testing.T) {
+	t.Setenv("GITHUB_MCP_TOKEN", "ghp_from_env")
+	path, cleanup, err := writeGithubMCPConfig(nil)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
+	defer cleanup()
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("temp file not written: %v", err)
@@ -79,14 +85,13 @@ func TestWriteGithubMCPConfig_WritesTempAndCleans(t *testing.T) {
 		t.Errorf("mode = %v, want 0600", info.Mode().Perm())
 	}
 	data, _ := os.ReadFile(path)
-	if !json.Valid(data) {
-		t.Fatalf("temp file is not valid JSON")
-	}
 	var m map[string]any
-	json.Unmarshal(data, &m)
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("not valid JSON: %v", err)
+	}
 	env := m["mcpServers"].(map[string]any)["github"].(map[string]any)["env"].(map[string]any)
-	if env["GITHUB_PERSONAL_ACCESS_TOKEN"] != "ghp_from_file" {
-		t.Errorf("token in file = %v, want ghp_from_file", env["GITHUB_PERSONAL_ACCESS_TOKEN"])
+	if env["GITHUB_PERSONAL_ACCESS_TOKEN"] != "ghp_from_env" {
+		t.Errorf("token = %v, want ghp_from_env", env["GITHUB_PERSONAL_ACCESS_TOKEN"])
 	}
 	cleanup()
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -94,11 +99,9 @@ func TestWriteGithubMCPConfig_WritesTempAndCleans(t *testing.T) {
 	}
 }
 
-func TestWriteGithubMCPConfig_SecretMissing(t *testing.T) {
-	cfg := &config.Config{}
-	cfg.Claude.GithubMCP.Enabled = true
-	cfg.Claude.GithubMCP.Secret = filepath.Join(t.TempDir(), "nope")
-	if _, _, err := writeGithubMCPConfig(cfg); err == nil {
-		t.Fatal("expected error for missing secret file, got nil")
+func TestWriteGithubMCPConfig_MissingTokenErrors(t *testing.T) {
+	t.Setenv("GITHUB_MCP_TOKEN", "")
+	if _, _, err := writeGithubMCPConfig(nil); err == nil {
+		t.Fatal("expected error when GITHUB_MCP_TOKEN unset, got nil")
 	}
 }

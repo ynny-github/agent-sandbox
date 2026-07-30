@@ -27,6 +27,7 @@ const agentName = "claude"
 // agent-sandbox no longer forwards options to nono.
 type Options struct {
 	ClaudeOpts []string
+	EnvRefs    []string
 }
 
 // ParseArgs splits the raw args into the config-file path and the claude
@@ -59,6 +60,13 @@ func ParseArgs(args []string, defaultConfig string) (string, Options, error) {
 			}
 		case strings.HasPrefix(a, "--config="):
 			configFile = strings.TrimPrefix(a, "--config=")
+		case a == "--env":
+			if i+1 < len(pre) {
+				opts.EnvRefs = append(opts.EnvRefs, pre[i+1])
+				i++
+			}
+		case strings.HasPrefix(a, "--env="):
+			opts.EnvRefs = append(opts.EnvRefs, strings.TrimPrefix(a, "--env="))
 		case a == "--profile" || a == "-p" || strings.HasPrefix(a, "--profile="):
 			return "", Options{}, fmt.Errorf("--profile is no longer accepted; configure the sandbox profile in [sandbox.host] of agent-sandbox.toml")
 		default:

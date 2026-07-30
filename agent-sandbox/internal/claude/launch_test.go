@@ -5,11 +5,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/agentconfig"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandboxhost"
 )
 
 func TestValidatePassthrough_SettingsBlocked(t *testing.T) {
@@ -336,6 +338,41 @@ func TestParseArgs_UnknownNonoOptRejected(t *testing.T) {
 	_, _, err := ParseArgs([]string{"--allow", "/repo"}, "default.toml")
 	if err == nil {
 		t.Fatal("expected error for a pre-'--' nono option, got nil")
+	}
+}
+
+func TestParseArgs_EnvRefs(t *testing.T) {
+	cfgFile, opts, err := ParseArgs(
+		[]string{"--config", "custom.toml", "--env", "file:.env", "--env=file:b.env", "--", "--print"},
+		"default.toml")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if cfgFile != "custom.toml" {
+		t.Errorf("cfgFile = %q, want custom.toml", cfgFile)
+	}
+	wantEnv := []string{"file:.env", "file:b.env"}
+	if !reflect.DeepEqual(opts.EnvRefs, wantEnv) {
+		t.Errorf("EnvRefs = %v, want %v", opts.EnvRefs, wantEnv)
+	}
+	if !reflect.DeepEqual(opts.ClaudeOpts, []string{"--print"}) {
+		t.Errorf("ClaudeOpts = %v, want [--print]", opts.ClaudeOpts)
+	}
+}
+
+func TestEnvKeys_ReachProfileAllowVars(t *testing.T) {
+	cfg := &config.Config{ToolMode: "hook"}
+	cfg.Sandbox.Host.AllowEnv = append(cfg.Sandbox.Host.AllowEnv, "MY_SECRET_KEY")
+	r, err := sandboxhost.Resolve(cfg, "claude")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	data, err := r.ProfileJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "MY_SECRET_KEY") {
+		t.Errorf("profile allow_vars missing MY_SECRET_KEY: %s", data)
 	}
 }
 

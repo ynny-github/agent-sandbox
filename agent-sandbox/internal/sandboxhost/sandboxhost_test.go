@@ -92,9 +92,19 @@ func TestResolve_BaselineOnlyWhenEmpty(t *testing.T) {
 }
 
 func TestResolve_UnknownCapability(t *testing.T) {
-	_, err := Resolve(hostCfg(config.HostConfig{Capabilities: []string{"rust"}}), "claude")
-	if err == nil || !strings.Contains(err.Error(), "rust") {
-		t.Fatalf("expected unknown-capability error naming rust, got %v", err)
+	_, err := Resolve(hostCfg(config.HostConfig{Capabilities: []string{"java"}}), "claude")
+	if err == nil || !strings.Contains(err.Error(), "java") {
+		t.Fatalf("expected unknown-capability error naming java, got %v", err)
+	}
+}
+
+func TestResolve_RuntimeGroups(t *testing.T) {
+	m := profileMap(t, resolve(t, config.HostConfig{
+		Capabilities: []string{"node", "rust"},
+	}, "claude"))
+	groups := m["groups"].(map[string]any)["include"].([]any)
+	if !reflect.DeepEqual(groups, []any{"node_runtime", "rust_runtime"}) {
+		t.Errorf("groups = %v, want [node_runtime rust_runtime]", groups)
 	}
 }
 

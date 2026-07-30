@@ -151,8 +151,9 @@ agent-sandbox claude --env file:.secrets.env -- --model opus
 
 `sandbox.host` in `agent-sandbox.toml` controls the host-side access granted
 to the sandboxed agent; it is translated into the nono profile generated at
-launch. `capabilities` are named bundles — `go`, `python`, `docker`, `ssh`,
-`mise`, `taskgate` — each expanding to the directories, files, and env vars
+launch. `capabilities` are named bundles — `go`, `python`, `node`, `rust`,
+`docker`, `ssh`, `mise`, `taskgate` — each expanding to the directories, files,
+and env vars
 that capability needs. Raw grants (`allow`, `read`, `allow_file`, `read_file`,
 `allow_env`) cover anything not already covered by a capability. The common
 `PATH`/`HOME`/... env vars and `/dev/null` are always granted from a built-in

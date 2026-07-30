@@ -16,6 +16,8 @@ type capability struct {
 var catalog = map[string]capability{
 	"go":     {groups: []string{"go_runtime"}},
 	"python": {groups: []string{"python_runtime"}},
+	"node":   {groups: []string{"node_runtime"}},
+	"rust":   {groups: []string{"rust_runtime"}},
 	"docker": {
 		read:   []string{"~/.docker", "~/.orbstack"},
 		bypass: []string{"~/.docker"},

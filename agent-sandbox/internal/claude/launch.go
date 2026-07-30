@@ -78,7 +78,7 @@ func ValidatePassthrough(claudeOpts []string, githubMCPEnabled bool) error {
 		}
 		if githubMCPEnabled &&
 			(strings.HasPrefix(arg, "--mcp-config") || strings.HasPrefix(arg, "--strict-mcp-config")) {
-			return fmt.Errorf("%s is not allowed when [claude.github_mcp] is enabled", arg)
+			return fmt.Errorf("%s is not allowed when the GitHub MCP is enabled (GITHUB_MCP_TOKEN set)", arg)
 		}
 	}
 	return nil
@@ -204,7 +204,7 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 
 	var mcpConfigPath string
 	var cleanupMCP func()
-	if cfg.Claude.GithubMCP.Enabled {
+	if GithubMCPEnabled() {
 		path, cleanup, err := d.writeMCPConfig(cfg)
 		if err != nil {
 			return fmt.Errorf("github mcp config: %w", err)

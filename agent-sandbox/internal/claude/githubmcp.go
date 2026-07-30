@@ -4,15 +4,27 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/secret"
 )
+
+// GithubMCPTokenEnv is the environment variable that both enables the GitHub MCP
+// server (by being non-empty) and supplies its token. It is mapped to the
+// github-mcp-server's expected GITHUB_PERSONAL_ACCESS_TOKEN in the generated
+// config. Supply it via --env or the ambient host environment.
+const GithubMCPTokenEnv = "GITHUB_MCP_TOKEN"
 
 const (
 	githubMCPImage    = "ghcr.io/github/github-mcp-server"
 	githubMCPToolsets = "pull_requests,issues,repos,projects"
 )
+
+// GithubMCPEnabled reports whether the GitHub MCP server should be configured:
+// true iff GITHUB_MCP_TOKEN holds a non-empty (trimmed) value.
+func GithubMCPEnabled() bool {
+	return strings.TrimSpace(os.Getenv(GithubMCPTokenEnv)) != ""
+}
 
 // githubMCPWriteDenyRules are the mutating tools of the github MCP `repos`
 // toolset, blocked via Claude's permissions.deny so the agent cannot write to
@@ -57,18 +69,15 @@ func githubMCPConfigJSON(token string) ([]byte, error) {
 	return data, nil
 }
 
-// writeGithubMCPConfig loads the token from cfg's secret reference, renders the
-// GitHub MCP config JSON, and writes it to a 0600 temp file. It returns the
-// absolute temp-file path and a cleanup func that removes it; callers must call
-// cleanup when Claude exits. It assumes cfg.Claude.GithubMCP.Enabled is true.
-func writeGithubMCPConfig(cfg *config.Config) (string, func(), error) {
-	src, err := secret.Resolve(cfg.Claude.GithubMCP.Secret)
-	if err != nil {
-		return "", nil, err
-	}
-	token, err := src.Load()
-	if err != nil {
-		return "", nil, err
+// writeGithubMCPConfig reads the token from GITHUB_MCP_TOKEN, renders the GitHub
+// MCP config JSON, and writes it to a 0600 temp file. It returns the absolute
+// path and a cleanup func. Callers invoke it only when GithubMCPEnabled() is
+// true; it still errors defensively if the token is empty. The *config.Config
+// param is retained for the launcher's dependency signature but unused.
+func writeGithubMCPConfig(_ *config.Config) (string, func(), error) {
+	token := strings.TrimSpace(os.Getenv(GithubMCPTokenEnv))
+	if token == "" {
+		return "", nil, fmt.Errorf("github mcp: %s is not set", GithubMCPTokenEnv)
 	}
 	data, err := githubMCPConfigJSON(token)
 	if err != nil {

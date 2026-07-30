@@ -498,11 +498,10 @@ func TestRun_HookMode_CleansSnapshotBeforeExit(t *testing.T) {
 
 func TestRun_GithubMCPEnabled_WritesAndCleansConfig(t *testing.T) {
 	makeFakeNono(t)
+	t.Setenv("GITHUB_MCP_TOKEN", "ghp_x")
 	wrote, cleaned := 0, 0
 	h := &fakeHandle{started: false}
 	cfg := &config.Config{ToolMode: "mcp"}
-	cfg.Claude.GithubMCP.Enabled = true
-	cfg.Claude.GithubMCP.Secret = "file:///unused/in/fake"
 	err := run(cfg, Options{}, runDeps{
 		writeMCPConfig: func(*config.Config) (string, func(), error) {
 			wrote++
@@ -528,6 +527,7 @@ func TestRun_GithubMCPEnabled_WritesAndCleansConfig(t *testing.T) {
 
 func TestRun_GithubMCPDisabled_SkipsConfig(t *testing.T) {
 	makeFakeNono(t)
+	t.Setenv("GITHUB_MCP_TOKEN", "")
 	wrote := 0
 	h := &fakeHandle{started: false}
 	err := run(&config.Config{ToolMode: "mcp"}, Options{}, runDeps{

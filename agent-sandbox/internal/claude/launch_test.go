@@ -14,6 +14,16 @@ import (
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandboxhost"
 )
 
+// TestMain clears GITHUB_MCP_TOKEN so the package's tests are hermetic: run()
+// gates the github MCP path on GithubMCPEnabled(), which reads this variable,
+// and an ambient token would otherwise drive tests that don't inject a
+// writeMCPConfig dep into that path. Tests exercising the MCP path set the
+// variable explicitly with t.Setenv.
+func TestMain(m *testing.M) {
+	os.Unsetenv("GITHUB_MCP_TOKEN")
+	os.Exit(m.Run())
+}
+
 func TestValidatePassthrough_SettingsBlocked(t *testing.T) {
 	if err := ValidatePassthrough([]string{"--settings", "foo.json"}, false); err == nil {
 		t.Fatal("expected error for --settings, got nil")

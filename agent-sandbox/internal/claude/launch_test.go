@@ -40,7 +40,7 @@ func TestValidatePassthrough_Empty(t *testing.T) {
 
 func TestValidatePassthrough_MCPConfigBlockedWhenEnabled(t *testing.T) {
 	if err := ValidatePassthrough([]string{"--mcp-config", "x.json"}, true); err == nil {
-		t.Fatal("expected error for --mcp-config when github_mcp enabled, got nil")
+		t.Fatal("expected error for --mcp-config when github mcp enabled (GITHUB_MCP_TOKEN set), got nil")
 	}
 	if err := ValidatePassthrough([]string{"--strict-mcp-config"}, true); err == nil {
 		t.Fatal("expected error for --strict-mcp-config when enabled, got nil")
@@ -49,7 +49,7 @@ func TestValidatePassthrough_MCPConfigBlockedWhenEnabled(t *testing.T) {
 
 func TestValidatePassthrough_MCPConfigAllowedWhenDisabled(t *testing.T) {
 	if err := ValidatePassthrough([]string{"--mcp-config", "x.json"}, false); err != nil {
-		t.Fatalf("unexpected error when github_mcp disabled: %v", err)
+		t.Fatalf("unexpected error when github mcp disabled (GITHUB_MCP_TOKEN unset): %v", err)
 	}
 }
 

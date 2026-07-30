@@ -114,6 +114,39 @@ router:
   needed and nothing is written to `.claude/settings.json`. `agent-sandbox` must
   be on `PATH`.
 
+### Environment variables (`--env`)
+
+`--env` is a global flag that loads variables from an env file into the
+process before it launches Claude or runs a command. It is repeatable and uses a
+scheme-based reference; only the `file:` source exists today:
+
+```bash
+agent-sandbox claude --env file:.env -- --model opus
+agent-sandbox exec --env file:.env -- go test ./...
+```
+
+The file is a minimal dotenv subset: `KEY=VALUE` per line, `#` comments and
+blank lines ignored, an optional `export ` prefix stripped, and surrounding
+quotes removed. There is no variable interpolation. Values **override** any
+same-named host environment variable; with multiple `--env` files, later files
+win.
+
+For `agent-sandbox claude`, the loaded keys are also added to the sandbox
+profile's allowed env vars, so the sandboxed Claude process — and, in hook mode,
+the commands it runs through `agent-sandbox exec` — can read them.
+
+### GitHub MCP
+
+The built-in GitHub MCP server is enabled when the `GITHUB_MCP_TOKEN`
+environment variable is non-empty; otherwise it is not configured. Supply it via
+`--env` or the ambient environment. Its value is passed to the MCP server as
+`GITHUB_PERSONAL_ACCESS_TOKEN`.
+
+```bash
+agent-sandbox claude --env file:.secrets.env -- --model opus
+# where .secrets.env contains: GITHUB_MCP_TOKEN=ghp_...
+```
+
 ### `[sandbox.host]`
 
 `sandbox.host` in `agent-sandbox.toml` controls the host-side access granted

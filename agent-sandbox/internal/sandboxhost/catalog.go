@@ -6,6 +6,7 @@ package sandboxhost
 type capability struct {
 	groups    []string
 	read      []string
+	readFile  []string
 	bypass    []string
 	allowFile []string
 	allowVars []string
@@ -37,6 +38,15 @@ var catalog = map[string]capability{
 		allowVars: []string{"MISE*", "__MISE*"},
 	},
 	"taskgate": {read: []string{"~/.local/state/taskgate"}},
+	"bashrc": {
+		readFile: []string{"~/.bashrc", "/etc/bashrc", "/etc/bash.bashrc"},
+		bypass:   []string{"~/.bashrc"},
+		deny: []string{
+			"Read(~/.bashrc)", "Glob(~/.bashrc)", "Grep(~/.bashrc)",
+			"Read(/etc/bashrc)", "Glob(/etc/bashrc)", "Grep(/etc/bashrc)",
+			"Read(/etc/bash.bashrc)", "Glob(/etc/bash.bashrc)", "Grep(/etc/bash.bashrc)",
+		},
+	},
 }
 
 // agentBase maps a launch agent to its nono base profile and profile name.

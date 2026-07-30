@@ -139,6 +139,27 @@ func TestResolve_RawGrantsMergeNoBypass(t *testing.T) {
 	}
 }
 
+func TestResolve_BashrcCapability(t *testing.T) {
+	r := resolve(t, config.HostConfig{Capabilities: []string{"bashrc"}}, "claude")
+
+	fs := profileMap(t, r)["filesystem"].(map[string]any)
+	if !reflect.DeepEqual(fs["read_file"], []any{"/etc/bash.bashrc", "/etc/bashrc", "~/.bashrc"}) {
+		t.Errorf("read_file = %v", fs["read_file"])
+	}
+	if !reflect.DeepEqual(fs["bypass_protection"], []any{"~/.bashrc"}) {
+		t.Errorf("bypass_protection = %v", fs["bypass_protection"])
+	}
+
+	want := []string{
+		"Glob(/etc/bash.bashrc)", "Glob(/etc/bashrc)", "Glob(~/.bashrc)",
+		"Grep(/etc/bash.bashrc)", "Grep(/etc/bashrc)", "Grep(~/.bashrc)",
+		"Read(/etc/bash.bashrc)", "Read(/etc/bashrc)", "Read(~/.bashrc)",
+	}
+	if !reflect.DeepEqual(r.DenyRules, want) {
+		t.Errorf("DenyRules = %v\nwant %v", r.DenyRules, want)
+	}
+}
+
 func hostCfg(h config.HostConfig) *config.Config {
 	cfg := &config.Config{}
 	cfg.Sandbox.Host = h

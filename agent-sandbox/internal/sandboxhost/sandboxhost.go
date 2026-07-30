@@ -74,6 +74,7 @@ func Resolve(cfg *config.Config, agent string) (*Resolved, error) {
 		}
 		groups = append(groups, c.groups...)
 		read = append(read, c.read...)
+		readFile = append(readFile, c.readFile...)
 		bypass = append(bypass, c.bypass...)
 		allowFile = append(allowFile, c.allowFile...)
 		allowVars = append(allowVars, c.allowVars...)

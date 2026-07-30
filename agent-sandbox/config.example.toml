@@ -33,7 +33,7 @@ env_passthrough = [
 ]
 
 [sandbox.host]
-# Named capability bundles (go, python, node, rust, docker, ssh, mise, taskgate).
+# Named capability bundles (go, python, node, rust, docker, ssh, mise, taskgate, bashrc).
 capabilities = ["go", "python"]
 # Raw host grants for anything not covered by a capability (optional):
 # allow      = []   # read+write host directories

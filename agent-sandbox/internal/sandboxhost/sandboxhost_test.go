@@ -66,10 +66,7 @@ func TestResolve_DenyRulesFromCapabilities(t *testing.T) {
 	r := resolve(t, config.HostConfig{Capabilities: []string{"ssh", "docker"}}, "claude")
 	want := []string{
 		"Edit(~/.ssh/known_hosts)",
-		"Glob(~/.docker/**)", "Glob(~/.ssh/**)",
-		"Grep(~/.docker/**)", "Grep(~/.ssh/**)",
 		"Read(~/.docker/**)", "Read(~/.ssh/**)",
-		"Write(~/.ssh/known_hosts)",
 	}
 	if !reflect.DeepEqual(r.DenyRules, want) {
 		t.Errorf("DenyRules = %v\nwant %v", r.DenyRules, want)
@@ -151,8 +148,6 @@ func TestResolve_BashrcCapability(t *testing.T) {
 	}
 
 	want := []string{
-		"Glob(/etc/bash.bashrc)", "Glob(/etc/bashrc)", "Glob(~/.bashrc)",
-		"Grep(/etc/bash.bashrc)", "Grep(/etc/bashrc)", "Grep(~/.bashrc)",
 		"Read(/etc/bash.bashrc)", "Read(/etc/bashrc)", "Read(~/.bashrc)",
 	}
 	if !reflect.DeepEqual(r.DenyRules, want) {

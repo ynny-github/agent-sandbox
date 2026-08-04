@@ -22,15 +22,15 @@ var catalog = map[string]capability{
 	"docker": {
 		read:   []string{"~/.docker", "~/.orbstack"},
 		bypass: []string{"~/.docker"},
-		deny:   []string{"Read(~/.docker/**)", "Glob(~/.docker/**)", "Grep(~/.docker/**)"},
+		deny:   []string{"Read(~/.docker/**)"},
 	},
 	"ssh": {
 		read:      []string{"~/.ssh"},
 		bypass:    []string{"~/.ssh"},
 		allowFile: []string{"~/.ssh/known_hosts"},
 		deny: []string{
-			"Read(~/.ssh/**)", "Glob(~/.ssh/**)", "Grep(~/.ssh/**)",
-			"Write(~/.ssh/known_hosts)", "Edit(~/.ssh/known_hosts)",
+			"Read(~/.ssh/**)",
+			"Edit(~/.ssh/known_hosts)",
 		},
 	},
 	"mise": {
@@ -42,9 +42,9 @@ var catalog = map[string]capability{
 		readFile: []string{"~/.bashrc", "/etc/bashrc", "/etc/bash.bashrc"},
 		bypass:   []string{"~/.bashrc"},
 		deny: []string{
-			"Read(~/.bashrc)", "Glob(~/.bashrc)", "Grep(~/.bashrc)",
-			"Read(/etc/bashrc)", "Glob(/etc/bashrc)", "Grep(/etc/bashrc)",
-			"Read(/etc/bash.bashrc)", "Glob(/etc/bash.bashrc)", "Grep(/etc/bash.bashrc)",
+			"Read(~/.bashrc)",
+			"Read(/etc/bashrc)",
+			"Read(/etc/bash.bashrc)",
 		},
 	},
 }

@@ -34,7 +34,7 @@ var catalog = map[string]capability{
 		},
 	},
 	"mise": {
-		read:      []string{"~/.local/share/mise"},
+		read:      []string{"~/.local/share/mise", "~/.config/mise"},
 		allowVars: []string{"MISE*", "__MISE*"},
 	},
 	"taskgate": {read: []string{"~/.local/state/taskgate"}},

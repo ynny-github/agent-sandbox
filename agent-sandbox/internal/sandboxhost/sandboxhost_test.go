@@ -47,8 +47,8 @@ func TestResolve_Parity(t *testing.T) {
 		"groups":  map[string]any{"include": []any{"go_runtime", "python_runtime"}},
 		"filesystem": map[string]any{
 			"read": []any{
-				"~/.docker", "~/.local/share/mise", "~/.local/state/taskgate",
-				"~/.orbstack", "~/.ssh",
+				"~/.config/mise", "~/.docker", "~/.local/share/mise",
+				"~/.local/state/taskgate", "~/.orbstack", "~/.ssh",
 			},
 			"allow_file":        []any{"/dev/null", "~/.ssh/known_hosts"},
 			"bypass_protection": []any{"~/.docker", "~/.ssh"},

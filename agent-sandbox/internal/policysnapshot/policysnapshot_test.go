@@ -13,7 +13,10 @@ func TestWriteLoad_RoundTrip(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	cfg := &config.Config{ToolMode: "hook"}
 	cfg.Sandbox.Command.Allow = []string{"git *"}
-	cfg.Sandbox.Command.Drop = []string{"git push -f*"}
+	cfg.Sandbox.Command.Drop = []config.DropRule{
+		{Pattern: "git push -f*"},
+		{Pattern: "gh *", Message: "gh is disabled"},
+	}
 	cfg.Sandbox.Network.AllowExternal = true
 	cfg.Sandbox.Container.Image = "sandbox:0.1.0"
 	cfg.Sandbox.Container.EnvPassthrough = []string{"CI"}

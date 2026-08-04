@@ -15,9 +15,11 @@ allow = [
   "make *",
   "npm run *",
 ]
+# Each drop entry is a { pattern, message } table; message is optional and, when
+# omitted, a default "dropped: command matches drop pattern ..." line is printed.
 drop = [
-  # "rm -rf *",
-  # "sudo *",
+  # { pattern = "rm -rf *" },
+  # { pattern = "gh *", message = "gh is disabled; use the GitHub MCP tools." },
 ]
 
 [sandbox.container]

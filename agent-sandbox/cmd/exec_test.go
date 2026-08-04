@@ -28,7 +28,7 @@ func TestRunExecCore_HostSuccess(t *testing.T) {
 
 func TestRunExecCore_DropPattern(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.Sandbox.Command.Drop = []string{"rm -rf *"}
+	cfg.Sandbox.Command.Drop = []config.DropRule{{Pattern: "rm -rf *"}}
 
 	var out, errBuf bytes.Buffer
 	code := runExecCore(context.Background(), cfg, "rm -rf /tmp/x", &out, &errBuf)
@@ -36,6 +36,23 @@ func TestRunExecCore_DropPattern(t *testing.T) {
 		t.Errorf("exit code = %d, want 1", code)
 	}
 	want := "dropped: command matches drop pattern \"rm -rf *\"\n"
+	if errBuf.String() != want {
+		t.Errorf("stderr = %q, want %q", errBuf.String(), want)
+	}
+}
+
+func TestRunExecCore_DropPattern_CustomMessage(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Sandbox.Command.Drop = []config.DropRule{
+		{Pattern: "gh *", Message: "gh is disabled; use the GitHub MCP tools."},
+	}
+
+	var out, errBuf bytes.Buffer
+	code := runExecCore(context.Background(), cfg, "gh pr view 42", &out, &errBuf)
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	want := "gh is disabled; use the GitHub MCP tools.\n"
 	if errBuf.String() != want {
 		t.Errorf("stderr = %q, want %q", errBuf.String(), want)
 	}

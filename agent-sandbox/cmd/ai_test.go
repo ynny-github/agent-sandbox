@@ -32,7 +32,7 @@ image = "sandbox:0.1.0"
 
 [sandbox.command]
 allow = ["git *", "go *"]
-drop = ["git push --force*"]
+drop = [{ pattern = "git push --force*" }]
 `)
 	orig := configPath
 	configPath = cfgPath

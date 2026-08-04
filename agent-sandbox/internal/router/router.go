@@ -10,7 +10,7 @@ import (
 // Config holds routing patterns and the optional container runner.
 type Config struct {
 	AllowPatterns           []string
-	DropPatterns            []string
+	DropRules               []DropRule
 	ContainerEnvPassthrough []string
 	ContainerRunner         ContainerRunner // nil allowed (host/drop-only lines)
 }
@@ -36,7 +36,7 @@ func (s *Router) Run(ctx context.Context, command string, stdout, stderr io.Writ
 	return Run(ctx, Request{
 		Command:                 command,
 		AllowPatterns:           s.cfg.AllowPatterns,
-		DropPatterns:            s.cfg.DropPatterns,
+		DropRules:               s.cfg.DropRules,
 		ContainerRunner:         s.cfg.ContainerRunner,
 		ContainerEnvPassthrough: s.cfg.ContainerEnvPassthrough,
 		Stdout:                  stdout,
@@ -64,7 +64,7 @@ func (s *Router) NeedsContainer(command string) (bool, error) {
 	}
 	for _, pl := range line.Pipelines {
 		for _, seg := range pl.Segments {
-			if decision, _ := Route(strings.TrimSpace(seg.Raw), s.cfg.AllowPatterns, s.cfg.DropPatterns); decision == "container" {
+			if decision, _, _ := Route(strings.TrimSpace(seg.Raw), s.cfg.AllowPatterns, s.cfg.DropRules); decision == "container" {
 				return true, nil
 			}
 		}

@@ -30,7 +30,7 @@ func TestAllowPatterns_DoesNotMutateConfig(t *testing.T) {
 
 func TestAllowPatterns_RoutesAiExplainToHost(t *testing.T) {
 	cfg := &config.Config{}
-	decision, _ := router.Route("agent-sandbox ai explain", allowPatterns(cfg), cfg.Sandbox.Command.Drop)
+	decision, _, _ := router.Route("agent-sandbox ai explain", allowPatterns(cfg), dropRules(cfg))
 	if decision != "host" {
 		t.Errorf("agent-sandbox ai explain routed to %q, want host", decision)
 	}
@@ -50,14 +50,14 @@ func TestAllowPatterns_IncludesBuiltinSafeSelfAllow(t *testing.T) {
 
 func TestAllowPatterns_RoutesSafeWrappersToHost(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.Sandbox.Command.Drop = []string{"git push --force*"}
+	cfg.Sandbox.Command.Drop = []config.DropRule{{Pattern: "git push --force*"}}
 
 	for _, cmd := range []string{
 		"agent-sandbox safe git status",
 		"agent-sandbox safe docker compose ps",
 		"agent-sandbox safe git push --force",
 	} {
-		decision, _ := router.Route(cmd, allowPatterns(cfg), cfg.Sandbox.Command.Drop)
+		decision, _, _ := router.Route(cmd, allowPatterns(cfg), dropRules(cfg))
 		if decision != "host" {
 			t.Errorf("%q routed to %q, want host", cmd, decision)
 		}

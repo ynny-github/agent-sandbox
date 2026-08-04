@@ -77,7 +77,7 @@ func commandFromArgs(cmd *cobra.Command, args []string) string {
 func runExecCore(ctx context.Context, cfg *config.Config, command string, stdout, stderr io.Writer) int {
 	s := router.New(router.Config{
 		AllowPatterns:           allowPatterns(cfg),
-		DropPatterns:            cfg.Sandbox.Command.Drop,
+		DropRules:               dropRules(cfg),
 		ContainerEnvPassthrough: cfg.Sandbox.Container.EnvPassthrough,
 	})
 
@@ -95,7 +95,7 @@ func runExecCore(ctx context.Context, cfg *config.Config, command string, stdout
 		defer cleanup()
 		s = router.New(router.Config{
 			AllowPatterns:           allowPatterns(cfg),
-			DropPatterns:            cfg.Sandbox.Command.Drop,
+			DropRules:               dropRules(cfg),
 			ContainerEnvPassthrough: cfg.Sandbox.Container.EnvPassthrough,
 			ContainerRunner:         runner,
 		})

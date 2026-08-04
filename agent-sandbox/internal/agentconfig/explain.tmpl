@@ -23,7 +23,7 @@ Prefer these validated wrappers over running the tool directly; each refuses kno
 {{end}}
 ## Refused commands (drop)
 These run on neither host nor container:
-{{range .Drop}}- {{.}}
+{{range .Drop}}- {{.Pattern}}{{if .Message}} — {{.Message}}{{end}}
 {{else}}- (none)
 {{end}}
 ## Sandbox container

@@ -189,11 +189,21 @@ fixed and built-in.
 
 ## How It Works
 
-- Commands matching a drop pattern are **refused** — neither the host nor the container runs them; the MCP response carries exit code 1 and a stderr file containing `dropped: command matches drop pattern "<pattern>"`.
 - Commands matching an allow pattern are executed on the **host** (after shell-safety validation).
+- Commands matching a drop pattern are **refused** — neither the host nor the container runs them; the response carries exit code 1 and a stderr line. Each drop entry is a `{ pattern, message }` table; when `message` is set it is printed on refusal, otherwise the default `dropped: command matches drop pattern "<pattern>"` line is used.
 - All other commands are routed to the configured **Docker Compose service**.
-- Drop wins over allow.
+- Allow wins over drop: a command matching both an allow and a drop pattern runs on the host.
 - Output is always written to separate stdout/stderr files; the MCP response returns file paths and exit code only.
+
+`sandbox.command.drop` example:
+
+```toml
+[sandbox.command]
+drop = [
+  { pattern = "git *" },
+  { pattern = "gh *", message = "gh is disabled in this sandbox. Use the GitHub MCP server's tools instead." },
+]
+```
 
 ## Migrating from an older config
 

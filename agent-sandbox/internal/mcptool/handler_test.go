@@ -433,8 +433,8 @@ func TestRunCommand_WithoutTimeout_RunsNaturally(t *testing.T) {
 func TestRunCommand_DropPattern_WritesStderrAndExits1(t *testing.T) {
 	dir := t.TempDir()
 	cfg := mcptool.HandlerConfig{
-		OutputDir:    dir,
-		DropPatterns: []string{"rm -rf *"},
+		OutputDir: dir,
+		DropRules: []mcptool.DropRule{{Pattern: "rm -rf *"}},
 	}
 	session := setupServerWithConfig(t, cfg)
 
@@ -478,7 +478,7 @@ func TestRunCommand_DropPattern_DoesNotCallContainerRunner(t *testing.T) {
 	runner := &mockRunner{exitCode: 0, stdout: "container ran\n", stderr: "container err\n"}
 	cfg := mcptool.HandlerConfig{
 		OutputDir:       dir,
-		DropPatterns:    []string{"rm -rf *"},
+		DropRules:       []mcptool.DropRule{{Pattern: "rm -rf *"}},
 		ContainerRunner: runner,
 	}
 	session := setupServerWithConfig(t, cfg)

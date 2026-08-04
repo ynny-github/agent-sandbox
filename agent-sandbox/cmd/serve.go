@@ -37,7 +37,7 @@ func newCommandRouterServer(cfg *config.Config, deps serveDependencies) *mcp.Ser
 	mcptool.Register(server, mcptool.HandlerConfig{
 		OutputDir:               cfg.MCP.CommandOutputDir,
 		AllowPatterns:           allowPatterns(cfg),
-		DropPatterns:            cfg.Sandbox.Command.Drop,
+		DropRules:               dropRules(cfg),
 		ContainerRunner:         deps.containerRunner,
 		ContainerEnvPassthrough: cfg.Sandbox.Container.EnvPassthrough,
 	})

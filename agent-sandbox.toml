@@ -2,16 +2,6 @@
   # the PreToolUse hook (see .claude/settings.json) into `agent-sandbox exec`.
   tool_mode = "hook"
 
-  [mcp]
-  command_output_dir = "./tmp/agent-sandbox/command-router"
-
-  # Built-in GitHub MCP server for the launched Claude. When enabled,
-  # `agent-sandbox claude` generates a strict --mcp-config (token embedded from
-  # `secret`) and denies the agent from reading the generated file.
-  # [claude.github_mcp]
-  # enabled = true
-  # secret  = "file:///home/you/.config/agent-sandbox/gh-token"
-
   [sandbox.container]
   build_context = "./docker/sandbox"
   dockerfile = "Dockerfile"
@@ -19,82 +9,29 @@
 
   [sandbox.command]
   allow = [
-    "git *",
     "taskgate ai *",
     "go *"
   ]
 
-  # Patterns matched here are refused — neither the host nor the sandbox runs
-  # them. Use this to block destructive git invocations that the broader
-  # "git *" allow rule would otherwise permit.
+  # Bare git is refused everywhere (host and container) so that all git goes
+  # through the built-in `agent-sandbox safe git` wrapper, which rejects
+  # known-dangerous invocations (force push, hard reset, clean -f, --no-verify,
+  # config writes, ...). The wrapper itself is always host-allowed.
+  #
+  # gh is refused here (formerly a built-in rule) so the agent uses the GitHub
+  # MCP server's tools instead of the gh CLI. Each drop entry is a
+  # { pattern, message } table; message is optional and, when omitted, the
+  # default "dropped: command matches drop pattern ..." line is printed.
   drop = [
-    # Force push — rewrites remote history
-    "git push --force*",
-    "git push * --force*",
-    "git push -f*",
-    "git push * -f *",
-    "git push * -f",
-    "git push --delete *",
-    "git push * --delete *",
-
-    # Hard reset — discards uncommitted/committed work
-    "git reset --hard*",
-    "git reset * --hard*",
-
-    # Force clean — removes untracked files/dirs
-    "git clean *-f*",
-    "git clean *--force*",
-
-    # Force branch delete
-    "git branch -D *",
-    "git branch * -D *",
-    "git branch --delete --force*",
-    "git branch * --delete --force*",
-
-    # History rewriting / ref surgery
-    "git filter-branch*",
-    "git filter-repo*",
-    "git update-ref -d*",
-    "git reflog expire*",
-    "git gc --prune=now*",
-    "git gc * --prune=now*",
-
-    # Hook / signature bypass (CLAUDE.md forbids these)
-    "git * --no-verify*",
-    "git * --no-gpg-sign*",
-
-    # Stash destruction
-    "git stash drop*",
-    "git stash clear*",
-
-    # Remote tampering
-    "git remote remove *",
-    "git remote rm *",
-    "git remote set-url *",
-
-    # Tag deletion
-    "git tag -d *",
-    "git tag --delete *",
-
-    # Discarding local changes wholesale
-    "git checkout -- *",
-    "git checkout .",
-    "git restore .",
-    "git restore --worktree *",
-
-    # Config mutation (CLAUDE.md: NEVER update git config); reads still allowed
-    "git config --global *",
-    "git config --system *",
-    "git config --add *",
-    "git config --unset*",
-    "git config --remove-*",
-    "git config --replace-all *"
+    { pattern = "git *" },
+    { pattern = "gh", message = "gh is disabled in this sandbox. Use the GitHub MCP server's tools instead." },
+    { pattern = "gh *", message = "gh is disabled in this sandbox. Use the GitHub MCP server's tools instead." },
   ]
 
   # Host-side access for the sandboxed agent (translated into the nono profile
   # generated at launch; nono.jsonc is no longer used). Capabilities are named
   # bundles (go/python -> runtime groups; docker/ssh -> credential reads + the
-  # matching agent read-block; mise/taskgate -> tool state). Raw grants
-  # (allow/read/allow_file/read_file/allow_env) cover anything not bundled.
+  # matching agent read-block; mise/taskgate -> tool state).
+  # Raw grants (allow/read/allow_file/read_file/allow_env) cover anything not bundled.
   [sandbox.host]
-  capabilities = ["go", "python", "docker", "ssh", "mise", "taskgate"]
+  capabilities = ["go", "python", "docker", "ssh", "mise", "taskgate", "bashrc"]

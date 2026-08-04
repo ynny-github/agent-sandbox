@@ -13,10 +13,14 @@ import (
 // existing callers (serve.go, tests) keep their import.
 type ContainerRunner = router.ContainerRunner
 
+// DropRule is the router's drop rule (pattern + optional message), re-exported
+// so callers can build a HandlerConfig without importing router directly.
+type DropRule = router.DropRule
+
 type HandlerConfig struct {
 	OutputDir               string
 	AllowPatterns           []string
-	DropPatterns            []string
+	DropRules               []DropRule
 	ContainerRunner         ContainerRunner
 	ContainerEnvPassthrough []string
 }
@@ -29,7 +33,7 @@ func HandleRunCommand(ctx context.Context, cmd string, cfg HandlerConfig) (*mcp.
 
 	exitCode, runErr := router.New(router.Config{
 		AllowPatterns:           cfg.AllowPatterns,
-		DropPatterns:            cfg.DropPatterns,
+		DropRules:               cfg.DropRules,
 		ContainerRunner:         cfg.ContainerRunner,
 		ContainerEnvPassthrough: cfg.ContainerEnvPassthrough,
 	}).Run(ctx, cmd, files.Stdout, files.Stderr)

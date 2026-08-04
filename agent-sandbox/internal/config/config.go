@@ -32,8 +32,24 @@ type NetworkConfig struct {
 }
 
 type CommandConfig struct {
-	Allow []string `toml:"allow"`
-	Drop  []string `toml:"drop"`
+	Allow []string   `toml:"allow"`
+	Drop  []DropRule `toml:"drop"`
+}
+
+// DropRule is one drop pattern with an optional custom refusal message. Every
+// drop entry is written as a table so the shape is the same with or without a
+// message:
+//
+//	drop = [
+//	  { pattern = "git *" },
+//	  { pattern = "gh *", message = "gh is disabled" },
+//	]
+//
+// An omitted message leaves Message empty, and the router falls back to the
+// default `dropped: command matches drop pattern "<pattern>"` line.
+type DropRule struct {
+	Pattern string `toml:"pattern"`
+	Message string `toml:"message"`
 }
 
 type ContainerConfig struct {
@@ -69,7 +85,8 @@ func Load(path string) (*Config, error) {
 	//    decode reuses an existing slice's backing array in place when its cap is
 	//    large enough, so a plain header copy would be corrupted by the project
 	//    decode below.
-	var userAllow, userDrop, userEnv []string
+	var userAllow, userEnv []string
+	var userDrop []DropRule
 	var hostSnap hostLists
 	if up, err := userConfigPath(); err == nil {
 		if _, statErr := os.Stat(up); statErr == nil {
@@ -106,7 +123,7 @@ func Load(path string) (*Config, error) {
 	// 3. Union the list fields. When the project omits a list, cfg still holds the
 	//    user's, so the union de-dupes back to the user's list (no change).
 	cfg.Sandbox.Command.Allow = dedupUnion(userAllow, cfg.Sandbox.Command.Allow)
-	cfg.Sandbox.Command.Drop = dedupUnion(userDrop, cfg.Sandbox.Command.Drop)
+	cfg.Sandbox.Command.Drop = dedupUnionDrop(userDrop, cfg.Sandbox.Command.Drop)
 	cfg.Sandbox.Container.EnvPassthrough = dedupUnion(userEnv, cfg.Sandbox.Container.EnvPassthrough)
 	cfg.Sandbox.Host.Capabilities = dedupUnion(hostSnap.caps, cfg.Sandbox.Host.Capabilities)
 	cfg.Sandbox.Host.Allow = dedupUnion(hostSnap.allow, cfg.Sandbox.Host.Allow)
@@ -165,6 +182,11 @@ func validate(cfg *Config) (*Config, error) {
 	if strings.TrimSpace(cfg.Sandbox.Container.Image) == "" {
 		return nil, ErrMissingContainerImage
 	}
+	for _, r := range cfg.Sandbox.Command.Drop {
+		if strings.TrimSpace(r.Pattern) == "" {
+			return nil, ErrDropRuleMissingPattern
+		}
+	}
 	return cfg, nil
 }
 
@@ -190,6 +212,28 @@ func dedupUnion(a, b []string) []string {
 			}
 			seen[v] = struct{}{}
 			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// dedupUnionDrop is dedupUnion for drop rules, de-duplicating by pattern with
+// first-occurrence order (a's rules first). When a pattern appears in both a and
+// b, a's rule — including its message — wins, matching the user-first union used
+// for the other list fields.
+func dedupUnionDrop(a, b []DropRule) []DropRule {
+	if len(a) == 0 && len(b) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(a)+len(b))
+	out := make([]DropRule, 0, len(a)+len(b))
+	for _, list := range [][]DropRule{a, b} {
+		for _, r := range list {
+			if _, ok := seen[r.Pattern]; ok {
+				continue
+			}
+			seen[r.Pattern] = struct{}{}
+			out = append(out, r)
 		}
 	}
 	return out

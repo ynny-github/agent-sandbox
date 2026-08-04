@@ -18,7 +18,10 @@ func TestPointer_MentionsExplainCommand(t *testing.T) {
 func TestExplain_HookMode(t *testing.T) {
 	cfg := &config.Config{ToolMode: "hook"}
 	cfg.Sandbox.Command.Allow = []string{"git *"}
-	cfg.Sandbox.Command.Drop = []string{"git push --force*"}
+	cfg.Sandbox.Command.Drop = []config.DropRule{
+		{Pattern: "git push --force*"},
+		{Pattern: "gh *", Message: "gh is disabled; use the GitHub MCP tools."},
+	}
 	cfg.Sandbox.Container.Image = "sandbox:0.1.0"
 
 	got := agentconfig.Explain(cfg)
@@ -31,6 +34,7 @@ func TestExplain_HookMode(t *testing.T) {
 		"- git *",
 		"## Refused commands (drop)",
 		"- git push --force*",
+		"- gh * — gh is disabled; use the GitHub MCP tools.",
 		"sandbox:0.1.0",
 	} {
 		if !strings.Contains(got, want) {

@@ -39,7 +39,7 @@ type SafeCommand struct {
 type explainView struct {
 	Hook            bool
 	Allow           []string
-	Drop            []string
+	Drop            []config.DropRule
 	Safe            []SafeCommand
 	Image           string
 	NetworkExternal bool

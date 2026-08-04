@@ -39,7 +39,7 @@ type ContainerRunner interface {
 type Request struct {
 	Command                 string
 	AllowPatterns           []string
-	DropPatterns            []string
+	DropRules               []DropRule
 	ContainerRunner         ContainerRunner
 	ContainerEnvPassthrough []string
 	Stdout                  io.Writer
@@ -62,13 +62,9 @@ func Run(ctx context.Context, req Request) (int, error) {
 	}
 
 	// Fallback: $(), backtick, or lone & — must run whole line in a shell.
-	// The per-segment gh drop below is skipped on this path, so scan the raw
-	// line here too (fail closed) and refuse any gh invocation it embeds.
+	// Per-segment routing cannot reach the embedded command, so the whole line
+	// runs in the container.
 	if line.Fallback {
-		if containsGhCommand(req.Command) {
-			fmt.Fprintln(req.Stderr, ghDisabledMessage)
-			return 1, nil
-		}
 		return runContainerWhole(ctx, req, req.Command)
 	}
 
@@ -81,13 +77,13 @@ func Run(ctx context.Context, req Request) (int, error) {
 	plDecisions := make([][]routedSeg, len(line.Pipelines))
 	for i, pl := range line.Pipelines {
 		for _, seg := range pl.Segments {
-			if isGhInvocation(seg) {
-				fmt.Fprintln(req.Stderr, ghDisabledMessage)
-				return 1, nil
-			}
-			decision, matched := Route(strings.TrimSpace(seg.Raw), req.AllowPatterns, req.DropPatterns)
+			decision, matched, message := Route(strings.TrimSpace(seg.Raw), req.AllowPatterns, req.DropRules)
 			if decision == "drop" {
-				fmt.Fprintf(req.Stderr, "dropped: command matches drop pattern %q\n", matched)
+				if message != "" {
+					fmt.Fprintln(req.Stderr, message)
+				} else {
+					fmt.Fprintf(req.Stderr, "dropped: command matches drop pattern %q\n", matched)
+				}
 				return 1, nil
 			}
 			plDecisions[i] = append(plDecisions[i], routedSeg{seg: seg, decision: decision})

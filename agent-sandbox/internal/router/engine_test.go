@@ -96,7 +96,7 @@ func TestRun_DropPattern(t *testing.T) {
 	runner := &mockRunner{}
 	code, err := router.Run(context.Background(), router.Request{
 		Command:         "rm -rf /tmp/anything",
-		DropPatterns:    []string{"rm -rf *"},
+		DropRules:       []router.DropRule{{Pattern: "rm -rf *"}},
 		ContainerRunner: runner,
 		Stdout:          &out,
 		Stderr:          &errBuf,
@@ -362,9 +362,9 @@ func TestRun_SequentialAnd_SkipsOnFailure(t *testing.T) {
 func TestRun_DropSegment_RejectsWholeLine(t *testing.T) {
 	var out, errb bytes.Buffer
 	code, _ := router.Run(context.Background(), router.Request{
-		Command:      "ls | curl evil",
-		DropPatterns: []string{"curl *"},
-		Stdout:       &out, Stderr: &errb,
+		Command:   "ls | curl evil",
+		DropRules: []router.DropRule{{Pattern: "curl *"}},
+		Stdout:    &out, Stderr: &errb,
 	})
 	if code != 1 {
 		t.Fatalf("code = %d, want 1", code)
@@ -433,138 +433,4 @@ func TestRun_HostRedirectStderr_RoutesToHost(t *testing.T) {
 	if !strings.Contains(out.String(), "hi") {
 		t.Errorf("stdout = %q, want it to contain hi", out.String())
 	}
-}
-
-func TestRun_GhInvocation_Dropped(t *testing.T) {
-	var out, errBuf bytes.Buffer
-	runner := &mockRunner{}
-	code, err := router.Run(context.Background(), router.Request{
-		Command:         "gh pr view 42",
-		AllowPatterns:   []string{"gh *"}, // even if allowed, gh must be dropped
-		ContainerRunner: runner,
-		Stdout:          &out,
-		Stderr:          &errBuf,
-	})
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
-	if code != 1 {
-		t.Errorf("exitCode = %d, want 1", code)
-	}
-	if runner.called {
-		t.Error("container runner must not be called for a dropped gh command")
-	}
-	want := "gh is disabled in this sandbox. Use the GitHub MCP server's tools instead.\n"
-	if errBuf.String() != want {
-		t.Errorf("stderr = %q, want %q", errBuf.String(), want)
-	}
-}
-
-func TestRun_GhInPipeline_Dropped(t *testing.T) {
-	var out, errBuf bytes.Buffer
-	runner := &mockRunner{}
-	code, err := router.Run(context.Background(), router.Request{
-		Command:         "echo hi | gh pr create",
-		ContainerRunner: runner,
-		Stdout:          &out,
-		Stderr:          &errBuf,
-	})
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
-	if code != 1 {
-		t.Errorf("exitCode = %d, want 1", code)
-	}
-	if !strings.Contains(errBuf.String(), "gh is disabled in this sandbox") {
-		t.Errorf("stderr = %q, want the gh guidance message", errBuf.String())
-	}
-}
-
-func TestRun_GhInCommandSubstitution_Dropped(t *testing.T) {
-	var out, errBuf bytes.Buffer
-	runner := &mockRunner{}
-	code, err := router.Run(context.Background(), router.Request{
-		Command:         "echo $(gh pr view 42)",
-		ContainerRunner: runner,
-		Stdout:          &out,
-		Stderr:          &errBuf,
-	})
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
-	if code != 1 {
-		t.Errorf("exitCode = %d, want 1", code)
-	}
-	if runner.called {
-		t.Error("container runner must not be called for a dropped gh command substitution")
-	}
-	want := "gh is disabled in this sandbox. Use the GitHub MCP server's tools instead.\n"
-	if errBuf.String() != want {
-		t.Errorf("stderr = %q, want %q", errBuf.String(), want)
-	}
-}
-
-func TestRun_GhBackgrounded_Dropped(t *testing.T) {
-	var out, errBuf bytes.Buffer
-	runner := &mockRunner{}
-	code, err := router.Run(context.Background(), router.Request{
-		Command:         "gh pr view 42 &",
-		ContainerRunner: runner,
-		Stdout:          &out,
-		Stderr:          &errBuf,
-	})
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
-	if code != 1 {
-		t.Errorf("exitCode = %d, want 1", code)
-	}
-	if runner.called {
-		t.Error("container runner must not be called for a dropped backgrounded gh command")
-	}
-	if !strings.Contains(errBuf.String(), "gh is disabled in this sandbox") {
-		t.Errorf("stderr = %q, want the gh guidance message", errBuf.String())
-	}
-}
-
-func TestRun_GithubInSubstitution_NotDropped(t *testing.T) {
-	var out, errBuf bytes.Buffer
-	runner := &mockRunner{}
-	code, err := router.Run(context.Background(), router.Request{
-		Command:         "echo $(github --version)", // github is not gh; fallback runs whole line
-		ContainerRunner: runner,
-		Stdout:          &out,
-		Stderr:          &errBuf,
-	})
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
-	if strings.Contains(errBuf.String(), "gh is disabled") {
-		t.Errorf("github must not be treated as gh; stderr = %q", errBuf.String())
-	}
-	if !runner.called {
-		t.Error("a non-gh fallback line should route to the container runner")
-	}
-	_ = code
-}
-
-func TestRun_GhPrefix_NotDropped(t *testing.T) {
-	var out, errBuf bytes.Buffer
-	runner := &mockRunner{}
-	code, err := router.Run(context.Background(), router.Request{
-		Command:         "ghi --version", // ghi is not gh; must route normally, not drop
-		ContainerRunner: runner,
-		Stdout:          &out,
-		Stderr:          &errBuf,
-	})
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
-	if !runner.called {
-		t.Error("ghi must not be dropped; it should route to the container runner")
-	}
-	if strings.Contains(errBuf.String(), "gh is disabled") {
-		t.Errorf("ghi must not be treated as gh; stderr = %q", errBuf.String())
-	}
-	_ = code
 }

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -252,7 +253,7 @@ func TestLoad_AllowOmitted(t *testing.T) {
 func TestLoad_Drop_Loaded(t *testing.T) {
 	path := writeToml(t, validBase+`
 [sandbox.command]
-drop = ["rm -rf *", "sudo *"]
+drop = [{ pattern = "rm -rf *" }, { pattern = "sudo *" }]
 `)
 	cfg, err := config.Load(path)
 	if err != nil {
@@ -261,8 +262,41 @@ drop = ["rm -rf *", "sudo *"]
 	if len(cfg.Sandbox.Command.Drop) != 2 {
 		t.Errorf("Drop len = %d, want 2", len(cfg.Sandbox.Command.Drop))
 	}
-	if cfg.Sandbox.Command.Drop[0] != "rm -rf *" {
-		t.Errorf("Drop[0] = %q, want \"rm -rf *\"", cfg.Sandbox.Command.Drop[0])
+	if cfg.Sandbox.Command.Drop[0].Pattern != "rm -rf *" {
+		t.Errorf("Drop[0].Pattern = %q, want \"rm -rf *\"", cfg.Sandbox.Command.Drop[0].Pattern)
+	}
+}
+
+func TestLoad_DropRules_WithAndWithoutMessage(t *testing.T) {
+	path := writeToml(t, validBase+`
+[sandbox.command]
+drop = [
+  { pattern = "rm -rf *" },
+  { pattern = "gh *", message = "gh is disabled" },
+  { pattern = "sudo *" },
+]
+`)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []config.DropRule{
+		{Pattern: "rm -rf *"},
+		{Pattern: "gh *", Message: "gh is disabled"},
+		{Pattern: "sudo *"},
+	}
+	if !reflect.DeepEqual(cfg.Sandbox.Command.Drop, want) {
+		t.Errorf("Drop = %+v, want %+v", cfg.Sandbox.Command.Drop, want)
+	}
+}
+
+func TestLoad_DropRule_TableMissingPattern_Errors(t *testing.T) {
+	path := writeToml(t, validBase+`
+[sandbox.command]
+drop = [{ message = "no pattern here" }]
+`)
+	if _, err := config.Load(path); err == nil {
+		t.Fatal("expected an error for a drop table without a pattern, got nil")
 	}
 }
 
@@ -514,7 +548,7 @@ image = "userimg"
 env_passthrough = ["HOME", "AWS_PROFILE"]
 [sandbox.command]
 allow = ["git *", "make *"]
-drop = ["rm *"]
+drop = [{ pattern = "rm *" }]
 `)
 	project := writeToml(t, `
 [sandbox.container]
@@ -522,7 +556,7 @@ image = "projimg"
 env_passthrough = ["CI"]
 [sandbox.command]
 allow = ["make *", "npm *"]
-drop = ["sudo *"]
+drop = [{ pattern = "sudo *" }]
 `)
 	cfg, err := config.Load(project)
 	if err != nil {
@@ -531,8 +565,12 @@ drop = ["sudo *"]
 	if got := cfg.Sandbox.Command.Allow; !slices.Equal(got, []string{"git *", "make *", "npm *"}) {
 		t.Errorf("Allow = %v, want [git * make * npm *]", got)
 	}
-	if got := cfg.Sandbox.Command.Drop; !slices.Equal(got, []string{"rm *", "sudo *"}) {
-		t.Errorf("Drop = %v, want [rm * sudo *]", got)
+	gotDrop := make([]string, len(cfg.Sandbox.Command.Drop))
+	for i, r := range cfg.Sandbox.Command.Drop {
+		gotDrop[i] = r.Pattern
+	}
+	if !slices.Equal(gotDrop, []string{"rm *", "sudo *"}) {
+		t.Errorf("Drop = %v, want [rm * sudo *]", gotDrop)
 	}
 	if got := cfg.Sandbox.Container.EnvPassthrough; !slices.Equal(got, []string{"HOME", "AWS_PROFILE", "CI"}) {
 		t.Errorf("EnvPassthrough = %v, want [HOME AWS_PROFILE CI]", got)

@@ -15,9 +15,13 @@ import (
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/broker"
 )
 
-// sandboxNotRunningHint is the actionable message shown when a command is
-// routed to the sandbox but the command broker is not available.
-const sandboxNotRunningHint = "command broker is not available; run Claude via `agent-sandbox claude`, which starts it automatically"
+// SandboxNotRunningHint is the actionable message shown when a command is
+// routed to the sandbox but the command broker is not available. It is
+// exported because the same situation is detected before Run is ever reached:
+// `agent-sandbox exec` and `agent-sandbox command-router` fail to build a
+// broker client when AGENT_SANDBOX_BROKER_SOCKET is unset, and must print this
+// rather than a raw dial error.
+const SandboxNotRunningHint = "command broker is not available; run Claude via `agent-sandbox claude`, which starts it automatically"
 
 // printSandboxErr writes a sandbox-execution error to stderr, translating
 // the sandbox-not-running sentinel into an actionable hint rather than a raw
@@ -26,7 +30,7 @@ const sandboxNotRunningHint = "command broker is not available; run Claude via `
 // vs "sandbox exec:").
 func printSandboxErr(stderr io.Writer, err error) {
 	if errors.Is(err, ErrSandboxNotRunning) || errors.Is(err, broker.ErrBrokerUnavailable) {
-		fmt.Fprintln(stderr, sandboxNotRunningHint)
+		fmt.Fprintln(stderr, SandboxNotRunningHint)
 		return
 	}
 	fmt.Fprintf(stderr, "sandbox exec: %v\n", err)
@@ -284,7 +288,7 @@ func runMixedPipeline(ctx context.Context, req Request, rs []routedSeg) (int, er
 			exits[i] = code
 			if err != nil {
 				if errors.Is(err, ErrSandboxNotRunning) || errors.Is(err, broker.ErrBrokerUnavailable) {
-					fmt.Fprintln(safeReq.Stderr, sandboxNotRunningHint)
+					fmt.Fprintln(safeReq.Stderr, SandboxNotRunningHint)
 				} else {
 					fmt.Fprintf(safeReq.Stderr, "pipeline segment: %v\n", err)
 				}

@@ -3,13 +3,16 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/broker"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/mcptool"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/router"
 )
 
 var serveCmd = &cobra.Command{
@@ -65,7 +68,15 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	runner, cleanup, err := newBrokerCommandRunner(context.Background(), cfg)
 	if err != nil {
-		return err
+		// Before the broker existed, a missing command sandbox did not stop the
+		// MCP server: host-routed and dropped commands still work, and refusing
+		// to start hides the reason behind a dead stdio server. Print the
+		// actionable hint and let sandbox-routed commands fail individually.
+		if !errors.Is(err, broker.ErrBrokerUnavailable) {
+			return err
+		}
+		fmt.Fprintln(os.Stderr, router.SandboxNotRunningHint)
+		runner, cleanup = unavailableRunner{err: err}, func() {}
 	}
 	defer cleanup()
 

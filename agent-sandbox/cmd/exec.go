@@ -2,12 +2,14 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/broker"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/policysnapshot"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/router"
@@ -89,7 +91,14 @@ func runExecCore(ctx context.Context, cfg *config.Config, command string, stdout
 	if needs {
 		runner, cleanup, rerr := newBrokerCommandRunner(ctx, cfg)
 		if rerr != nil {
-			fmt.Fprintf(stderr, "command broker setup: %v\n", rerr)
+			// The overwhelmingly common cause is running `agent-sandbox exec`
+			// outside a `claude` session, so the socket variable is unset. Print
+			// the actionable hint instead of the raw dial/lookup error.
+			if errors.Is(rerr, broker.ErrBrokerUnavailable) {
+				fmt.Fprintln(stderr, router.SandboxNotRunningHint)
+			} else {
+				fmt.Fprintf(stderr, "command broker setup: %v\n", rerr)
+			}
 			return 1
 		}
 		defer cleanup()

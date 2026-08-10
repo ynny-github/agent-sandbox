@@ -49,6 +49,18 @@ var catalog = map[string]capability{
 	},
 }
 
+// credentialCapabilities expose host credentials. They are granted to the
+// launched agent but never to the per-command sandbox: commands need
+// toolchains, not keys.
+var credentialCapabilities = map[string]bool{
+	"docker": true,
+	"ssh":    true,
+}
+
+// commandNetworkProfile is the nono network profile every brokered command
+// runs under. Fixed by design; not configurable.
+const commandNetworkProfile = "developer"
+
 // agentBase maps a launch agent to its nono base profile and profile name.
 type agentBase struct {
 	extends  string

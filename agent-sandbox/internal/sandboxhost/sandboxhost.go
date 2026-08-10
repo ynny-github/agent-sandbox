@@ -29,6 +29,12 @@ type nonoProfile struct {
 	Groups      *profileGroups     `json:"groups,omitempty"`
 	Filesystem  profileFilesystem  `json:"filesystem"`
 	Environment profileEnvironment `json:"environment"`
+	Network     *profileNetwork    `json:"network,omitempty"`
+}
+
+type profileNetwork struct {
+	NetworkProfile string   `json:"network_profile,omitempty"`
+	AllowDomain    []string `json:"allow_domain,omitempty"`
 }
 
 type profileMeta struct {
@@ -112,6 +118,59 @@ func Resolve(cfg *config.Config, agent string) (*Resolved, error) {
 			Environment: profileEnvironment{AllowVars: sortDedup(allowVars)},
 		},
 		DenyRules: sortDedup(deny),
+	}
+	if g := sortDedup(groups); len(g) > 0 {
+		r.profile.Groups = &profileGroups{Include: g}
+	}
+	return r, nil
+}
+
+// ResolveCommand builds the profile for a single brokered command: the working
+// directory read+write, the non-credential capabilities from cfg.Sandbox.Host,
+// the env allowlist from cfg.Sandbox.Command.EnvPassthrough, and the fixed
+// developer network profile plus cfg.Sandbox.Network.AllowDomains.
+//
+// It deliberately does not reuse Resolve: the command sandbox is a different
+// policy, not a variation of the agent's, and sharing the expansion would make
+// it easy to leak a credential grant into it by accident.
+func ResolveCommand(cfg *config.Config, workdir string) (*Resolved, error) {
+	if strings.TrimSpace(workdir) == "" {
+		return nil, fmt.Errorf("sandboxhost: empty workdir for command profile")
+	}
+
+	var groups, read, readFile, allowVars []string
+	allowVars = append(allowVars, baselineEnv...)
+	allowVars = append(allowVars, cfg.Sandbox.Command.EnvPassthrough...)
+
+	for _, name := range cfg.Sandbox.Host.Capabilities {
+		if credentialCapabilities[name] {
+			continue
+		}
+		c, ok := catalog[name]
+		if !ok {
+			return nil, fmt.Errorf("sandboxhost: unknown capability %q (valid: %s)", name, validCapabilities())
+		}
+		groups = append(groups, c.groups...)
+		read = append(read, c.read...)
+		readFile = append(readFile, c.readFile...)
+		allowVars = append(allowVars, c.allowVars...)
+	}
+
+	r := &Resolved{
+		profile: nonoProfile{
+			Meta: profileMeta{Name: "agent-sandbox command"},
+			Filesystem: profileFilesystem{
+				Allow:     sortDedup([]string{workdir}),
+				Read:      sortDedup(read),
+				AllowFile: sortDedup(baselineAllowFile),
+				ReadFile:  sortDedup(readFile),
+			},
+			Environment: profileEnvironment{AllowVars: sortDedup(allowVars)},
+			Network: &profileNetwork{
+				NetworkProfile: commandNetworkProfile,
+				AllowDomain:    sortDedup(cfg.Sandbox.Network.AllowDomains),
+			},
+		},
 	}
 	if g := sortDedup(groups); len(g) > 0 {
 		r.profile.Groups = &profileGroups{Include: g}

@@ -56,7 +56,7 @@ func runBrokered(t *testing.T, allowDomains []string, argv []string) int {
 
 	sock := filepath.Join(dir, "e.sock")
 	srv, err := broker.NewServer(sock,
-		broker.NewNonoExecutor(nonoPath, profilePath, cwd, cfg.Sandbox.Command.EnvPassthrough))
+		broker.NewNonoExecutor(nonoPath, profilePath, cwd, resolved.EnvAllowVars()))
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}

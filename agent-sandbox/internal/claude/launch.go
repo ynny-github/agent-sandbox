@@ -300,11 +300,13 @@ func startCommandBroker(cfg *config.Config) (string, func(), error) {
 		return "", nil, err
 	}
 
-	// The executor is given the launcher's own working directory and the
-	// configured env allowlist: both bound what a request (which originates
-	// inside the sandbox) may ask the unsandboxed nono supervisor to do.
+	// The executor gets the launcher's own working directory and the very
+	// allow_vars list written into the profile. Both bound what a request
+	// (which originates inside the sandbox) can reach: the command runs only
+	// under cwd, and its environment is drawn from the launcher's variables
+	// filtered by the same list the sandbox itself enforces.
 	executor := broker.NewNonoExecutor(nonoPath, profilePath, cwd,
-		cfg.Sandbox.Command.EnvPassthrough)
+		resolved.EnvAllowVars())
 	srv, err := broker.NewServer(sockPath, executor)
 	if err != nil {
 		cleanupProfile()

@@ -181,6 +181,23 @@ func ResolveCommand(cfg *config.Config, workdir string) (*Resolved, error) {
 	return r, nil
 }
 
+// EnvAllowVars returns the profile's environment allow_vars patterns.
+//
+// The command broker uses it to build the nono supervisor's own environment:
+// it forwards exactly those of the launcher's variables that this list already
+// permits inside the sandbox. Sharing the list keeps the two in step — in
+// particular baselineEnv and the capability allowVars (the mise capability's
+// "MISE*" / "__MISE*") are declared in exactly one place, this package, rather
+// than being restated by the broker where they could silently drift.
+//
+// Entries are patterns, not plain names; see broker's envAllowlist for the
+// supported syntax.
+func (r *Resolved) EnvAllowVars() []string {
+	out := make([]string, len(r.profile.Environment.AllowVars))
+	copy(out, r.profile.Environment.AllowVars)
+	return out
+}
+
 // ProfileJSON marshals the resolved nono profile.
 func (r *Resolved) ProfileJSON() ([]byte, error) {
 	data, err := json.Marshal(r.profile)

@@ -72,16 +72,15 @@ func TestNonoExecutorRunsProcess(t *testing.T) {
 	}
 }
 
-func TestNonoExecutorDropsNonoEnvFromRequest(t *testing.T) {
-	// NONO_* is rejected by config validation, so it can never be on the
-	// allowlist; the strip stays as defence in depth.
+func TestNonoExecutorDropsNonoEnvFromAllowlist(t *testing.T) {
+	// NONO_* is rejected by config validation, so it can never legitimately be
+	// on the allowlist; the strip stays as defence in depth.
+	t.Setenv("AWS_PROFILE", "dev")
+	t.Setenv("NONO_ALLOW_DOMAIN", "evil.example")
 	e := broker.NewNonoExecutor("/usr/local/bin/nono", "/tmp/p.json", "/work",
 		[]string{"AWS_PROFILE", "NONO_ALLOW_DOMAIN"})
-	got := e.ProcessEnv(broker.Request{Env: []string{
-		"AWS_PROFILE=dev",
-		"NONO_ALLOW_DOMAIN=evil.example",
-		"NONO_TRUST_OVERRIDE=1",
-	}})
+
+	got := e.ProcessEnv()
 	for _, v := range got {
 		if strings.HasPrefix(v, "NONO_") {
 			t.Errorf("ProcessEnv() leaked %q into the nono process", v)
@@ -92,18 +91,18 @@ func TestNonoExecutorDropsNonoEnvFromRequest(t *testing.T) {
 	}
 }
 
-// The environment filter is an allowlist: a request variable the config does
-// not permit must never reach the unsandboxed nono supervisor. XDG_STATE_HOME
-// is the concrete abuse — it redirects nono's own audit ledger and session
-// state out of ~/.local/state/nono.
-func TestNonoExecutorProcessEnvDropsUnlistedRequestVars(t *testing.T) {
+// The environment is an allowlist over the LAUNCHER's variables: anything the
+// profile does not declare must never reach the unsandboxed nono supervisor.
+// XDG_STATE_HOME is the concrete abuse — it redirects nono's own audit ledger
+// and session state out of ~/.local/state/nono.
+func TestNonoExecutorProcessEnvDropsUnlistedVars(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", "/tmp/hijack")
+	t.Setenv("LD_PRELOAD", "/tmp/evil.so")
+	t.Setenv("AWS_PROFILE", "dev")
 	e := broker.NewNonoExecutor("/usr/local/bin/nono", "/tmp/p.json", "/work",
 		[]string{"AWS_PROFILE"})
-	got := e.ProcessEnv(broker.Request{Env: []string{
-		"XDG_STATE_HOME=/tmp/hijack",
-		"LD_PRELOAD=/tmp/evil.so",
-		"AWS_PROFILE=dev",
-	}})
+
+	got := e.ProcessEnv()
 	for _, v := range got {
 		if strings.HasPrefix(v, "XDG_STATE_HOME=") || strings.HasPrefix(v, "LD_PRELOAD=") {
 			t.Errorf("ProcessEnv() forwarded unlisted variable %q", v)
@@ -114,17 +113,35 @@ func TestNonoExecutorProcessEnvDropsUnlistedRequestVars(t *testing.T) {
 	}
 }
 
-// The baseline variables come from the launcher, never from the request.
-func TestNonoExecutorProcessEnvUsesLauncherBaseline(t *testing.T) {
-	t.Setenv("HOME", "/launcher/home")
-	e := broker.NewNonoExecutor("/usr/local/bin/nono", "/tmp/p.json", "/work", []string{"HOME"})
-	got := e.ProcessEnv(broker.Request{Env: []string{"HOME=/attacker/home"}})
+// allow_vars entries are patterns. A trailing "*" is a prefix match — that is
+// how the mise capability's "MISE*" / "__MISE*" grant is satisfied.
+func TestNonoExecutorProcessEnvMatchesTrailingStarPrefix(t *testing.T) {
+	t.Setenv("MISE_SHELL", "fish")
+	t.Setenv("__MISE_SESSION", "1")
+	t.Setenv("MISCELLANEOUS", "no")
+	e := broker.NewNonoExecutor("/usr/local/bin/nono", "/tmp/p.json", "/work",
+		[]string{"MISE*", "__MISE*"})
 
-	if !slices.Contains(got, "HOME=/launcher/home") {
-		t.Errorf("ProcessEnv() = %v, want HOME=/launcher/home", got)
+	got := e.ProcessEnv()
+	for _, want := range []string{"MISE_SHELL=fish", "__MISE_SESSION=1"} {
+		if !slices.Contains(got, want) {
+			t.Errorf("ProcessEnv() = %v, want it to contain %q", got, want)
+		}
 	}
-	if slices.Contains(got, "HOME=/attacker/home") {
-		t.Errorf("ProcessEnv() let the request override the launcher's HOME: %v", got)
+	if slices.Contains(got, "MISCELLANEOUS=no") {
+		t.Errorf("ProcessEnv() matched a variable outside the MISE* prefix: %v", got)
+	}
+}
+
+// Unsupported pattern shapes fail closed rather than over-granting. A bare "*"
+// must not turn into "forward the launcher's whole environment".
+func TestNonoExecutorProcessEnvRejectsUnsupportedPatterns(t *testing.T) {
+	t.Setenv("SOME_SECRET", "s3cret")
+	e := broker.NewNonoExecutor("/usr/local/bin/nono", "/tmp/p.json", "/work",
+		[]string{"*", "SOME_*_SECRET", "*SECRET"})
+
+	if got := e.ProcessEnv(); len(got) != 0 {
+		t.Errorf("ProcessEnv() = %v, want an empty environment for unsupported patterns", got)
 	}
 }
 

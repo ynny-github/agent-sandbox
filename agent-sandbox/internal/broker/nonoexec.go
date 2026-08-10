@@ -21,11 +21,6 @@ import (
 // draining already-buffered output needs.
 const waitDelay = 5 * time.Second
 
-// baseEnvKeys are the variables the nono process always inherits from the
-// launcher's own (trusted) environment. Request-supplied values never override
-// them: the request comes from inside the sandbox.
-var baseEnvKeys = []string{"PATH", "HOME", "TERM", "LANG", "LC_ALL", "USER"}
-
 // NonoExecutor runs each command in its own nono sandbox, using a profile the
 // launcher generated once at startup.
 type NonoExecutor struct {
@@ -39,9 +34,15 @@ type NonoExecutor struct {
 // the command profile at profilePath.
 //
 // workdir is the directory the command profile grants; a request may only run
-// inside it. envAllow is the set of environment variable names the config
-// permits a request to forward (cfg.Sandbox.Command.EnvPassthrough); every
-// other request variable is discarded.
+// inside it.
+//
+// envAllow is the command profile's own environment allow_vars list — pass
+// sandboxhost.Resolved.EnvAllowVars() for the same profile written to
+// profilePath. It is the single source of truth for the process environment:
+// the executor forwards exactly those of the LAUNCHER's variables that the
+// profile already declares, so the supervisor's environment can never grant
+// more than the sandbox itself would allow. Passing an empty list yields an
+// empty environment, which is almost never what a caller wants.
 func NewNonoExecutor(nonoPath, profilePath, workdir string, envAllow []string) *NonoExecutor {
 	return &NonoExecutor{
 		nonoPath:    nonoPath,
@@ -63,48 +64,81 @@ func (e *NonoExecutor) Args(req Request) []string {
 	return append(args, req.Argv...)
 }
 
-// ProcessEnv builds the environment for the nono process itself. The broker
-// runs outside the sandbox, so req.Env is untrusted input and the filter is an
-// allowlist: the launcher's own values for baseEnvKeys, plus the request's
-// values for exactly those names the config permits to be forwarded.
+// envAllowlist decides which of the launcher's environment variables are handed
+// to the nono supervisor. It is built from the command profile's allow_vars, so
+// the supervisor's environment can never exceed what the profile declares.
 //
-// An allowlist is the only safe shape here. A denylist let a request set, for
-// example, XDG_STATE_HOME and so redirect nono's own audit ledger and session
-// state — the sandboxed side suppressing its own audit trail, and the
-// unsandboxed supervisor writing files anywhere the user can write.
+// The supported pattern syntax is deliberately narrow — the two forms this
+// repo's profiles use, matched the way nono matches them:
+//
+//	NAME    exact variable name
+//	NAME*   prefix match (the mise capability contributes "MISE*" and "__MISE*")
+//
+// A "*" anywhere other than at the end, and a bare "*", are NOT supported: such
+// a pattern matches nothing, so an unrecognised form fails closed rather than
+// over-granting. This is not a glob engine and must not become one.
+type envAllowlist struct {
+	exact    map[string]struct{}
+	prefixes []string
+}
+
+func newEnvAllowlist(patterns []string) envAllowlist {
+	a := envAllowlist{exact: make(map[string]struct{}, len(patterns))}
+	for _, p := range patterns {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if i := strings.IndexByte(p, '*'); i >= 0 {
+			if i == len(p)-1 && i > 0 {
+				a.prefixes = append(a.prefixes, p[:i])
+			}
+			continue
+		}
+		a.exact[p] = struct{}{}
+	}
+	return a
+}
+
+func (a envAllowlist) allows(name string) bool {
+	if _, ok := a.exact[name]; ok {
+		return true
+	}
+	for _, p := range a.prefixes {
+		if strings.HasPrefix(name, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// ProcessEnv builds the environment for the nono process itself: the LAUNCHER's
+// own values for exactly those names the command profile's allow_vars permits.
+//
+// The source matters as much as the filter. The broker runs outside the
+// sandbox, so anything the sandboxed side could supply is untrusted input — a
+// request-supplied XDG_STATE_HOME would redirect nono's own audit ledger and
+// session state, letting the sandboxed side suppress its audit trail and making
+// the unsandboxed supervisor write files anywhere the user can write. Reading
+// from the launcher removes that class entirely; nothing here is
+// request-controlled. It is also the only source that works: the agent's own
+// nono profile does not allow-list sandbox.command.env_passthrough, so those
+// variables are stripped before the sandboxed router could ever observe them.
 //
 // The NONO_* strip is kept as defence in depth: nono reads its own policy from
 // the environment (NONO_ALLOW_DOMAIN, NONO_NETWORK_PROFILE, NONO_BLOCK_NET,
-// NONO_PROFILE, NONO_TRUST_OVERRIDE, ...), so a single leaked variable would
-// let the sandboxed side rewrite the policy meant to contain it. Config
-// validation already rejects NONO_* in env_passthrough.
-func (e *NonoExecutor) ProcessEnv(req Request) []string {
-	env := make([]string, 0, len(baseEnvKeys)+len(e.envAllow))
-	base := make(map[string]bool, len(baseEnvKeys))
-	for _, k := range baseEnvKeys {
-		base[k] = true
-		if v, ok := os.LookupEnv(k); ok {
-			env = append(env, k+"="+v)
-		}
-	}
-
-	allowed := make(map[string]bool, len(e.envAllow))
-	for _, k := range e.envAllow {
-		k = strings.TrimSpace(k)
-		if k == "" || base[k] || strings.HasPrefix(k, "NONO_") {
+// NONO_PROFILE, NONO_TRUST_OVERRIDE, ...), so a single leaked variable would let
+// the sandboxed side rewrite the policy meant to contain it. Config validation
+// already rejects NONO_* in env_passthrough.
+func (e *NonoExecutor) ProcessEnv() []string {
+	allow := newEnvAllowlist(e.envAllow)
+	env := make([]string, 0, len(e.envAllow)+len(allow.prefixes))
+	for _, kv := range os.Environ() {
+		name, _, ok := strings.Cut(kv, "=")
+		if !ok || strings.HasPrefix(name, "NONO_") || !allow.allows(name) {
 			continue
 		}
-		allowed[k] = true
-	}
-	if len(allowed) == 0 {
-		return env
-	}
-	for _, v := range req.Env {
-		k, _, ok := strings.Cut(v, "=")
-		if !ok || !allowed[k] {
-			continue
-		}
-		env = append(env, v)
+		env = append(env, kv)
 	}
 	return env
 }
@@ -163,7 +197,7 @@ func (e *NonoExecutor) Execute(ctx context.Context, req Request, stdin io.Reader
 
 	cmd := exec.CommandContext(ctx, e.nonoPath, e.Args(req)...)
 	cmd.Dir = req.Cwd
-	cmd.Env = e.ProcessEnv(req)
+	cmd.Env = e.ProcessEnv()
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	cmd.WaitDelay = waitDelay

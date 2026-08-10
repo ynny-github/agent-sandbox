@@ -68,8 +68,11 @@ func Resolve(cfg *config.Config, agent string) (*Resolved, error) {
 
 	var groups, read, bypass, allowFile, allowVars, allow, readFile, deny []string
 
-	// Baseline (per agent).
+	// Baseline (per agent). agentOnlyEnv (e.g. the broker socket path) is
+	// granted here but deliberately not in ResolveCommand's profile — see
+	// baselineEnv's comment in catalog.go.
 	allowVars = append(allowVars, baselineEnv...)
+	allowVars = append(allowVars, agentOnlyEnv...)
 	allowFile = append(allowFile, baselineAllowFile...)
 
 	// Capabilities.

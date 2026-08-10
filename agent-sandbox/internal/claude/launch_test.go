@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/agentconfig"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/broker"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandboxhost"
 )
@@ -370,6 +371,7 @@ func TestParseArgs_EnvRefs(t *testing.T) {
 }
 
 func TestBuildArgs_GrantsBrokerSocket(t *testing.T) {
+	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "hook"}
 	_, args, err := BuildArgs(cfg, Options{}, "", "", "", nil, "/tmp/b.sock")
 	if err != nil {
@@ -377,6 +379,11 @@ func TestBuildArgs_GrantsBrokerSocket(t *testing.T) {
 	}
 	if !hasFlagValue(args, "--allow-unix-socket", "/tmp/b.sock") {
 		t.Errorf("args = %v, want --allow-unix-socket /tmp/b.sock", args)
+	}
+	si := argsIndex(args, "--allow-unix-socket")
+	ci := argsIndex(args, "claude")
+	if si < 0 || ci < 0 || si > ci {
+		t.Errorf("--allow-unix-socket must appear before claude; got %v", args)
 	}
 }
 
@@ -484,6 +491,34 @@ func TestRun_BrokerCleanupBeforeExit(t *testing.T) {
 	}
 	if !cleanedBeforeExit {
 		t.Error("broker cleanup must run before exit; os.Exit skips deferred cleanup in production")
+	}
+}
+
+func TestRun_SetsBrokerSocketEnvBeforeSupervise(t *testing.T) {
+	makeFakeNono(t)
+	// t.Setenv restores whatever this variable held before the test once the
+	// test finishes, so run()'s own os.Setenv call below doesn't leak into
+	// the rest of the binary.
+	t.Setenv(broker.SocketEnvVar, "")
+	const wantSocket = "/tmp/test-env-handoff.sock"
+	var gotEnv string
+	err := run(&config.Config{ToolMode: "mcp"}, Options{}, runDeps{
+		writeProfile: func(*config.Config) (string, []string, func(), error) {
+			return "/tmp/asb-profile-1.json", nil, func() {}, nil
+		},
+		startBroker: testBrokerStart(wantSocket, nil),
+		supervise: func(string, []string) int {
+			gotEnv = os.Getenv(broker.SocketEnvVar)
+			return 0
+		},
+		exit: func(int) {},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotEnv != wantSocket {
+		t.Errorf("%s at supervise time = %q, want %q (the broker socket, set before supervise runs)",
+			broker.SocketEnvVar, gotEnv, wantSocket)
 	}
 }
 

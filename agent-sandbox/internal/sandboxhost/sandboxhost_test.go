@@ -210,6 +210,14 @@ func TestResolveCommand_ProfileShape(t *testing.T) {
 	if !slices.Contains(toStrings(env["allow_vars"]), "AWS_PROFILE") {
 		t.Errorf("allow_vars = %v, want to contain AWS_PROFILE", env["allow_vars"])
 	}
+
+	// The broker socket path must never be allow-listed for a brokered
+	// command's own sandbox: a command that could reach the broker could
+	// recurse into it (broker.Server.Serve caps no concurrency), turning a
+	// self-dial into a host-side fork bomb outside the sandbox.
+	if slices.Contains(toStrings(env["allow_vars"]), "AGENT_SANDBOX_BROKER_SOCKET") {
+		t.Errorf("allow_vars = %v, must not contain AGENT_SANDBOX_BROKER_SOCKET", env["allow_vars"])
+	}
 }
 
 func toStrings(v any) []string {

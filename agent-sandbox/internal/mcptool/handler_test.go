@@ -237,11 +237,11 @@ func TestRunCommand_ParseError_ReturnsNonZeroExitAndStderrPath(t *testing.T) {
 	}
 }
 
-func TestRunCommand_ContainerExecution_ReturnsExitCodeAndPaths(t *testing.T) {
+func TestRunCommand_SandboxExecution_ReturnsExitCodeAndPaths(t *testing.T) {
 	dir := t.TempDir()
 	cfg := mcptool.HandlerConfig{
 		OutputDir:     dir,
-		AllowPatterns: []string{"git *"}, // npm test won't match → container
+		AllowPatterns: []string{"git *"}, // npm test won't match → sandbox
 		CommandRunner: &mockRunner{exitCode: 0, stdout: "test output\n"},
 	}
 	session := setupServerWithConfig(t, cfg)
@@ -475,7 +475,7 @@ func TestRunCommand_DropPattern_DoesNotCallCommandRunner(t *testing.T) {
 	// If the runner is invoked it will write the contamination strings below
 	// to stdout/stderr; the assertions afterwards confirm those strings never
 	// appear, proving the drop branch skipped the runner entirely.
-	runner := &mockRunner{exitCode: 0, stdout: "container ran\n", stderr: "container err\n"}
+	runner := &mockRunner{exitCode: 0, stdout: "sandbox ran\n", stderr: "sandbox err\n"}
 	cfg := mcptool.HandlerConfig{
 		OutputDir:     dir,
 		DropRules:     []mcptool.DropRule{{Pattern: "rm -rf *"}},
@@ -496,7 +496,7 @@ func TestRunCommand_DropPattern_DoesNotCallCommandRunner(t *testing.T) {
 		t.Errorf("exit_code = %d, want 1", result.ExitCode)
 	}
 	if result.StdoutPath != "" {
-		t.Errorf("stdout_path should be empty (container must not run), got %q", result.StdoutPath)
+		t.Errorf("stdout_path should be empty (sandbox must not run), got %q", result.StdoutPath)
 	}
 
 	data, readErr := os.ReadFile(result.StderrPath)
@@ -505,7 +505,7 @@ func TestRunCommand_DropPattern_DoesNotCallCommandRunner(t *testing.T) {
 	}
 	want := "dropped: command matches drop pattern \"rm -rf *\"\n"
 	if string(data) != want {
-		t.Errorf("stderr file = %q, want %q (container runner must not contribute output)", string(data), want)
+		t.Errorf("stderr file = %q, want %q (sandbox runner must not contribute output)", string(data), want)
 	}
 }
 

@@ -54,7 +54,7 @@ func (f *fakeRunner) RunSandboxed(_ context.Context, argv, _ []string, _ io.Read
 
 var _ router.CommandRunner = (*fakeRunner)(nil)
 
-// ─── existing host/container tests (behavior preserved) ──────────────────────
+// ─── existing host/sandbox tests (behavior preserved) ──────────────────────
 
 func TestRun_HostSuccess(t *testing.T) {
 	var out, errBuf bytes.Buffer
@@ -108,7 +108,7 @@ func TestRun_DropPattern(t *testing.T) {
 		t.Errorf("exitCode = %d, want 1", code)
 	}
 	if runner.called {
-		t.Error("container runner must not be called for a dropped command")
+		t.Error("sandbox runner must not be called for a dropped command")
 	}
 	want := "dropped: command matches drop pattern \"rm -rf *\"\n"
 	if errBuf.String() != want {
@@ -116,7 +116,7 @@ func TestRun_DropPattern(t *testing.T) {
 	}
 }
 
-func TestRun_ContainerNotConfigured(t *testing.T) {
+func TestRun_SandboxNotConfigured(t *testing.T) {
 	var out, errBuf bytes.Buffer
 	code, err := router.Run(context.Background(), router.Request{
 		Command:       "npm test",
@@ -135,9 +135,9 @@ func TestRun_ContainerNotConfigured(t *testing.T) {
 	}
 }
 
-func TestRun_ContainerSuccess(t *testing.T) {
+func TestRun_SandboxSuccess(t *testing.T) {
 	var out, errBuf bytes.Buffer
-	runner := &mockRunner{exitCode: 0, stdout: "container output\n"}
+	runner := &mockRunner{exitCode: 0, stdout: "sandbox output\n"}
 	code, err := router.Run(context.Background(), router.Request{
 		Command:       "npm test",
 		AllowPatterns: []string{"git *"},
@@ -152,18 +152,18 @@ func TestRun_ContainerSuccess(t *testing.T) {
 		t.Errorf("exitCode = %d, want 0", code)
 	}
 	if !runner.called {
-		t.Error("container runner should have been called")
+		t.Error("sandbox runner should have been called")
 	}
 	// single simple segment → argv (not bash -c)
 	if !reflect.DeepEqual(runner.capturedArgv, []string{"npm", "test"}) {
 		t.Errorf("capturedArgv = %#v, want [npm test]", runner.capturedArgv)
 	}
-	if !strings.Contains(out.String(), "container output") {
-		t.Errorf("stdout = %q, want container output", out.String())
+	if !strings.Contains(out.String(), "sandbox output") {
+		t.Errorf("stdout = %q, want sandbox output", out.String())
 	}
 }
 
-func TestRun_ContainerShellOperator_WrappedInBash(t *testing.T) {
+func TestRun_SandboxShellOperator_WrappedInBash(t *testing.T) {
 	var out, errBuf bytes.Buffer
 	runner := &mockRunner{exitCode: 0}
 	code, err := router.Run(context.Background(), router.Request{
@@ -194,7 +194,7 @@ func TestRun_CommandRunnerError(t *testing.T) {
 		Stderr:        &errBuf,
 	})
 	if err != nil {
-		t.Fatalf("container runner error must be handled internally, got: %v", err)
+		t.Fatalf("sandbox runner error must be handled internally, got: %v", err)
 	}
 	if code == 0 {
 		t.Error("exitCode should be forced non-zero on runner error")
@@ -275,7 +275,7 @@ func TestRun_SandboxNotRunning_PipelineWholePath_ShowsHint(t *testing.T) {
 
 func TestRun_SandboxNotRunning_MixedPipeline_ShowsHint(t *testing.T) {
 	var out, errBuf bytes.Buffer
-	// `echo hi | b`: echo → host, b → container → mixed pipeline, exercising
+	// `echo hi | b`: echo → host, b → sandbox → mixed pipeline, exercising
 	// runMixedPipeline's own sentinel handling.
 	runner := &mockRunner{err: router.ErrSandboxNotRunning}
 	code, err := router.Run(context.Background(), router.Request{
@@ -324,7 +324,7 @@ func TestRun_EnvPassthrough(t *testing.T) {
 
 // ─── new orchestration tests (Task 6 TDD) ────────────────────────────────────
 
-func TestRun_UniformContainerPipeline_UsesBashC(t *testing.T) {
+func TestRun_UniformSandboxPipeline_UsesBashC(t *testing.T) {
 	f := &fakeRunner{out: "ok\n"}
 	var out, errb bytes.Buffer
 	code, err := router.Run(context.Background(), router.Request{
@@ -355,7 +355,7 @@ func TestRun_SequentialAnd_SkipsOnFailure(t *testing.T) {
 		t.Fatalf("code = %d, want 1", code)
 	}
 	if len(f.calls) != 0 {
-		t.Fatalf("container called %d times, want 0 (b skipped)", len(f.calls))
+		t.Fatalf("sandbox called %d times, want 0 (b skipped)", len(f.calls))
 	}
 }
 
@@ -374,7 +374,7 @@ func TestRun_DropSegment_RejectsWholeLine(t *testing.T) {
 	}
 }
 
-func TestRun_Fallback_WholeLineToContainer(t *testing.T) {
+func TestRun_Fallback_WholeLineToSandbox(t *testing.T) {
 	f := &fakeRunner{}
 	var out, errb bytes.Buffer
 	router.Run(context.Background(), router.Request{
@@ -409,8 +409,8 @@ func TestRun_UniformHostPipeline_RunsViaShell(t *testing.T) {
 func TestRun_HostRedirectStderr_RoutesToHost(t *testing.T) {
 	var out, errBuf bytes.Buffer
 	// If the line were wrongly treated as fallback, it would run whole in the
-	// container and this stdout would appear; on the host it must not.
-	runner := &mockRunner{exitCode: 0, stdout: "RAN-IN-CONTAINER\n"}
+	// sandbox and this stdout would appear; on the host it must not.
+	runner := &mockRunner{exitCode: 0, stdout: "RAN-IN-SANDBOX\n"}
 	code, err := router.Run(context.Background(), router.Request{
 		Command:       "echo hi 2>&1",
 		AllowPatterns: []string{"echo *"},
@@ -425,10 +425,10 @@ func TestRun_HostRedirectStderr_RoutesToHost(t *testing.T) {
 		t.Errorf("exitCode = %d, want 0", code)
 	}
 	if runner.called {
-		t.Error("host-allowed command with 2>&1 must run on host, not container")
+		t.Error("host-allowed command with 2>&1 must run on host, not sandbox")
 	}
-	if strings.Contains(out.String(), "RAN-IN-CONTAINER") {
-		t.Errorf("stdout = %q, command leaked to container", out.String())
+	if strings.Contains(out.String(), "RAN-IN-SANDBOX") {
+		t.Errorf("stdout = %q, command leaked to sandbox", out.String())
 	}
 	if !strings.Contains(out.String(), "hi") {
 		t.Errorf("stdout = %q, want it to contain hi", out.String())

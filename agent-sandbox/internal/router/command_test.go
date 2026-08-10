@@ -23,7 +23,7 @@ func TestParseLine(t *testing.T) {
 		in        string
 		pipelines [][]string // per pipeline: each segment's Raw (trimmed)
 		seps      []string
-		redirect  [][]bool   // per pipeline: each segment's HasRedirect
+		redirect  [][]bool // per pipeline: each segment's HasRedirect
 		fallback  bool
 	}{
 		{"plain", "git status", [][]string{{"git status"}}, nil, [][]bool{{false}}, false},

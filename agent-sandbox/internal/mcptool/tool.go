@@ -15,15 +15,15 @@ const runCommandDescription = `Execute a shell command.
 Routing:
 - Commands matching allow-patterns run on the host.
 - Commands matching drop-patterns are refused.
-- All other commands run in the container.
+- All other commands run in a sandbox.
 
 Operator handling:
-- Pipe (|): each segment is routed independently; host and container segments
+- Pipe (|): each segment is routed independently; host and sandbox segments
   may be mixed within the same pipeline.
 - Sequential operators (&&, ||, ;): each pipeline is routed and executed in order.
 - Redirect segments (>, <, >>, 2>) and operators ($(), ` + "`" + `, lone &): run via
   bash -c on whichever side they are routed to; $(), backtick, and lone &
-  always fall back to the container.`
+  always fall back to the sandbox.`
 
 type RunCommandInput struct {
 	Command        string `json:"command"`

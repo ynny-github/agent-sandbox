@@ -17,9 +17,8 @@ func TestWriteLoad_RoundTrip(t *testing.T) {
 		{Pattern: "git push -f*"},
 		{Pattern: "gh *", Message: "gh is disabled"},
 	}
-	cfg.Sandbox.Network.AllowExternal = true
-	cfg.Sandbox.Container.Image = "sandbox:0.1.0"
-	cfg.Sandbox.Container.EnvPassthrough = []string{"CI"}
+	cfg.Sandbox.Network.AllowDomains = []string{"proxy.golang.org"}
+	cfg.Sandbox.Command.EnvPassthrough = []string{"CI"}
 
 	path, cleanup, err := Write(cfg)
 	if err != nil {

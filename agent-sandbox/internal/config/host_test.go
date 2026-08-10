@@ -21,10 +21,6 @@ const baseProject = `
 tool_mode = "mcp"
 [mcp]
 command_output_dir = "/tmp/out"
-[sandbox.container]
-build_context = "./docker/sandbox"
-dockerfile = "Dockerfile"
-image = "img"
 `
 
 func TestLoad_DecodesHostSection(t *testing.T) {

@@ -1,6 +1,6 @@
 # agent-sandbox
 
-An MCP (Model Context Protocol) server that routes shell commands to either the host machine or a Docker Compose container, based on operator-configured allow patterns.
+Routes an AI coding agent's shell commands to either the host machine or a sandboxed `nono run` invocation, based on operator-configured allow patterns.
 
 ## Install
 
@@ -16,10 +16,8 @@ Copy `config.example.toml` to `config.toml` and edit:
 [mcp]
 command_output_dir = "/tmp/mcp-output"
 
-[sandbox.container]
-build_context = "./docker/sandbox"
-dockerfile = "Dockerfile"
-image = "myapp"
+[sandbox.network]
+allow_domains = ["proxy.golang.org"]   # extra domains on top of nono's "developer" network profile
 
 [sandbox.command]
 allow = [
@@ -30,39 +28,11 @@ allow = [
 
 ## Usage
 
-Start the project sandbox from your project root:
-
-```bash
-agent-sandbox sandbox up -d --config agent-sandbox.toml
-```
-
 Start the MCP server:
 
 ```bash
 agent-sandbox command-router --config agent-sandbox.toml
 ```
-
-Stop the current project sandbox:
-
-```bash
-agent-sandbox sandbox down --config agent-sandbox.toml
-```
-
-To stop a sandbox that belongs to a different directory, pass `--path`:
-
-```bash
-agent-sandbox sandbox down --path /path/to/other/project
-```
-
-The path must match the directory the sandbox was started from. `down` only needs the project name derived from the path, so it works even if that directory's build context or config is unavailable.
-
-Remove all Docker containers and networks that appear to be managed by agent-sandbox:
-
-```bash
-agent-sandbox sandbox prune
-```
-
-`sandbox prune` is destructive. It removes every container labeled `cr.managed=true` and every Docker network whose name starts with `cr-sandbox-`.
 
 Check whether external dependencies are usable on this host:
 
@@ -70,7 +40,10 @@ Check whether external dependencies are usable on this host:
 agent-sandbox doctor
 ```
 
-`doctor` verifies that `nono` is on `PATH`, that `docker compose version` works (which also accepts compatible CLIs like colima or podman that alias `docker`), and that the Docker daemon is reachable. Exits 0 when all checks pass, 1 otherwise.
+`doctor` verifies that `nono` is on `PATH` and that the command broker's
+socket directory (`$XDG_STATE_HOME/agent-sandbox`, or
+`~/.local/state/agent-sandbox` when `XDG_STATE_HOME` is unset) can be created
+and is writable. Exits 0 when all checks pass, 1 otherwise.
 
 Run Claude inside the nono sandbox. Options after `--` go to `claude`; the
 sandbox profile is generated from `[sandbox.host]` in `agent-sandbox.toml`,
@@ -80,14 +53,14 @@ and `agent-sandbox` no longer forwards options to `nono`:
 agent-sandbox claude -- --model opus
 ```
 
-`agent-sandbox claude` manages the sandbox container automatically: on launch it
-starts the project sandbox if it is not already running, and when Claude exits
-it stops the sandbox **only if this launch started it** (a sandbox that was
-already running — for example from `sandbox up -d` or another session in the
-same directory — is left untouched). If the sandbox cannot be started (Docker
-daemon unreachable or the build fails), Claude is not launched; run
-`agent-sandbox doctor` to diagnose. Running `sandbox up -d` beforehand is no
-longer required.
+`agent-sandbox claude` starts a host-side command broker (a per-launch Unix
+socket server) before launching Claude, and tears it down when Claude exits.
+Sandboxed commands never run in a persistent container: each one is sent to
+the broker, which runs it under its own `nono run` invocation, scoped to the
+current working directory and the `[sandbox.network]` policy. There is
+nothing to start beforehand — no `sandbox up` step. If `nono` cannot be found
+or the broker socket cannot be created, Claude is not launched; run
+`agent-sandbox doctor` to diagnose.
 
 `agent-sandbox debug` accepts the same form and prints the resulting `nono`
 command without running it, followed by the generated nono profile JSON and the
@@ -190,8 +163,8 @@ fixed and built-in.
 ## How It Works
 
 - Commands matching an allow pattern are executed on the **host** (after shell-safety validation).
-- Commands matching a drop pattern are **refused** — neither the host nor the container runs them; the response carries exit code 1 and a stderr line. Each drop entry is a `{ pattern, message }` table; when `message` is set it is printed on refusal, otherwise the default `dropped: command matches drop pattern "<pattern>"` line is used.
-- All other commands are routed to the configured **Docker Compose service**.
+- Commands matching a drop pattern are **refused** — neither the host nor the sandbox runs them; the response carries exit code 1 and a stderr line. Each drop entry is a `{ pattern, message }` table; when `message` is set it is printed on refusal, otherwise the default `dropped: command matches drop pattern "<pattern>"` line is used.
+- All other commands are sent to the host-side command broker started by `agent-sandbox claude`, which runs each one under its own **`nono run`** invocation, scoped to the current working directory and nono's `developer` network profile plus `sandbox.network.allow_domains`.
 - Allow wins over drop: a command matching both an allow and a drop pattern runs on the host.
 - Output is always written to separate stdout/stderr files; the MCP response returns file paths and exit code only.
 
@@ -212,18 +185,22 @@ The configuration was reorganized; old keys are no longer accepted.
 | Old | New |
 |---|---|
 | `server.output_dir` | `mcp.command_output_dir` |
-| `sandbox.build_context` | `sandbox.container.build_context` |
-| `sandbox.dockerfile` | `sandbox.container.dockerfile` |
-| `sandbox.image` | `sandbox.container.image` |
-| `sandbox.external_network` | `sandbox.container.external_network` |
-| `sandbox.allow_cidrs` | removed — network access is now the `sandbox.network.allow_external` bool |
-| `sandbox.allow_hosts` | removed — network access is now the `sandbox.network.allow_external` bool |
-| `sandbox.network.allow_cidrs` | removed — replaced by `sandbox.network.allow_external` (bool) |
-| `sandbox.network.allow_hosts` | removed — replaced by `sandbox.network.allow_external` (bool) |
+| `sandbox.build_context` | removed — commands run under nono, not Docker |
+| `sandbox.dockerfile` | removed — commands run under nono, not Docker |
+| `sandbox.image` | removed — commands run under nono, not Docker |
+| `sandbox.external_network` | removed — commands run under nono, not Docker |
+| `sandbox.container` (whole section) | removed — commands run under nono, not Docker |
+| `sandbox.network.allow_external` | removed — use `sandbox.network.allow_domains` |
+| `sandbox.allow_cidrs` | removed — network access is now `sandbox.network.allow_domains` |
+| `sandbox.allow_hosts` | removed — network access is now `sandbox.network.allow_domains` |
+| `sandbox.network.allow_cidrs` | removed — replaced by `sandbox.network.allow_domains` |
+| `sandbox.network.allow_hosts` | removed — replaced by `sandbox.network.allow_domains` |
 | `[allow_patterns] patterns` | `sandbox.command.allow` |
 | `[drop_patterns] patterns` | `sandbox.command.drop` |
 | `[deny_patterns] patterns` | removed — move destructive entries into `sandbox.command.drop` |
-| `[container] env_passthrough` | `sandbox.container.env_passthrough` |
+| `[container] env_passthrough` | `sandbox.command.env_passthrough` |
+| `sandbox.container.env_passthrough` | `sandbox.command.env_passthrough` |
 | `[nono] profile` | removed — configure the sandbox profile in `[sandbox.host]` (nono options are no longer forwarded) |
+| `agent-sandbox sandbox up/down/prune` | removed — `agent-sandbox claude` starts and stops the per-launch command broker automatically |
 
 The `deny` routing axis is gone. Patterns that previously forced a host-allowed command into the sandbox now have two options: leave them out of `allow` (so they default to the sandbox), or add them to `drop` if they should be refused entirely.

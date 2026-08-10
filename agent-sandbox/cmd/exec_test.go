@@ -103,7 +103,7 @@ func TestResolveExecConfig_MissingPolicyFile_FailsClosed(t *testing.T) {
 func TestResolveExecConfig_FallsBackToConfig(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
-	body := "tool_mode=\"hook\"\n[sandbox.container]\nbuild_context=\"./x\"\ndockerfile=\"Dockerfile\"\nimage=\"img:1\"\n"
+	body := "tool_mode=\"hook\"\n"
 	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}

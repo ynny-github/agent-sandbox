@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -56,7 +58,7 @@ func stubAllSeamsOK(t *testing.T) {
 		func(string) (string, error) { return "/usr/bin/nono", nil },
 		func(context.Context, string, ...string) ([]byte, error) { return []byte("nono 0.4.2\n"), nil },
 	)
-	stubPingDocker(t, func(context.Context) (string, error) { return "reachable", nil })
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 }
 
 func TestDoctorCmd_Registered(t *testing.T) {
@@ -88,7 +90,7 @@ func TestRunDoctor_NonoNG(t *testing.T) {
 		func(string) (string, error) { return "", errors.New("not found") },
 		func(context.Context, string, ...string) ([]byte, error) { return nil, nil },
 	)
-	stubPingDocker(t, func(context.Context) (string, error) { return "reachable", nil })
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 
 	var buf bytes.Buffer
 	doctorCmd.SetOut(&buf)
@@ -106,97 +108,19 @@ func TestRunDoctor_NonoNG(t *testing.T) {
 func TestRunDoctor_RunsAllChecksEvenOnEarlyFailure(t *testing.T) {
 	stubNonoSeams(t,
 		func(string) (string, error) { return "", errors.New("not found") },
-		func(context.Context, string, ...string) ([]byte, error) { return []byte("Docker Compose version v2.27.0\n"), nil },
+		func(context.Context, string, ...string) ([]byte, error) { return nil, nil },
 	)
-	stubPingDocker(t, func(context.Context) (string, error) { return "reachable", nil })
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 
 	var buf bytes.Buffer
 	doctorCmd.SetOut(&buf)
 	t.Cleanup(func() { doctorCmd.SetOut(nil) })
 
 	_ = runDoctor(doctorCmd, nil)
-	for _, want := range []string{"nono", "docker compose", "docker daemon"} {
+	for _, want := range []string{"nono", "command broker"} {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("output missing section %q:\n%s", want, buf.String())
 		}
-	}
-}
-
-func stubPingDocker(t *testing.T, fn func(context.Context) (string, error)) {
-	t.Helper()
-	orig := pingDockerDaemon
-	pingDockerDaemon = fn
-	t.Cleanup(func() { pingDockerDaemon = orig })
-}
-
-func TestCheckDockerDaemon_Fails(t *testing.T) {
-	stubPingDocker(t, func(context.Context) (string, error) {
-		return "", errors.New("Cannot connect to the Docker daemon")
-	})
-
-	r := checkDockerDaemon(context.Background())
-	if r.ok {
-		t.Fatal("expected NG when ping fails")
-	}
-	if r.hint == "" {
-		t.Error("expected hint on NG")
-	}
-}
-
-func TestCheckDockerDaemon_OK(t *testing.T) {
-	stubPingDocker(t, func(context.Context) (string, error) {
-		return "reachable", nil
-	})
-
-	r := checkDockerDaemon(context.Background())
-	if !r.ok {
-		t.Fatal("expected OK")
-	}
-	joined := strings.Join(r.details, "\n")
-	if !strings.Contains(joined, "reachable") {
-		t.Errorf("details missing 'reachable': %v", r.details)
-	}
-}
-
-func stubRunCommand(t *testing.T, rc func(context.Context, string, ...string) ([]byte, error)) {
-	t.Helper()
-	orig := runCommand
-	runCommand = rc
-	t.Cleanup(func() { runCommand = orig })
-}
-
-func TestCheckDockerCompose_Fails(t *testing.T) {
-	stubRunCommand(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		if name != "docker" || len(args) < 2 || args[0] != "compose" || args[1] != "version" {
-			t.Errorf("unexpected invocation: %s %v", name, args)
-		}
-		return []byte("docker: command not found"), errors.New("exec: \"docker\": executable file not found in $PATH")
-	})
-
-	r := checkDockerCompose(context.Background())
-	if r.ok {
-		t.Fatal("expected NG when docker compose version fails")
-	}
-	if r.hint == "" {
-		t.Error("expected hint on NG")
-	}
-}
-
-func TestCheckDockerCompose_OK(t *testing.T) {
-	stubRunCommand(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		if name != "docker" || len(args) < 2 || args[0] != "compose" || args[1] != "version" {
-			t.Errorf("unexpected invocation: %s %v", name, args)
-		}
-		return []byte("Docker Compose version v2.27.0\n"), nil
-	})
-
-	r := checkDockerCompose(context.Background())
-	if !r.ok {
-		t.Fatal("expected OK")
-	}
-	joined := strings.Join(r.details, "\n")
-	if !strings.Contains(joined, "Docker Compose version v2.27.0") {
-		t.Errorf("details missing version line: %v", r.details)
 	}
 }
 
@@ -218,6 +142,42 @@ func TestCheckNono_OK(t *testing.T) {
 	}
 	if !strings.Contains(joined, "version: nono 0.4.2") {
 		t.Errorf("details missing version: %v", r.details)
+	}
+}
+
+func TestCheckBrokerSocketDir_OK(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", base)
+
+	r := checkBrokerSocketDir()
+	if !r.ok {
+		t.Fatalf("expected OK, got NG: %v", r.details)
+	}
+	want := filepath.Join(base, "agent-sandbox")
+	joined := strings.Join(r.details, "\n")
+	if !strings.Contains(joined, want) {
+		t.Errorf("details missing socket dir %q: %v", want, r.details)
+	}
+}
+
+func TestCheckBrokerSocketDir_UnwritableFails(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses permission checks")
+	}
+	base := t.TempDir()
+	// Make base read-only so MkdirAll underneath it fails.
+	if err := os.Chmod(base, 0o500); err != nil {
+		t.Skipf("cannot make dir read-only in this environment: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(base, 0o700) })
+	t.Setenv("XDG_STATE_HOME", filepath.Join(base, "state"))
+
+	r := checkBrokerSocketDir()
+	if r.ok {
+		t.Fatal("expected NG when the socket dir cannot be created")
+	}
+	if r.hint == "" {
+		t.Error("expected hint on NG")
 	}
 }
 

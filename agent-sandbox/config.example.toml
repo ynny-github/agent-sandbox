@@ -7,31 +7,26 @@ tool_mode = "mcp"
 command_output_dir = "/tmp/mcp-output"
 
 [sandbox.network]
-allow_external = false               # true = unrestricted internet (prompts y/N at startup); false (default) = no external access
+# Commands routed to the sandbox run under nono's "developer" network profile
+# (LLM APIs, package registries, GitHub, sigstore, documentation). List any
+# extra domains here. The preset does NOT include proxy.golang.org.
+allow_domains = [
+  # "proxy.golang.org",
+  # "sum.golang.org",
+]
 
 [sandbox.command]
 allow = [
   "git *",
   "make *",
-  "npm run *",
 ]
-# Each drop entry is a { pattern, message } table; message is optional and, when
-# omitted, a default "dropped: command matches drop pattern ..." line is printed.
 drop = [
   # { pattern = "rm -rf *" },
-  # { pattern = "gh *", message = "gh is disabled; use the GitHub MCP tools." },
 ]
-
-[sandbox.container]
-build_context = "./docker/sandbox"   # required: path to Docker build context
-dockerfile = "Dockerfile"            # required: Dockerfile name within build_context
-image = "myapp"                      # required: image name (actual tag: agent-sandbox/<image>)
-# external_network = "default"       # opt-in: join the project's "<project>_<suffix>" compose
-                                     # network (e.g. "default" -> "<project>_default"). Unset =
-                                     # join no project network.
+# Environment variables forwarded to sandboxed commands. NONO_* is rejected:
+# those variables reconfigure the command sandbox itself.
 env_passthrough = [
   # "AWS_PROFILE",
-  # "HOME",
 ]
 
 [sandbox.host]

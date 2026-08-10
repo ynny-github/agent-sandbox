@@ -21,15 +21,13 @@ type MCPConfig struct {
 }
 
 type SandboxConfig struct {
-	Network   NetworkConfig   `toml:"network"`
-	Command   CommandConfig   `toml:"command"`
-	Container ContainerConfig `toml:"container"`
-	Host      HostConfig      `toml:"host"`
+	Network NetworkConfig `toml:"network"`
+	Command CommandConfig `toml:"command"`
+	Host    HostConfig    `toml:"host"`
 }
 
 type NetworkConfig struct {
-	AllowExternal bool     `toml:"allow_external"`
-	AllowDomains  []string `toml:"allow_domains"`
+	AllowDomains []string `toml:"allow_domains"`
 }
 
 type CommandConfig struct {
@@ -52,14 +50,6 @@ type CommandConfig struct {
 type DropRule struct {
 	Pattern string `toml:"pattern"`
 	Message string `toml:"message"`
-}
-
-type ContainerConfig struct {
-	BuildContext    string   `toml:"build_context"`
-	Dockerfile      string   `toml:"dockerfile"`
-	Image           string   `toml:"image"`
-	ExternalNetwork string   `toml:"external_network"`
-	EnvPassthrough  []string `toml:"env_passthrough"`
 }
 
 // HostConfig declares, in nono-agnostic terms, the host-side access the
@@ -88,7 +78,7 @@ func Load(path string) (*Config, error) {
 	//    decode reuses an existing slice's backing array in place when its cap is
 	//    large enough, so a plain header copy would be corrupted by the project
 	//    decode below.
-	var userAllow, userEnv []string
+	var userAllow []string
 	var userDrop []DropRule
 	var userAllowDomains, userCmdEnv []string
 	var hostSnap hostLists
@@ -103,7 +93,6 @@ func Load(path string) (*Config, error) {
 			}
 			userAllow = slices.Clone(cfg.Sandbox.Command.Allow)
 			userDrop = slices.Clone(cfg.Sandbox.Command.Drop)
-			userEnv = slices.Clone(cfg.Sandbox.Container.EnvPassthrough)
 			userAllowDomains = slices.Clone(cfg.Sandbox.Network.AllowDomains)
 			userCmdEnv = slices.Clone(cfg.Sandbox.Command.EnvPassthrough)
 			userHostCaps := slices.Clone(cfg.Sandbox.Host.Capabilities)
@@ -130,7 +119,6 @@ func Load(path string) (*Config, error) {
 	//    user's, so the union de-dupes back to the user's list (no change).
 	cfg.Sandbox.Command.Allow = dedupUnion(userAllow, cfg.Sandbox.Command.Allow)
 	cfg.Sandbox.Command.Drop = dedupUnionDrop(userDrop, cfg.Sandbox.Command.Drop)
-	cfg.Sandbox.Container.EnvPassthrough = dedupUnion(userEnv, cfg.Sandbox.Container.EnvPassthrough)
 	cfg.Sandbox.Network.AllowDomains = dedupUnion(userAllowDomains, cfg.Sandbox.Network.AllowDomains)
 	cfg.Sandbox.Command.EnvPassthrough = dedupUnion(userCmdEnv, cfg.Sandbox.Command.EnvPassthrough)
 	cfg.Sandbox.Host.Capabilities = dedupUnion(hostSnap.caps, cfg.Sandbox.Host.Capabilities)
@@ -155,11 +143,20 @@ func decodeInto(path string, cfg *Config) (toml.MetaData, error) {
 	return md, nil
 }
 
-// checkDeprecated rejects the removed sandbox.network.allow_cidrs / allow_hosts
-// keys. It is applied per-file because the keys are not representable in Config.
+// checkDeprecated rejects the removed sandbox.network.allow_cidrs /
+// allow_hosts / allow_external keys and the removed sandbox.container
+// section. It is applied per-file because the keys are not representable in
+// Config, and must fire even when the file merely mentions a removed key with
+// no value that validate would otherwise check.
 func checkDeprecated(md toml.MetaData) error {
 	if md.IsDefined("sandbox", "network", "allow_cidrs") || md.IsDefined("sandbox", "network", "allow_hosts") {
 		return ErrDeprecatedNetworkKeys
+	}
+	if md.IsDefined("sandbox", "network", "allow_external") {
+		return ErrRemovedAllowExternal
+	}
+	if md.IsDefined("sandbox", "container") {
+		return ErrRemovedContainerSection
 	}
 	return nil
 }
@@ -180,15 +177,6 @@ func validate(cfg *Config) (*Config, error) {
 	// only in mcp mode. In hook mode it is optional and, if set, ignored.
 	if cfg.ToolMode == "mcp" && strings.TrimSpace(cfg.MCP.CommandOutputDir) == "" {
 		return nil, ErrMissingMCPCommandOutputDir
-	}
-	if strings.TrimSpace(cfg.Sandbox.Container.BuildContext) == "" {
-		return nil, ErrMissingContainerBuildContext
-	}
-	if strings.TrimSpace(cfg.Sandbox.Container.Dockerfile) == "" {
-		return nil, ErrMissingContainerDockerfile
-	}
-	if strings.TrimSpace(cfg.Sandbox.Container.Image) == "" {
-		return nil, ErrMissingContainerImage
 	}
 	for _, r := range cfg.Sandbox.Command.Drop {
 		if strings.TrimSpace(r.Pattern) == "" {

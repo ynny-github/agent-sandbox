@@ -16,8 +16,8 @@ func Pointer() string {
 	return "## agent-sandbox environment\n\n" +
 		"This project routes your shell commands through the agent-sandbox " +
 		"sandbox. Run `agent-sandbox ai explain` to learn how to run commands, " +
-		"which commands run on the host, which are refused, and the container " +
-		"constraints.\n"
+		"which commands run on the host, which are refused, and the sandbox " +
+		"network constraints.\n"
 }
 
 //go:embed explain.tmpl
@@ -37,12 +37,11 @@ type SafeCommand struct {
 
 // explainView is the data handed to explain.tmpl.
 type explainView struct {
-	Hook            bool
-	Allow           []string
-	Drop            []config.DropRule
-	Safe            []SafeCommand
-	Image           string
-	NetworkExternal bool
+	Hook         bool
+	Allow        []string
+	Drop         []config.DropRule
+	Safe         []SafeCommand
+	AllowDomains []string
 }
 
 // Explain renders a Markdown description of the sandbox environment from cfg,
@@ -51,18 +50,12 @@ type explainView struct {
 // passes the available `safe` wrappers (from the live command tree) so the
 // explain output points agents at them.
 func Explain(cfg *config.Config, safe ...SafeCommand) string {
-	image := strings.TrimSpace(cfg.Sandbox.Container.Image)
-	if image == "" {
-		image = "(none)"
-	}
-
 	view := explainView{
-		Hook:            cfg.ToolMode == "hook",
-		Allow:           cfg.Sandbox.Command.Allow,
-		Drop:            cfg.Sandbox.Command.Drop,
-		Safe:            safe,
-		Image:           image,
-		NetworkExternal: cfg.Sandbox.Network.AllowExternal,
+		Hook:         cfg.ToolMode == "hook",
+		Allow:        cfg.Sandbox.Command.Allow,
+		Drop:         cfg.Sandbox.Command.Drop,
+		Safe:         safe,
+		AllowDomains: cfg.Sandbox.Network.AllowDomains,
 	}
 
 	var buf bytes.Buffer

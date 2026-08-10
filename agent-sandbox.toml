@@ -2,10 +2,11 @@
   # the PreToolUse hook (see .claude/settings.json) into `agent-sandbox exec`.
   tool_mode = "hook"
 
-  [sandbox.container]
-  build_context = "./docker/sandbox"
-  dockerfile = "Dockerfile"
-  image = "sandbox:0.1.0"
+  [sandbox.network]
+  # Extra domains on top of nono's fixed "developer" network profile, which
+  # every brokered command runs under. The preset does not include the Go
+  # module proxy, so this project must add it.
+  allow_domains = ["proxy.golang.org", "sum.golang.org"]
 
   [sandbox.command]
   allow = [
@@ -13,7 +14,7 @@
     "go *"
   ]
 
-  # Bare git is refused everywhere (host and container) so that all git goes
+  # Bare git is refused everywhere (host and sandbox) so that all git goes
   # through the built-in `agent-sandbox safe git` wrapper, which rejects
   # known-dangerous invocations (force push, hard reset, clean -f, --no-verify,
   # config writes, ...). The wrapper itself is always host-allowed.

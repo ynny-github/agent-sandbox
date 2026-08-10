@@ -78,7 +78,7 @@ func runExecCore(ctx context.Context, cfg *config.Config, command string, stdout
 	s := router.New(router.Config{
 		AllowPatterns:  allowPatterns(cfg),
 		DropRules:      dropRules(cfg),
-		EnvPassthrough: cfg.Sandbox.Container.EnvPassthrough,
+		EnvPassthrough: cfg.Sandbox.Command.EnvPassthrough,
 	})
 
 	needs, err := s.NeedsSandbox(command)
@@ -89,14 +89,14 @@ func runExecCore(ctx context.Context, cfg *config.Config, command string, stdout
 	if needs {
 		runner, cleanup, rerr := newBrokerCommandRunner(ctx, cfg)
 		if rerr != nil {
-			fmt.Fprintf(stderr, "container setup: %v\n", rerr)
+			fmt.Fprintf(stderr, "command broker setup: %v\n", rerr)
 			return 1
 		}
 		defer cleanup()
 		s = router.New(router.Config{
 			AllowPatterns:  allowPatterns(cfg),
 			DropRules:      dropRules(cfg),
-			EnvPassthrough: cfg.Sandbox.Container.EnvPassthrough,
+			EnvPassthrough: cfg.Sandbox.Command.EnvPassthrough,
 			CommandRunner:  runner,
 		})
 	}

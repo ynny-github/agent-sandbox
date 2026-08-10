@@ -39,7 +39,7 @@ func newCommandRouterServer(cfg *config.Config, deps serveDependencies) *mcp.Ser
 		AllowPatterns:  allowPatterns(cfg),
 		DropRules:      dropRules(cfg),
 		CommandRunner:  deps.commandRunner,
-		EnvPassthrough: cfg.Sandbox.Container.EnvPassthrough,
+		EnvPassthrough: cfg.Sandbox.Command.EnvPassthrough,
 	})
 
 	return server

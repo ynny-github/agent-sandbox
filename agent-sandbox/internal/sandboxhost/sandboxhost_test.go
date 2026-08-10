@@ -55,7 +55,7 @@ func TestResolve_Parity(t *testing.T) {
 			"bypass_protection": []any{"~/.docker", "~/.ssh"},
 		},
 		"environment": map[string]any{
-			"allow_vars": []any{"HOME", "LANG", "LC_ALL", "MISE*", "PATH", "TERM", "USER", "__MISE*"},
+			"allow_vars": []any{"AGENT_SANDBOX_BROKER_SOCKET", "HOME", "LANG", "LC_ALL", "MISE*", "PATH", "TERM", "USER", "__MISE*"},
 		},
 	}
 	if got := profileMap(t, r); !reflect.DeepEqual(got, want) {
@@ -77,7 +77,7 @@ func TestResolve_DenyRulesFromCapabilities(t *testing.T) {
 func TestResolve_BaselineOnlyWhenEmpty(t *testing.T) {
 	m := profileMap(t, resolve(t, config.HostConfig{}, "claude"))
 	env := m["environment"].(map[string]any)["allow_vars"].([]any)
-	if !reflect.DeepEqual(env, []any{"HOME", "LANG", "LC_ALL", "PATH", "TERM", "USER"}) {
+	if !reflect.DeepEqual(env, []any{"AGENT_SANDBOX_BROKER_SOCKET", "HOME", "LANG", "LC_ALL", "PATH", "TERM", "USER"}) {
 		t.Errorf("baseline env = %v", env)
 	}
 	fs := m["filesystem"].(map[string]any)

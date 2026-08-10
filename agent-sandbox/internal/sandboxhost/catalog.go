@@ -74,7 +74,13 @@ var agentBases = map[string]agentBase{
 // baselineEnv / baselineAllowFile are granted for every agent regardless of the
 // selected capabilities, so common shell/locale env and generic files never
 // have to be repeated per project.
-var baselineEnv = []string{"PATH", "HOME", "TERM", "LANG", "LC_ALL", "USER"}
+//
+// "AGENT_SANDBOX_BROKER_SOCKET" is the literal value of broker.SocketEnvVar,
+// duplicated here (rather than imported) to keep this package free of a
+// dependency on internal/broker. Without it, nono would strip the variable
+// and Claude could never reach the command broker.
+var baselineEnv = []string{"PATH", "HOME", "TERM", "LANG", "LC_ALL", "USER",
+	"AGENT_SANDBOX_BROKER_SOCKET"}
 var baselineAllowFile = []string{"/dev/null"}
 
 // protectedPrefixes are paths nono denies by default. A raw read/allow grant

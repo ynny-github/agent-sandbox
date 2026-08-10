@@ -61,7 +61,7 @@ func runDebug(cmd *cobra.Command, args []string) error {
 	}
 	defer cleanupProfile()
 
-	_, nonoArgs, err := claude.BuildArgs(cfg, opts, snapshotPath, "", profilePath, r.DenyRules)
+	_, nonoArgs, err := claude.BuildArgs(cfg, opts, snapshotPath, "", profilePath, r.DenyRules, "")
 	if err != nil {
 		return err
 	}

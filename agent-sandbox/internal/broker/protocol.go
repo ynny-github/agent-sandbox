@@ -36,10 +36,10 @@ const maxPayload = 1 << 20
 
 // Request is the first message on a connection: what to run and where.
 type Request struct {
-	Argv     []string `json:"argv"`
-	Cwd      string   `json:"cwd"`
-	Env      []string `json:"env"`
-	WithStdin bool    `json:"with_stdin"`
+	Argv      []string `json:"argv"`
+	Cwd       string   `json:"cwd"`
+	Env       []string `json:"env"`
+	WithStdin bool     `json:"with_stdin"`
 }
 
 // Frame is one decoded frame.
@@ -146,6 +146,12 @@ func ReadFrame(r io.Reader) (Frame, error) {
 	}
 	f.Payload = make([]byte, n)
 	if _, err := io.ReadFull(r, f.Payload); err != nil {
+		// If the payload read fails, it's a truncation, not a clean end-of-stream.
+		// io.ReadFull returns plain io.EOF if zero bytes were consumed; remap it
+		// so errors.Is(err, io.EOF) returns false for truncations.
+		if err == io.EOF {
+			err = io.ErrUnexpectedEOF
+		}
 		return Frame{}, fmt.Errorf("broker: read frame payload: %w", err)
 	}
 	return f, nil

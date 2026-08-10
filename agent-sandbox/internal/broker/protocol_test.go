@@ -77,3 +77,30 @@ func TestReadFrameRejectsOversizePayload(t *testing.T) {
 		t.Fatal("ReadFrame() error = nil, want oversize rejection")
 	}
 }
+
+func TestReadFrameTruncatedPayload(t *testing.T) {
+	// Valid 5-byte header claiming 10 bytes of payload, but followed by EOF.
+	// This is a truncated frame, not a clean end-of-stream.
+	raw := []byte{byte(broker.ChanStdout), 0x00, 0x00, 0x00, 0x0A}
+	_, err := broker.ReadFrame(bytes.NewReader(raw))
+	if err == nil {
+		t.Fatal("ReadFrame() error = nil, want truncation error")
+	}
+	// A truncated frame must NOT satisfy errors.Is(err, io.EOF).
+	if errors.Is(err, io.EOF) {
+		t.Errorf("ReadFrame() truncated frame error = %v, should NOT satisfy errors.Is(err, io.EOF)", err)
+	}
+	// Verify we do still get clean EOF at a frame boundary: write a complete zero-payload
+	// frame and then try to read past it.
+	var buf bytes.Buffer
+	if err := broker.WriteFrame(&buf, broker.ChanStdout, []byte("")); err != nil {
+		t.Fatalf("WriteFrame() error = %v", err)
+	}
+	if _, err := broker.ReadFrame(&buf); err != nil {
+		t.Fatalf("ReadFrame() error = %v", err)
+	}
+	// Now the buffer is exhausted; the next read should encounter EOF at the header stage.
+	if _, err := broker.ReadFrame(&buf); !errors.Is(err, io.EOF) {
+		t.Errorf("ReadFrame() clean EOF error = %v, want errors.Is(err, io.EOF)", err)
+	}
+}

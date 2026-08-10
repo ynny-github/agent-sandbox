@@ -68,8 +68,7 @@ type HostConfig struct {
 // (~/.config/agent-sandbox/config.toml) with the project-scope config at path,
 // then validates the merged result. Scalars: project overrides user. Lists
 // (command.allow, command.drop, command.env_passthrough,
-// container.env_passthrough, network.allow_domains, and the sandbox.host
-// lists): de-duplicated union.
+// network.allow_domains, and the sandbox.host lists): de-duplicated union.
 func Load(path string) (*Config, error) {
 	var cfg Config
 

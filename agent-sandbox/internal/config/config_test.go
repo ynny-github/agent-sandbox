@@ -478,3 +478,18 @@ allow_external = true
 		t.Fatalf("Load() error = %v, want ErrRemovedAllowExternal", err)
 	}
 }
+
+// TestLoad_RejectsRemovedContainerSection_UserScope pins the user-scope call
+// site of checkDeprecated directly (Load's step 1, before the project decode)
+// rather than only exercising it indirectly via the deprecated-allow_cidrs
+// coverage in TestLoad_Compose_DeprecatedKeyInUserFile.
+func TestLoad_RejectsRemovedContainerSection_UserScope(t *testing.T) {
+	writeUserToml(t, `
+[sandbox.container]
+image = "sandbox:0.1.0"
+`)
+	project := writeToml(t, validBase)
+	if _, err := config.Load(project); !errors.Is(err, config.ErrRemovedContainerSection) {
+		t.Errorf("err = %v, want ErrRemovedContainerSection", err)
+	}
+}

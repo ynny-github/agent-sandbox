@@ -13,9 +13,13 @@ import (
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 )
 
-// stateDir returns the directory that holds policy snapshots:
+// StateDir returns agent-sandbox's per-user state directory:
 // $XDG_STATE_HOME/agent-sandbox, falling back to ~/.local/state/agent-sandbox.
-func stateDir() (string, error) {
+// It is the single source of truth for this path; policy snapshots, the
+// command broker socket (internal/claude), and `agent-sandbox doctor`'s
+// broker-readiness check all derive their paths from it, so the three stay in
+// sync if it ever moves.
+func StateDir() (string, error) {
 	base := os.Getenv("XDG_STATE_HOME")
 	if base == "" {
 		home, err := os.UserHomeDir()
@@ -32,7 +36,7 @@ func stateDir() (string, error) {
 // written on the host before the sandbox starts; callers grant nono read-only
 // access to it (--read-file) so the agent cannot tamper with it.
 func Write(cfg *config.Config) (string, func(), error) {
-	dir, err := stateDir()
+	dir, err := StateDir()
 	if err != nil {
 		return "", nil, err
 	}

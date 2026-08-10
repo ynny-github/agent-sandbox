@@ -11,7 +11,7 @@
 There is no container and no bind mount — sandboxed commands run directly on the host filesystem, restricted to the current working directory (read+write):
 - Host commands (the allow list below) run in the real project directory using real host absolute paths.
 - Sandboxed commands run in that same directory at that same absolute path — no translation needed. HOME keeps its real host value.
-- Paths outside the working directory are not visible to a sandboxed command unless `sandbox.host` grants them.
+- Paths outside the working directory are visible to a sandboxed command only as read-only paths pulled in by non-credential `sandbox.host` capabilities (e.g. `go`, `python`). Raw `sandbox.host.allow/read/allow_file/read_file` grants and the credential capabilities (`docker`, `ssh`) apply to the launched agent only, never to a sandboxed command.
 {{if .Safe}}
 ## Safe command wrappers
 Prefer these validated wrappers over running the tool directly; each refuses known-dangerous invocations before running:

@@ -5,7 +5,7 @@ Routes an AI coding agent's shell commands to either the host machine or a sandb
 ## Install
 
 ```bash
-go install github.com/ynagai/mcp-command-router@latest
+go install github.com/ynny-github/agent-sandbox/agent-sandbox@latest
 ```
 
 ## Configuration
@@ -40,10 +40,11 @@ Check whether external dependencies are usable on this host:
 agent-sandbox doctor
 ```
 
-`doctor` verifies that `nono` is on `PATH` and that the command broker's
-socket directory (`$XDG_STATE_HOME/agent-sandbox`, or
-`~/.local/state/agent-sandbox` when `XDG_STATE_HOME` is unset) can be created
-and is writable. Exits 0 when all checks pass, 1 otherwise.
+`doctor` verifies that `nono` is on `PATH` and that the command broker can
+actually bind a unix socket in its socket directory
+(`$XDG_STATE_HOME/agent-sandbox`, or `~/.local/state/agent-sandbox` when
+`XDG_STATE_HOME` is unset) — the same way `agent-sandbox claude` does at
+launch. Exits 0 when all checks pass, 1 otherwise.
 
 Run Claude inside the nono sandbox. Options after `--` go to `claude`; the
 sandbox profile is generated from `[sandbox.host]` in `agent-sandbox.toml`,

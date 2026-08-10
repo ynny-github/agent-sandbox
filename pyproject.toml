@@ -7,8 +7,3 @@ dependencies = [
   "pytest>=9.0.3",
   "specify-cli @ git+https://github.com/github/spec-kit.git@v0.8.4",
 ]
-
-[tool.pytest.ini_options]
-markers = [
-  "docker: tests that require Docker daemon and sandbox startup",
-]

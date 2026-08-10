@@ -11,6 +11,22 @@ import (
 	"testing"
 )
 
+// shortStateDir returns a fresh, short-named temp directory suitable for
+// XDG_STATE_HOME in tests that actually bind a unix socket underneath it.
+// t.TempDir() embeds the (potentially long) test name in the path, which on
+// macOS can push a unix socket path past the ~104-byte sun_path limit and
+// make bind(2) fail with "invalid argument" — see
+// internal/broker/server_test.go's startTestServer for the same workaround.
+func shortStateDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "asdoc")
+	if err != nil {
+		t.Fatalf("MkdirTemp() error = %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return dir
+}
+
 func stubNonoSeams(t *testing.T, lp func(string) (string, error), rc func(context.Context, string, ...string) ([]byte, error)) {
 	t.Helper()
 	origLookPath := lookPath
@@ -58,7 +74,7 @@ func stubAllSeamsOK(t *testing.T) {
 		func(string) (string, error) { return "/usr/bin/nono", nil },
 		func(context.Context, string, ...string) ([]byte, error) { return []byte("nono 0.4.2\n"), nil },
 	)
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", shortStateDir(t))
 }
 
 func TestDoctorCmd_Registered(t *testing.T) {
@@ -146,7 +162,7 @@ func TestCheckNono_OK(t *testing.T) {
 }
 
 func TestCheckBrokerSocketDir_OK(t *testing.T) {
-	base := t.TempDir()
+	base := shortStateDir(t)
 	t.Setenv("XDG_STATE_HOME", base)
 
 	r := checkBrokerSocketDir()
@@ -175,6 +191,33 @@ func TestCheckBrokerSocketDir_UnwritableFails(t *testing.T) {
 	r := checkBrokerSocketDir()
 	if r.ok {
 		t.Fatal("expected NG when the socket dir cannot be created")
+	}
+	if r.hint == "" {
+		t.Error("expected hint on NG")
+	}
+}
+
+func TestCheckBrokerSocketDir_ExistingDirUnwritableFails(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses permission checks")
+	}
+	base := t.TempDir()
+	dir := filepath.Join(base, "agent-sandbox")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// os.MkdirAll returns nil for a directory that already exists, whatever
+	// its mode, so this pins that checkBrokerSocketDir does not stop there:
+	// it must also fail to bind a socket inside dir and report NG.
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Skipf("cannot make dir read-only in this environment: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	t.Setenv("XDG_STATE_HOME", base)
+
+	r := checkBrokerSocketDir()
+	if r.ok {
+		t.Fatal("expected NG when the existing socket dir cannot bind a socket")
 	}
 	if r.hint == "" {
 		t.Error("expected hint on NG")

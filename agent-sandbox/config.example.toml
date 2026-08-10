@@ -19,14 +19,19 @@ allow_domains = [
 allow = [
   "git *",
   "make *",
+  "npm run *",
 ]
+# Each drop entry is a { pattern, message } table; message is optional and, when
+# omitted, a default "dropped: command matches drop pattern ..." line is printed.
 drop = [
   # { pattern = "rm -rf *" },
+  # { pattern = "gh *", message = "gh is disabled; use the GitHub MCP tools." },
 ]
 # Environment variables forwarded to sandboxed commands. NONO_* is rejected:
 # those variables reconfigure the command sandbox itself.
 env_passthrough = [
   # "AWS_PROFILE",
+  # "HOME",
 ]
 
 [sandbox.host]

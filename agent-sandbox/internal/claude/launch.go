@@ -314,19 +314,14 @@ func startCommandBroker(cfg *config.Config) (string, func(), error) {
 	return srv.SocketPath(), cleanup, nil
 }
 
-// brokerSocketPath returns a per-process socket path under the same state dir
-// the policy snapshot uses. It stays short on purpose: unix socket paths are
+// brokerSocketPath returns a per-process socket path under
+// policysnapshot.StateDir(). It stays short on purpose: unix socket paths are
 // limited to about 104 bytes on macOS.
 func brokerSocketPath() (string, error) {
-	base := os.Getenv("XDG_STATE_HOME")
-	if base == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("resolve home dir: %w", err)
-		}
-		base = filepath.Join(home, ".local", "state")
+	dir, err := policysnapshot.StateDir()
+	if err != nil {
+		return "", err
 	}
-	dir := filepath.Join(base, "agent-sandbox")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create state dir: %w", err)
 	}

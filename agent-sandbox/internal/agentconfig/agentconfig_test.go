@@ -67,6 +67,8 @@ func TestExplain_FilesystemSection(t *testing.T) {
 		"## Filesystem: the same paths everywhere",
 		"no bind mount",
 		"HOME keeps its real host value",
+		"only as read-only paths pulled in by non-credential `sandbox.host` capabilities",
+		"credential capabilities (`docker`, `ssh`) apply to the launched agent only",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("Explain() missing filesystem note %q\nfull output:\n%s", want, got)

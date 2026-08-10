@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/policysnapshot"
 )
 
 var errDoctorChecksFailed = errors.New("doctor: checks failed")
@@ -101,24 +103,39 @@ func checkNono(ctx context.Context) checkResult {
 // checkBrokerSocketDir verifies the launcher can create the broker socket. A
 // failure here means `agent-sandbox claude` cannot start the command broker,
 // so every sandboxed command would fail.
+//
+// os.MkdirAll alone is not sufficient: it returns nil for a directory that
+// already exists, regardless of its permission bits, so an existing
+// unwritable state dir (e.g. left at mode 0500 by something else) would pass
+// even though the launcher cannot actually create a socket file inside it.
+// Binding a throwaway unix socket the same way the launcher does also catches
+// the ~104-byte sun_path limit a plain write wouldn't.
 func checkBrokerSocketDir() checkResult {
 	const name = "command broker"
-	base := os.Getenv("XDG_STATE_HOME")
-	if base == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return checkResult{name: name, ok: false,
-				details: []string{fmt.Sprintf("error: %v", err)},
-				hint:    "set HOME or XDG_STATE_HOME"}
-		}
-		base = filepath.Join(home, ".local", "state")
+	dir, err := policysnapshot.StateDir()
+	if err != nil {
+		return checkResult{name: name, ok: false,
+			details: []string{fmt.Sprintf("error: %v", err)},
+			hint:    "set HOME or XDG_STATE_HOME"}
 	}
-	dir := filepath.Join(base, "agent-sandbox")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return checkResult{name: name, ok: false,
 			details: []string{fmt.Sprintf("error: %v", err)},
 			hint:    fmt.Sprintf("make %s writable", dir)}
 	}
+
+	sockPath := filepath.Join(dir, fmt.Sprintf("doctor-%d.sock", os.Getpid()))
+	l, err := net.Listen("unix", sockPath)
+	if err != nil {
+		return checkResult{name: name, ok: false,
+			details: []string{fmt.Sprintf("error: %v", err)},
+			hint: fmt.Sprintf(
+				"make %s writable, or shorten XDG_STATE_HOME (unix socket paths are limited to ~104 bytes)", dir),
+		}
+	}
+	l.Close()
+	os.Remove(sockPath)
+
 	return checkResult{name: name, ok: true,
 		details: []string{fmt.Sprintf("socket dir: %s", dir)}}
 }

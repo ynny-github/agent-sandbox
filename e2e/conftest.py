@@ -55,18 +55,11 @@ def lightweight_config(tmp_path: Path, output_dir: Path) -> Path:
 command_output_dir = {toml_string(output_dir)}
 
 [sandbox.network]
-allow_cidrs = []
-allow_hosts = []
+allow_domains = []
 
 [sandbox.command]
 allow = ["echo *", "printf *"]
 drop = []
-
-[sandbox.container]
-build_context = {toml_string("./docker/sandbox")}
-dockerfile = "Dockerfile"
-image = "e2e"
-external_network = ""
 env_passthrough = []
 """.strip()
         + "\n",

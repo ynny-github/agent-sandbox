@@ -9,10 +9,9 @@ import (
 
 // Config holds routing patterns and the optional command runner.
 type Config struct {
-	AllowPatterns  []string
-	DropRules      []DropRule
-	EnvPassthrough []string
-	CommandRunner  CommandRunner // nil allowed (host/drop-only lines)
+	AllowPatterns []string
+	DropRules     []DropRule
+	CommandRunner CommandRunner // nil allowed (host/drop-only lines)
 }
 
 // Router routes and runs command lines.
@@ -34,13 +33,12 @@ type Result struct {
 // code. The error is non-nil only on host-execution infrastructure failure.
 func (s *Router) Run(ctx context.Context, command string, stdout, stderr io.Writer) (int, error) {
 	return Run(ctx, Request{
-		Command:        command,
-		AllowPatterns:  s.cfg.AllowPatterns,
-		DropRules:      s.cfg.DropRules,
-		CommandRunner:  s.cfg.CommandRunner,
-		EnvPassthrough: s.cfg.EnvPassthrough,
-		Stdout:         stdout,
-		Stderr:         stderr,
+		Command:       command,
+		AllowPatterns: s.cfg.AllowPatterns,
+		DropRules:     s.cfg.DropRules,
+		CommandRunner: s.cfg.CommandRunner,
+		Stdout:        stdout,
+		Stderr:        stderr,
 	})
 }
 

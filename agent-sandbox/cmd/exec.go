@@ -78,9 +78,8 @@ func commandFromArgs(cmd *cobra.Command, args []string) string {
 // decision is "sandbox", so host/drop commands never touch the broker.
 func runExecCore(ctx context.Context, cfg *config.Config, command string, stdout, stderr io.Writer) int {
 	s := router.New(router.Config{
-		AllowPatterns:  allowPatterns(cfg),
-		DropRules:      dropRules(cfg),
-		EnvPassthrough: cfg.Sandbox.Command.EnvPassthrough,
+		AllowPatterns: allowPatterns(cfg),
+		DropRules:     dropRules(cfg),
 	})
 
 	needs, err := s.NeedsSandbox(command)
@@ -103,10 +102,9 @@ func runExecCore(ctx context.Context, cfg *config.Config, command string, stdout
 		}
 		defer cleanup()
 		s = router.New(router.Config{
-			AllowPatterns:  allowPatterns(cfg),
-			DropRules:      dropRules(cfg),
-			EnvPassthrough: cfg.Sandbox.Command.EnvPassthrough,
-			CommandRunner:  runner,
+			AllowPatterns: allowPatterns(cfg),
+			DropRules:     dropRules(cfg),
+			CommandRunner: runner,
 		})
 	}
 

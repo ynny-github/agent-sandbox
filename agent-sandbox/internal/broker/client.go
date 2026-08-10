@@ -40,7 +40,7 @@ func NewClientFromEnv() (*Client, error) {
 
 // RunSandboxed sends one command to the broker and streams its output back.
 // It matches the router's runner interface.
-func (c *Client) RunSandboxed(ctx context.Context, argv []string, env []string,
+func (c *Client) RunSandboxed(ctx context.Context, argv []string,
 	stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", c.sockPath)
@@ -61,7 +61,7 @@ func (c *Client) RunSandboxed(ctx context.Context, argv []string, env []string,
 		}
 	}()
 
-	req := Request{Argv: argv, Cwd: workingDir(), Env: env, WithStdin: stdin != nil}
+	req := Request{Argv: argv, Cwd: workingDir(), WithStdin: stdin != nil}
 	if err := WriteRequest(conn, req); err != nil {
 		return 0, err
 	}

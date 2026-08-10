@@ -47,7 +47,7 @@ func childEnvFor(t *testing.T, cfg *config.Config) string {
 
 	var out, errb testBuffer
 	code, err := broker.NewClient(sock).RunSandboxed(
-		context.Background(), []string{"printenv"}, nil, nil, &out, &errb)
+		context.Background(), []string{"printenv"}, nil, &out, &errb)
 	if err != nil {
 		t.Fatalf("RunSandboxed() error = %v (stderr: %s)", err, errb.String())
 	}

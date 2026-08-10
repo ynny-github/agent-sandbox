@@ -18,11 +18,10 @@ type CommandRunner = router.CommandRunner
 type DropRule = router.DropRule
 
 type HandlerConfig struct {
-	OutputDir      string
-	AllowPatterns  []string
-	DropRules      []DropRule
-	CommandRunner  CommandRunner
-	EnvPassthrough []string
+	OutputDir     string
+	AllowPatterns []string
+	DropRules     []DropRule
+	CommandRunner CommandRunner
 }
 
 func HandleRunCommand(ctx context.Context, cmd string, cfg HandlerConfig) (*mcp.CallToolResult, any, error) {
@@ -32,10 +31,9 @@ func HandleRunCommand(ctx context.Context, cmd string, cfg HandlerConfig) (*mcp.
 	}
 
 	exitCode, runErr := router.New(router.Config{
-		AllowPatterns:  cfg.AllowPatterns,
-		DropRules:      cfg.DropRules,
-		CommandRunner:  cfg.CommandRunner,
-		EnvPassthrough: cfg.EnvPassthrough,
+		AllowPatterns: cfg.AllowPatterns,
+		DropRules:     cfg.DropRules,
+		CommandRunner: cfg.CommandRunner,
 	}).Run(ctx, cmd, files.Stdout, files.Stderr)
 
 	closeErr := files.Close()

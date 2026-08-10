@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"sync"
 
@@ -38,18 +37,17 @@ func printSandboxErr(stderr io.Writer, err error) {
 
 // CommandRunner executes an argv inside the sandbox.
 type CommandRunner interface {
-	RunSandboxed(ctx context.Context, argv []string, env []string, stdin io.Reader, stdout, stderr io.Writer) (int, error)
+	RunSandboxed(ctx context.Context, argv []string, stdin io.Reader, stdout, stderr io.Writer) (int, error)
 }
 
 // Request carries everything Run needs for a single command.
 type Request struct {
-	Command        string
-	AllowPatterns  []string
-	DropRules      []DropRule
-	CommandRunner  CommandRunner
-	EnvPassthrough []string
-	Stdout         io.Writer
-	Stderr         io.Writer
+	Command       string
+	AllowPatterns []string
+	DropRules     []DropRule
+	CommandRunner CommandRunner
+	Stdout        io.Writer
+	Stderr        io.Writer
 }
 
 // routedSeg pairs a parsed Segment with its routing decision.
@@ -189,8 +187,7 @@ func runUniformSandboxed(ctx context.Context, req Request, pl PipelineNode, rs [
 			fmt.Fprintln(req.Stderr, "rejected: empty command")
 			return 1, nil
 		}
-		env := resolveEnv(req.EnvPassthrough)
-		code, err := req.CommandRunner.RunSandboxed(ctx, rs[0].seg.Args, env, nil, req.Stdout, req.Stderr)
+		code, err := req.CommandRunner.RunSandboxed(ctx, rs[0].seg.Args, nil, req.Stdout, req.Stderr)
 		if err != nil {
 			printSandboxErr(req.Stderr, err)
 			if code == 0 {
@@ -212,8 +209,7 @@ func runSandboxedWhole(ctx context.Context, req Request, raw string) (int, error
 		return 1, nil
 	}
 	argv := []string{"bash", "-c", raw}
-	env := resolveEnv(req.EnvPassthrough)
-	code, err := req.CommandRunner.RunSandboxed(ctx, argv, env, nil, req.Stdout, req.Stderr)
+	code, err := req.CommandRunner.RunSandboxed(ctx, argv, nil, req.Stdout, req.Stderr)
 	if err != nil {
 		printSandboxErr(req.Stderr, err)
 		if code == 0 {
@@ -320,8 +316,7 @@ func runSegment(ctx context.Context, req Request, r routedSeg, stdin io.Reader, 
 		if r.seg.HasRedirect {
 			argv = []string{"bash", "-c", r.seg.Raw}
 		}
-		env := resolveEnv(req.EnvPassthrough)
-		return req.CommandRunner.RunSandboxed(ctx, argv, env, stdin, stdout, req.Stderr)
+		return req.CommandRunner.RunSandboxed(ctx, argv, stdin, stdout, req.Stderr)
 	}
 	// host
 	if r.seg.HasRedirect {
@@ -332,17 +327,4 @@ func runSegment(ctx context.Context, req Request, r routedSeg, stdin io.Reader, 
 		return 1, nil
 	}
 	return RunHost(ctx, r.seg.Args, stdin, stdout, req.Stderr)
-}
-
-func resolveEnv(keys []string) []string {
-	if len(keys) == 0 {
-		return nil
-	}
-	env := make([]string, 0, len(keys))
-	for _, k := range keys {
-		if v, ok := os.LookupEnv(k); ok {
-			env = append(env, k+"="+v)
-		}
-	}
-	return env
 }

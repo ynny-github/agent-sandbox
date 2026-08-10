@@ -14,7 +14,7 @@ import (
 // echoRunner copies its stdin to stdout (models `cat` in the sandbox).
 type echoRunner struct{ gotArgv [][]string }
 
-func (e *echoRunner) RunSandboxed(_ context.Context, argv, _ []string, stdin io.Reader, stdout, _ io.Writer) (int, error) {
+func (e *echoRunner) RunSandboxed(_ context.Context, argv []string, stdin io.Reader, stdout, _ io.Writer) (int, error) {
 	e.gotArgv = append(e.gotArgv, argv)
 	if stdin != nil {
 		io.Copy(stdout, stdin)
@@ -51,7 +51,7 @@ func TestRun_MixedPipe_HostToSandbox(t *testing.T) {
 // This simulates a downstream command like `head -1` that exits before its upstream finishes.
 type earlyExitRunner struct{}
 
-func (e *earlyExitRunner) RunSandboxed(_ context.Context, _ []string, _ []string, stdin io.Reader, stdout, _ io.Writer) (int, error) {
+func (e *earlyExitRunner) RunSandboxed(_ context.Context, _ []string, stdin io.Reader, stdout, _ io.Writer) (int, error) {
 	if stdin != nil {
 		line, _ := bufio.NewReader(stdin).ReadString('\n')
 		stdout.Write([]byte(line))

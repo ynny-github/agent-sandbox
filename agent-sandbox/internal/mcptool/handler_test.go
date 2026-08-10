@@ -17,15 +17,13 @@ import (
 
 // mockRunner implements mcptool.CommandRunner.
 type mockRunner struct {
-	exitCode    int
-	stdout      string
-	stderr      string
-	err         error
-	capturedEnv []string
+	exitCode int
+	stdout   string
+	stderr   string
+	err      error
 }
 
-func (m *mockRunner) RunSandboxed(ctx context.Context, argv []string, env []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
-	m.capturedEnv = env
+func (m *mockRunner) RunSandboxed(ctx context.Context, argv []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	if m.stdout != "" {
 		io.WriteString(stdout, m.stdout)
 	}
@@ -506,35 +504,6 @@ func TestRunCommand_DropPattern_DoesNotCallCommandRunner(t *testing.T) {
 	want := "dropped: command matches drop pattern \"rm -rf *\"\n"
 	if string(data) != want {
 		t.Errorf("stderr file = %q, want %q (sandbox runner must not contribute output)", string(data), want)
-	}
-}
-
-func TestRunCommand_EnvPassthrough_PassesResolvedEnvToRunner(t *testing.T) {
-	t.Setenv("CR_HANDLER_TEST_VAR", "passedvalue")
-
-	dir := t.TempDir()
-	runner := &mockRunner{exitCode: 0}
-	cfg := mcptool.HandlerConfig{
-		OutputDir:      dir,
-		AllowPatterns:  []string{},
-		CommandRunner:  runner,
-		EnvPassthrough: []string{"CR_HANDLER_TEST_VAR", "CR_HANDLER_TEST_ABSENT_XYZ"},
-	}
-	session := setupServerWithConfig(t, cfg)
-
-	_, err := session.CallTool(context.Background(), &mcp.CallToolParams{
-		Name:      "run_command",
-		Arguments: map[string]any{"command": "npm test"},
-	})
-	if err != nil {
-		t.Fatalf("CallTool error: %v", err)
-	}
-
-	if len(runner.capturedEnv) != 1 {
-		t.Fatalf("capturedEnv len = %d, want 1 (absent key skipped)", len(runner.capturedEnv))
-	}
-	if runner.capturedEnv[0] != "CR_HANDLER_TEST_VAR=passedvalue" {
-		t.Errorf("capturedEnv[0] = %q, want CR_HANDLER_TEST_VAR=passedvalue", runner.capturedEnv[0])
 	}
 }
 

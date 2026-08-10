@@ -20,13 +20,11 @@ type mockRunner struct {
 	stderr       string
 	err          error
 	called       bool
-	capturedEnv  []string
 	capturedArgv []string
 }
 
-func (m *mockRunner) RunSandboxed(ctx context.Context, argv []string, env []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+func (m *mockRunner) RunSandboxed(ctx context.Context, argv []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	m.called = true
-	m.capturedEnv = env
 	m.capturedArgv = argv
 	if m.stdout != "" {
 		io.WriteString(stdout, m.stdout)
@@ -46,7 +44,7 @@ type fakeRunner struct {
 	code  int
 }
 
-func (f *fakeRunner) RunSandboxed(_ context.Context, argv, _ []string, _ io.Reader, stdout, _ io.Writer) (int, error) {
+func (f *fakeRunner) RunSandboxed(_ context.Context, argv []string, _ io.Reader, stdout, _ io.Writer) (int, error) {
 	f.calls = append(f.calls, argv)
 	io.WriteString(stdout, f.out)
 	return f.code, nil
@@ -300,25 +298,6 @@ func TestRun_SandboxNotRunning_MixedPipeline_ShowsHint(t *testing.T) {
 	// fast-failing downstream is pre-existing plumbing and is not asserted on.)
 	if strings.Contains(errBuf.String(), "pipeline segment: sandbox is not running") {
 		t.Errorf("stderr = %q, sentinel must not be mislabeled as a pipeline-segment error", errBuf.String())
-	}
-}
-
-func TestRun_EnvPassthrough(t *testing.T) {
-	t.Setenv("CR_ENGINE_TEST_VAR", "passedvalue")
-	var out, errBuf bytes.Buffer
-	runner := &mockRunner{exitCode: 0}
-	_, err := router.Run(context.Background(), router.Request{
-		Command:        "npm test",
-		CommandRunner:  runner,
-		EnvPassthrough: []string{"CR_ENGINE_TEST_VAR", "CR_ENGINE_TEST_ABSENT_XYZ"},
-		Stdout:         &out,
-		Stderr:         &errBuf,
-	})
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
-	if len(runner.capturedEnv) != 1 || runner.capturedEnv[0] != "CR_ENGINE_TEST_VAR=passedvalue" {
-		t.Errorf("capturedEnv = %v, want [CR_ENGINE_TEST_VAR=passedvalue]", runner.capturedEnv)
 	}
 }
 

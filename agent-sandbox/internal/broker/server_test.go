@@ -63,7 +63,7 @@ func TestServerRunsCommandAndReturnsExitCode(t *testing.T) {
 	c := broker.NewClient(sock)
 	var out, errb testBuffer
 	code, err := c.RunSandboxed(context.Background(),
-		[]string{"go", "test"}, []string{"A=1"}, nil, &out, &errb)
+		[]string{"go", "test"}, nil, &out, &errb)
 	if err != nil {
 		t.Fatalf("RunSandboxed() error = %v", err)
 	}
@@ -73,8 +73,8 @@ func TestServerRunsCommandAndReturnsExitCode(t *testing.T) {
 	if out.String() == "" || errb.String() != "warned" {
 		t.Errorf("stdout = %q, stderr = %q", out.String(), errb.String())
 	}
-	if len(exec.gotReq.Env) != 1 || exec.gotReq.Env[0] != "A=1" {
-		t.Errorf("server received env %v, want [A=1]", exec.gotReq.Env)
+	if len(exec.gotReq.Argv) != 2 || exec.gotReq.Argv[0] != "go" {
+		t.Errorf("server received argv %v, want [go test]", exec.gotReq.Argv)
 	}
 }
 
@@ -117,7 +117,7 @@ func TestServerForwardsStdin(t *testing.T) {
 	c := broker.NewClient(sock)
 	var out, errb testBuffer
 	_, err := c.RunSandboxed(context.Background(),
-		[]string{"cat"}, nil, stringsReader("piped"), &out, &errb)
+		[]string{"cat"}, stringsReader("piped"), &out, &errb)
 	if err != nil {
 		t.Fatalf("RunSandboxed() error = %v", err)
 	}
@@ -165,7 +165,7 @@ func TestServerReportsExitWhenStdinNeverCloses(t *testing.T) {
 	go func() {
 		var out, errb testBuffer
 		code, rerr := broker.NewClient(sock).RunSandboxed(
-			context.Background(), []string{"grep", "-m1", "ERROR"}, nil, stdin, &out, &errb)
+			context.Background(), []string{"grep", "-m1", "ERROR"}, stdin, &out, &errb)
 		done <- result{code, rerr}
 	}()
 

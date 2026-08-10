@@ -12,9 +12,9 @@ import (
 func TestRequestRoundTrip(t *testing.T) {
 	var buf bytes.Buffer
 	want := broker.Request{
-		Argv: []string{"go", "build", "./..."},
-		Cwd:  "/work/project",
-		Env:  []string{"AWS_PROFILE=dev"},
+		Argv:      []string{"go", "build", "./..."},
+		Cwd:       "/work/project",
+		WithStdin: true,
 	}
 	if err := broker.WriteRequest(&buf, want); err != nil {
 		t.Fatalf("WriteRequest() error = %v", err)
@@ -23,7 +23,7 @@ func TestRequestRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadRequest() error = %v", err)
 	}
-	if got.Cwd != want.Cwd || len(got.Argv) != 3 || got.Argv[2] != "./..." || len(got.Env) != 1 {
+	if got.Cwd != want.Cwd || len(got.Argv) != 3 || got.Argv[2] != "./..." || !got.WithStdin {
 		t.Errorf("ReadRequest() = %+v, want %+v", got, want)
 	}
 }

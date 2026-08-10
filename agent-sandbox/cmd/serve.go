@@ -38,11 +38,10 @@ func newCommandRouterServer(cfg *config.Config, deps serveDependencies) *mcp.Ser
 	}, nil)
 
 	mcptool.Register(server, mcptool.HandlerConfig{
-		OutputDir:      cfg.MCP.CommandOutputDir,
-		AllowPatterns:  allowPatterns(cfg),
-		DropRules:      dropRules(cfg),
-		CommandRunner:  deps.commandRunner,
-		EnvPassthrough: cfg.Sandbox.Command.EnvPassthrough,
+		OutputDir:     cfg.MCP.CommandOutputDir,
+		AllowPatterns: allowPatterns(cfg),
+		DropRules:     dropRules(cfg),
+		CommandRunner: deps.commandRunner,
 	})
 
 	return server

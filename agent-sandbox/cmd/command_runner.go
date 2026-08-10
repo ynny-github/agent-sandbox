@@ -27,7 +27,7 @@ func newBrokerCommandRunner(_ context.Context, _ *config.Config) (router.Command
 // the much less useful "no command broker configured" line.
 type unavailableRunner struct{ err error }
 
-func (u unavailableRunner) RunSandboxed(_ context.Context, _ []string, _ []string,
+func (u unavailableRunner) RunSandboxed(_ context.Context, _ []string,
 	_ io.Reader, _, _ io.Writer) (int, error) {
 	return 0, u.err
 }

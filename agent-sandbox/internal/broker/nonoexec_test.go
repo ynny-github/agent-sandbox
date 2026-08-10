@@ -56,7 +56,7 @@ func TestNonoExecutorRunsProcess(t *testing.T) {
 
 	var out, errb testBuffer
 	code, err := e.Execute(context.Background(),
-		broker.Request{Argv: []string{"hello"}, Cwd: workdir, Env: []string{"X=1"}},
+		broker.Request{Argv: []string{"hello"}, Cwd: workdir},
 		nil, &out, &errb)
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)

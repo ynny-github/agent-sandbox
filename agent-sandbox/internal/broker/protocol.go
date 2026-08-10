@@ -35,10 +35,16 @@ const (
 const maxPayload = 1 << 20
 
 // Request is the first message on a connection: what to run and where.
+//
+// There is deliberately no environment field. The command's environment is a
+// policy decision owned by the launcher, which resolves it outside the sandbox
+// from the command profile's allow_vars (see NonoExecutor.ProcessEnv). A
+// request-supplied environment could not work — the agent's nono profile
+// strips those variables long before the router could report them — and must
+// not work, because the request originates inside the sandbox it configures.
 type Request struct {
 	Argv      []string `json:"argv"`
 	Cwd       string   `json:"cwd"`
-	Env       []string `json:"env"`
 	WithStdin bool     `json:"with_stdin"`
 }
 

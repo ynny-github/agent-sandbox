@@ -65,7 +65,7 @@ func runBrokered(t *testing.T, allowDomains []string, argv []string) int {
 
 	var out, errb testBuffer
 	code, err := broker.NewClient(sock).RunSandboxed(
-		context.Background(), argv, nil, nil, &out, &errb)
+		context.Background(), argv, nil, &out, &errb)
 	if err != nil {
 		t.Fatalf("RunSandboxed() error = %v (stderr: %s)", err, errb.String())
 	}

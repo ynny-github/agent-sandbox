@@ -28,12 +28,14 @@ type SandboxConfig struct {
 }
 
 type NetworkConfig struct {
-	AllowExternal bool `toml:"allow_external"`
+	AllowExternal bool     `toml:"allow_external"`
+	AllowDomains  []string `toml:"allow_domains"`
 }
 
 type CommandConfig struct {
-	Allow []string   `toml:"allow"`
-	Drop  []DropRule `toml:"drop"`
+	Allow          []string   `toml:"allow"`
+	Drop           []DropRule `toml:"drop"`
+	EnvPassthrough []string   `toml:"env_passthrough"`
 }
 
 // DropRule is one drop pattern with an optional custom refusal message. Every
@@ -75,8 +77,9 @@ type HostConfig struct {
 // Load composes the optional user-scope config
 // (~/.config/agent-sandbox/config.toml) with the project-scope config at path,
 // then validates the merged result. Scalars: project overrides user. Lists
-// (command.allow, command.drop, container.env_passthrough, and the
-// sandbox.host lists): de-duplicated union.
+// (command.allow, command.drop, command.env_passthrough,
+// container.env_passthrough, network.allow_domains, and the sandbox.host
+// lists): de-duplicated union.
 func Load(path string) (*Config, error) {
 	var cfg Config
 
@@ -87,6 +90,7 @@ func Load(path string) (*Config, error) {
 	//    decode below.
 	var userAllow, userEnv []string
 	var userDrop []DropRule
+	var userAllowDomains, userCmdEnv []string
 	var hostSnap hostLists
 	if up, err := userConfigPath(); err == nil {
 		if _, statErr := os.Stat(up); statErr == nil {
@@ -100,6 +104,8 @@ func Load(path string) (*Config, error) {
 			userAllow = slices.Clone(cfg.Sandbox.Command.Allow)
 			userDrop = slices.Clone(cfg.Sandbox.Command.Drop)
 			userEnv = slices.Clone(cfg.Sandbox.Container.EnvPassthrough)
+			userAllowDomains = slices.Clone(cfg.Sandbox.Network.AllowDomains)
+			userCmdEnv = slices.Clone(cfg.Sandbox.Command.EnvPassthrough)
 			userHostCaps := slices.Clone(cfg.Sandbox.Host.Capabilities)
 			userHostAllow := slices.Clone(cfg.Sandbox.Host.Allow)
 			userHostRead := slices.Clone(cfg.Sandbox.Host.Read)
@@ -125,6 +131,8 @@ func Load(path string) (*Config, error) {
 	cfg.Sandbox.Command.Allow = dedupUnion(userAllow, cfg.Sandbox.Command.Allow)
 	cfg.Sandbox.Command.Drop = dedupUnionDrop(userDrop, cfg.Sandbox.Command.Drop)
 	cfg.Sandbox.Container.EnvPassthrough = dedupUnion(userEnv, cfg.Sandbox.Container.EnvPassthrough)
+	cfg.Sandbox.Network.AllowDomains = dedupUnion(userAllowDomains, cfg.Sandbox.Network.AllowDomains)
+	cfg.Sandbox.Command.EnvPassthrough = dedupUnion(userCmdEnv, cfg.Sandbox.Command.EnvPassthrough)
 	cfg.Sandbox.Host.Capabilities = dedupUnion(hostSnap.caps, cfg.Sandbox.Host.Capabilities)
 	cfg.Sandbox.Host.Allow = dedupUnion(hostSnap.allow, cfg.Sandbox.Host.Allow)
 	cfg.Sandbox.Host.Read = dedupUnion(hostSnap.read, cfg.Sandbox.Host.Read)
@@ -185,6 +193,11 @@ func validate(cfg *Config) (*Config, error) {
 	for _, r := range cfg.Sandbox.Command.Drop {
 		if strings.TrimSpace(r.Pattern) == "" {
 			return nil, ErrDropRuleMissingPattern
+		}
+	}
+	for _, name := range cfg.Sandbox.Command.EnvPassthrough {
+		if strings.HasPrefix(strings.TrimSpace(name), "NONO_") {
+			return nil, fmt.Errorf("%w: %q", ErrEnvPassthroughNonoVar, name)
 		}
 	}
 	return cfg, nil

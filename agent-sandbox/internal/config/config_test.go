@@ -634,3 +634,65 @@ tool_mode = "mcp"
 		t.Errorf("err = %v, want ErrMissingContainerImage", err)
 	}
 }
+
+func TestLoad_NetworkAllowDomains(t *testing.T) {
+	path := writeToml(t, `
+tool_mode = "hook"
+
+[sandbox.network]
+allow_domains = ["proxy.golang.org", "sum.golang.org"]
+
+[sandbox.container]
+build_context = "./docker/sandbox"
+dockerfile = "Dockerfile"
+image = "sandbox:0.1.0"
+`)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	want := []string{"proxy.golang.org", "sum.golang.org"}
+	if !slices.Equal(cfg.Sandbox.Network.AllowDomains, want) {
+		t.Errorf("AllowDomains = %v, want %v", cfg.Sandbox.Network.AllowDomains, want)
+	}
+}
+
+func TestLoad_CommandEnvPassthrough(t *testing.T) {
+	path := writeToml(t, `
+tool_mode = "hook"
+
+[sandbox.command]
+env_passthrough = ["AWS_PROFILE", "MISE_SHELL"]
+
+[sandbox.container]
+build_context = "./docker/sandbox"
+dockerfile = "Dockerfile"
+image = "sandbox:0.1.0"
+`)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	want := []string{"AWS_PROFILE", "MISE_SHELL"}
+	if !slices.Equal(cfg.Sandbox.Command.EnvPassthrough, want) {
+		t.Errorf("EnvPassthrough = %v, want %v", cfg.Sandbox.Command.EnvPassthrough, want)
+	}
+}
+
+func TestLoad_RejectsNonoEnvPassthrough(t *testing.T) {
+	path := writeToml(t, `
+tool_mode = "hook"
+
+[sandbox.command]
+env_passthrough = ["AWS_PROFILE", "NONO_ALLOW_DOMAIN"]
+
+[sandbox.container]
+build_context = "./docker/sandbox"
+dockerfile = "Dockerfile"
+image = "sandbox:0.1.0"
+`)
+	_, err := config.Load(path)
+	if !errors.Is(err, config.ErrEnvPassthroughNonoVar) {
+		t.Fatalf("Load() error = %v, want ErrEnvPassthroughNonoVar", err)
+	}
+}

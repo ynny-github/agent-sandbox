@@ -14,7 +14,7 @@ import (
 // echoRunner copies its stdin to stdout (models `cat` in the container).
 type echoRunner struct{ gotArgv [][]string }
 
-func (e *echoRunner) RunContainer(_ context.Context, argv, _ []string, stdin io.Reader, stdout, _ io.Writer) (int, error) {
+func (e *echoRunner) RunSandboxed(_ context.Context, argv, _ []string, stdin io.Reader, stdout, _ io.Writer) (int, error) {
 	e.gotArgv = append(e.gotArgv, argv)
 	if stdin != nil {
 		io.Copy(stdout, stdin)
@@ -27,10 +27,10 @@ func TestRun_MixedPipe_HostToContainer(t *testing.T) {
 	r := &echoRunner{}
 	var out, errb bytes.Buffer
 	code, err := router.Run(context.Background(), router.Request{
-		Command:         "echo hi | cat",
-		AllowPatterns:   []string{"echo *"}, // echo→host, cat→container
-		ContainerRunner: r,
-		Stdout:          &out, Stderr: &errb,
+		Command:       "echo hi | cat",
+		AllowPatterns: []string{"echo *"}, // echo→host, cat→container
+		CommandRunner: r,
+		Stdout:        &out, Stderr: &errb,
 	})
 	if err != nil {
 		t.Fatalf("err = %v stderr=%q", err, errb.String())
@@ -51,7 +51,7 @@ func TestRun_MixedPipe_HostToContainer(t *testing.T) {
 // This simulates a downstream command like `head -1` that exits before its upstream finishes.
 type earlyExitRunner struct{}
 
-func (e *earlyExitRunner) RunContainer(_ context.Context, _ []string, _ []string, stdin io.Reader, stdout, _ io.Writer) (int, error) {
+func (e *earlyExitRunner) RunSandboxed(_ context.Context, _ []string, _ []string, stdin io.Reader, stdout, _ io.Writer) (int, error) {
 	if stdin != nil {
 		line, _ := bufio.NewReader(stdin).ReadString('\n')
 		stdout.Write([]byte(line))
@@ -77,11 +77,11 @@ func TestRun_MixedPipe_EarlyExitDeadlockGuard(t *testing.T) {
 	go func() {
 		defer close(done)
 		runCode, runErr = router.Run(context.Background(), router.Request{
-			Command:         "seq 1 1000000 | cat",
-			AllowPatterns:   []string{"seq *"}, // seq→host, cat→container
-			ContainerRunner: &earlyExitRunner{},
-			Stdout:          &out,
-			Stderr:          &errb,
+			Command:       "seq 1 1000000 | cat",
+			AllowPatterns: []string{"seq *"}, // seq→host, cat→container
+			CommandRunner: &earlyExitRunner{},
+			Stdout:        &out,
+			Stderr:        &errb,
 		})
 	}()
 	select {
@@ -105,11 +105,11 @@ func TestRun_MixedPipe_ThreeSegments(t *testing.T) {
 	r := &echoRunner{}
 	var out, errb bytes.Buffer
 	code, err := router.Run(context.Background(), router.Request{
-		Command:         "echo hello | cat | tr a-z A-Z",
-		AllowPatterns:   []string{"echo *", "tr *"}, // echo+tr→host, cat→container
-		ContainerRunner: r,
-		Stdout:          &out,
-		Stderr:          &errb,
+		Command:       "echo hello | cat | tr a-z A-Z",
+		AllowPatterns: []string{"echo *", "tr *"}, // echo+tr→host, cat→container
+		CommandRunner: r,
+		Stdout:        &out,
+		Stderr:        &errb,
 	})
 	if err != nil {
 		t.Fatalf("err = %v stderr=%q", err, errb.String())

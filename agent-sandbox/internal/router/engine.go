@@ -1,4 +1,4 @@
-// Package router routes a command to drop/host/container and executes it,
+// Package router routes a command to drop/host/sandbox and executes it,
 // independent of any transport (MCP, CLI). Output is written to the caller's
 // io.Writers.
 package router
@@ -11,39 +11,41 @@ import (
 	"os"
 	"strings"
 	"sync"
+
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/broker"
 )
 
 // sandboxNotRunningHint is the actionable message shown when a command is
-// routed to the sandbox but the container is not running.
-const sandboxNotRunningHint = "sandbox is not running; start it with `agent-sandbox sandbox up -d`, or run Claude via `agent-sandbox claude` (which starts the sandbox automatically)"
+// routed to the sandbox but the command broker is not available.
+const sandboxNotRunningHint = "command broker is not available; run Claude via `agent-sandbox claude`, which starts it automatically"
 
-// printContainerErr writes a container-execution error to stderr, translating
+// printSandboxErr writes a sandbox-execution error to stderr, translating
 // the sandbox-not-running sentinel into an actionable hint rather than a raw
-// Docker/Compose error. It is for uniform-container paths; runMixedPipeline
-// handles the sentinel inline because its non-sentinel prefix differs
-// ("pipeline segment:" vs "container exec:").
-func printContainerErr(stderr io.Writer, err error) {
-	if errors.Is(err, ErrSandboxNotRunning) {
+// broker error. It is for uniform-sandbox paths; runMixedPipeline handles the
+// sentinel inline because its non-sentinel prefix differs ("pipeline segment:"
+// vs "sandbox exec:").
+func printSandboxErr(stderr io.Writer, err error) {
+	if errors.Is(err, ErrSandboxNotRunning) || errors.Is(err, broker.ErrBrokerUnavailable) {
 		fmt.Fprintln(stderr, sandboxNotRunningHint)
 		return
 	}
-	fmt.Fprintf(stderr, "container exec: %v\n", err)
+	fmt.Fprintf(stderr, "sandbox exec: %v\n", err)
 }
 
-// ContainerRunner executes an argv inside the sandbox container.
-type ContainerRunner interface {
-	RunContainer(ctx context.Context, argv []string, env []string, stdin io.Reader, stdout, stderr io.Writer) (int, error)
+// CommandRunner executes an argv inside the sandbox.
+type CommandRunner interface {
+	RunSandboxed(ctx context.Context, argv []string, env []string, stdin io.Reader, stdout, stderr io.Writer) (int, error)
 }
 
 // Request carries everything Run needs for a single command.
 type Request struct {
-	Command                 string
-	AllowPatterns           []string
-	DropRules               []DropRule
-	ContainerRunner         ContainerRunner
-	ContainerEnvPassthrough []string
-	Stdout                  io.Writer
-	Stderr                  io.Writer
+	Command        string
+	AllowPatterns  []string
+	DropRules      []DropRule
+	CommandRunner  CommandRunner
+	EnvPassthrough []string
+	Stdout         io.Writer
+	Stderr         io.Writer
 }
 
 // routedSeg pairs a parsed Segment with its routing decision.
@@ -63,13 +65,13 @@ func Run(ctx context.Context, req Request) (int, error) {
 
 	// Fallback: $(), backtick, or lone & — must run whole line in a shell.
 	// Per-segment routing cannot reach the embedded command, so the whole line
-	// runs in the container.
+	// runs in the sandbox.
 	if line.Fallback {
-		return runContainerWhole(ctx, req, req.Command)
+		return runSandboxedWhole(ctx, req, req.Command)
 	}
 
 	// Route every segment up front. Two-pass: first check all segments for drop
-	// (fail-closed before any execution), then check for missing container runner.
+	// (fail-closed before any execution), then check for missing command runner.
 	// Trim each segment's Raw before routing to strip structural whitespace left
 	// by the pipeline/sequential split (e.g. " b" or "false ").
 	// INVARIANT: trimming is for pattern matching only; execution always uses the
@@ -89,11 +91,11 @@ func Run(ctx context.Context, req Request) (int, error) {
 			plDecisions[i] = append(plDecisions[i], routedSeg{seg: seg, decision: decision})
 		}
 	}
-	// Second pass: check for missing container runner now that drops are clear.
+	// Second pass: check for missing command runner now that drops are clear.
 	for _, pl := range plDecisions {
 		for _, r := range pl {
-			if r.decision == "container" && req.ContainerRunner == nil {
-				fmt.Fprintln(req.Stderr, "no container configured: cannot route command to container")
+			if r.decision == "sandbox" && req.CommandRunner == nil {
+				fmt.Fprintln(req.Stderr, "no command broker configured: cannot run this command in a sandbox")
 				return 1, nil
 			}
 		}
@@ -125,24 +127,24 @@ func Run(ctx context.Context, req Request) (int, error) {
 }
 
 // runPipeline runs one pipeline. Uniform pipelines (all segments on the same
-// side) run as a single invocation on that side. Mixed host+container pipelines
+// side) run as a single invocation on that side. Mixed host+sandbox pipelines
 // are wired segment-by-segment with io.Pipe via runMixedPipeline.
 func runPipeline(ctx context.Context, req Request, pl PipelineNode, rs []routedSeg) (int, error) {
 	allHost := true
-	allContainer := true
+	allSandbox := true
 	for _, r := range rs {
-		if r.decision == "container" {
+		if r.decision == "sandbox" {
 			allHost = false
 		} else {
-			allContainer = false
+			allSandbox = false
 		}
 	}
 
 	switch {
 	case allHost:
 		return runUniformHost(ctx, req, pl, rs)
-	case allContainer:
-		return runUniformContainer(ctx, req, pl, rs)
+	case allSandbox:
+		return runUniformSandboxed(ctx, req, pl, rs)
 	default:
 		return runMixedPipeline(ctx, req, rs)
 	}
@@ -173,20 +175,20 @@ func runUniformHost(ctx context.Context, req Request, pl PipelineNode, rs []rout
 	return code, nil
 }
 
-// runUniformContainer runs a pipeline where every segment routes to the container.
+// runUniformSandboxed runs a pipeline where every segment routes to the sandbox.
 // A single simple segment (no redirect) runs as argv (mirroring runUniformHost).
 // Multiple segments or a redirect run via bash -c on the pipeline raw.
-func runUniformContainer(ctx context.Context, req Request, pl PipelineNode, rs []routedSeg) (int, error) {
+func runUniformSandboxed(ctx context.Context, req Request, pl PipelineNode, rs []routedSeg) (int, error) {
 	// Single simple segment → argv (not bash -c), mirroring host behavior.
 	if len(rs) == 1 && !rs[0].seg.HasRedirect {
 		if len(rs[0].seg.Args) == 0 {
 			fmt.Fprintln(req.Stderr, "rejected: empty command")
 			return 1, nil
 		}
-		env := resolveEnv(req.ContainerEnvPassthrough)
-		code, err := req.ContainerRunner.RunContainer(ctx, rs[0].seg.Args, env, nil, req.Stdout, req.Stderr)
+		env := resolveEnv(req.EnvPassthrough)
+		code, err := req.CommandRunner.RunSandboxed(ctx, rs[0].seg.Args, env, nil, req.Stdout, req.Stderr)
 		if err != nil {
-			printContainerErr(req.Stderr, err)
+			printSandboxErr(req.Stderr, err)
 			if code == 0 {
 				code = 1
 			}
@@ -194,22 +196,22 @@ func runUniformContainer(ctx context.Context, req Request, pl PipelineNode, rs [
 		}
 		return code, nil
 	}
-	// Pipeline or redirect in container → bash -c the raw pipeline.
-	return runContainerWhole(ctx, req, pl.Raw)
+	// Pipeline or redirect in the sandbox → bash -c the raw pipeline.
+	return runSandboxedWhole(ctx, req, pl.Raw)
 }
 
-// runContainerWhole runs raw in the container via bash -c. Used for
-// all-container pipelines with redirects, and fallback constructs ($(), backtick, &).
-func runContainerWhole(ctx context.Context, req Request, raw string) (int, error) {
-	if req.ContainerRunner == nil {
-		fmt.Fprintln(req.Stderr, "no container configured: cannot route command to container")
+// runSandboxedWhole runs raw in the sandbox via bash -c. Used for
+// all-sandbox pipelines with redirects, and fallback constructs ($(), backtick, &).
+func runSandboxedWhole(ctx context.Context, req Request, raw string) (int, error) {
+	if req.CommandRunner == nil {
+		fmt.Fprintln(req.Stderr, "no command broker configured: cannot run this command in a sandbox")
 		return 1, nil
 	}
 	argv := []string{"bash", "-c", raw}
-	env := resolveEnv(req.ContainerEnvPassthrough)
-	code, err := req.ContainerRunner.RunContainer(ctx, argv, env, nil, req.Stdout, req.Stderr)
+	env := resolveEnv(req.EnvPassthrough)
+	code, err := req.CommandRunner.RunSandboxed(ctx, argv, env, nil, req.Stdout, req.Stderr)
 	if err != nil {
-		printContainerErr(req.Stderr, err)
+		printSandboxErr(req.Stderr, err)
 		if code == 0 {
 			code = 1
 		}
@@ -231,7 +233,7 @@ func (s *syncWriter) Write(p []byte) (int, error) {
 	return s.w.Write(p)
 }
 
-// runMixedPipeline runs a pipeline whose segments span host and container,
+// runMixedPipeline runs a pipeline whose segments span host and sandbox,
 // wiring stdout→stdin between adjacent segments with io.Pipe. All segments run
 // concurrently; the exit code is that of the last segment.
 //
@@ -281,7 +283,7 @@ func runMixedPipeline(ctx context.Context, req Request, rs []routedSeg) (int, er
 			code, err := runSegment(ctx, safeReq, rs[i], stdins[i], stdouts[i])
 			exits[i] = code
 			if err != nil {
-				if errors.Is(err, ErrSandboxNotRunning) {
+				if errors.Is(err, ErrSandboxNotRunning) || errors.Is(err, broker.ErrBrokerUnavailable) {
 					fmt.Fprintln(safeReq.Stderr, sandboxNotRunningHint)
 				} else {
 					fmt.Fprintf(safeReq.Stderr, "pipeline segment: %v\n", err)
@@ -309,13 +311,13 @@ func runMixedPipeline(ctx context.Context, req Request, rs []routedSeg) (int, er
 // runSegment runs a single routed segment with the given stdin/stdout. Its
 // stderr always goes to req.Stderr. Redirect-bearing segments run via bash -c.
 func runSegment(ctx context.Context, req Request, r routedSeg, stdin io.Reader, stdout io.Writer) (int, error) {
-	if r.decision == "container" {
+	if r.decision == "sandbox" {
 		argv := r.seg.Args
 		if r.seg.HasRedirect {
 			argv = []string{"bash", "-c", r.seg.Raw}
 		}
-		env := resolveEnv(req.ContainerEnvPassthrough)
-		return req.ContainerRunner.RunContainer(ctx, argv, env, stdin, stdout, req.Stderr)
+		env := resolveEnv(req.EnvPassthrough)
+		return req.CommandRunner.RunSandboxed(ctx, argv, env, stdin, stdout, req.Stderr)
 	}
 	// host
 	if r.seg.HasRedirect {

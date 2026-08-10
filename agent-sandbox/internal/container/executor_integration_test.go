@@ -82,7 +82,7 @@ func TestUp_StartsAndIsRunning(t *testing.T) {
 	}
 }
 
-func TestRunContainer_ExitCodeAndOutput(t *testing.T) {
+func TestRunSandboxed_ExitCodeAndOutput(t *testing.T) {
 	cli := newITCli(t)
 	spec, err := container.NewSandboxSpec(1000, 1000, "../../../docker/sandbox", "Dockerfile", "exectest", false, "")
 	if err != nil {
@@ -101,9 +101,9 @@ func TestRunContainer_ExitCodeAndOutput(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	code, err := ex.RunContainer(ctx, []string{"echo", "hello"}, nil, nil, &out, &out)
+	code, err := ex.RunSandboxed(ctx, []string{"echo", "hello"}, nil, nil, &out, &out)
 	if err != nil {
-		t.Fatalf("RunContainer: %v", err)
+		t.Fatalf("RunSandboxed: %v", err)
 	}
 	if code != 0 {
 		t.Errorf("exit code = %d, want 0", code)
@@ -112,9 +112,9 @@ func TestRunContainer_ExitCodeAndOutput(t *testing.T) {
 		t.Errorf("output = %q, want to contain hello", out.String())
 	}
 
-	code, err = ex.RunContainer(ctx, []string{"sh", "-c", "exit 3"}, nil, nil, &out, &out)
+	code, err = ex.RunSandboxed(ctx, []string{"sh", "-c", "exit 3"}, nil, nil, &out, &out)
 	if err != nil {
-		t.Fatalf("RunContainer(exit 3): %v", err)
+		t.Fatalf("RunSandboxed(exit 3): %v", err)
 	}
 	if code != 3 {
 		t.Errorf("exit code = %d, want 3", code)

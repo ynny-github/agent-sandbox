@@ -21,7 +21,7 @@ var serveCmd = &cobra.Command{
 const e2eLightweightEnv = "AGENT_SANDBOX_E2E_LIGHTWEIGHT"
 
 type serveDependencies struct {
-	containerRunner mcptool.ContainerRunner
+	commandRunner mcptool.CommandRunner
 }
 
 func init() {
@@ -35,11 +35,11 @@ func newCommandRouterServer(cfg *config.Config, deps serveDependencies) *mcp.Ser
 	}, nil)
 
 	mcptool.Register(server, mcptool.HandlerConfig{
-		OutputDir:               cfg.MCP.CommandOutputDir,
-		AllowPatterns:           allowPatterns(cfg),
-		DropRules:               dropRules(cfg),
-		ContainerRunner:         deps.containerRunner,
-		ContainerEnvPassthrough: cfg.Sandbox.Container.EnvPassthrough,
+		OutputDir:      cfg.MCP.CommandOutputDir,
+		AllowPatterns:  allowPatterns(cfg),
+		DropRules:      dropRules(cfg),
+		CommandRunner:  deps.commandRunner,
+		EnvPassthrough: cfg.Sandbox.Container.EnvPassthrough,
 	})
 
 	return server
@@ -63,14 +63,14 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return runLightweightServe(cfg)
 	}
 
-	runner, cleanup, err := newComposeContainerRunner(context.Background(), cfg)
+	runner, cleanup, err := newBrokerCommandRunner(context.Background(), cfg)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
 
 	server := newCommandRouterServer(cfg, serveDependencies{
-		containerRunner: runner,
+		commandRunner: runner,
 	})
 
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {

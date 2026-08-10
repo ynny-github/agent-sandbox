@@ -27,7 +27,7 @@ func Route(cmd string, allow []string, drop []DropRule) (decision, matched, mess
 			return "drop", rule.Pattern, rule.Message
 		}
 	}
-	return "container", "", ""
+	return "sandbox", "", ""
 }
 
 func matchPattern(pattern, cmd string) bool {

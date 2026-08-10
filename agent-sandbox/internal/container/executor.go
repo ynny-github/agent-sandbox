@@ -98,11 +98,11 @@ func (e *ContainerExecutor) findContainerID(ctx context.Context, running bool) (
 	return containers[0].ID, nil
 }
 
-// RunContainer execs argv inside the running sandbox container, streaming
+// RunSandboxed execs argv inside the running sandbox container, streaming
 // stdout/stderr and optionally forwarding stdin, and returns the process exit
 // code. It returns router.ErrSandboxNotRunning if the sandbox container is
 // not currently running.
-func (e *ContainerExecutor) RunContainer(ctx context.Context, argv []string, env []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+func (e *ContainerExecutor) RunSandboxed(ctx context.Context, argv []string, env []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	if err := e.WaitReady(ctx); err != nil {
 		return 0, fmt.Errorf("executor: sandbox not ready: %w", err)
 	}

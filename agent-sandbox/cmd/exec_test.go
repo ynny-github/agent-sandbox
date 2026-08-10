@@ -59,7 +59,7 @@ func TestRunExecCore_DropPattern_CustomMessage(t *testing.T) {
 }
 
 func TestRunExecCore_ParseFailure(t *testing.T) {
-	// An unterminated quote is a parse error; NeedsContainer returns the error
+	// An unterminated quote is a parse error; NeedsSandbox returns the error
 	// and runExecCore writes it to stderr, returning exit code 1.
 	cfg := &config.Config{}
 	cfg.Sandbox.Command.Allow = []string{"echo *"}

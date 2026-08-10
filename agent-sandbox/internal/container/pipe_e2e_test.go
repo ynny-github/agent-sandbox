@@ -30,8 +30,8 @@ func TestPipe_E2E(t *testing.T) {
 	}
 
 	s := router.New(router.Config{
-		AllowPatterns:   []string{"echo *"}, // echo on host, tr in container
-		ContainerRunner: ex,
+		AllowPatterns: []string{"echo *"}, // echo on host, tr in the sandbox
+		CommandRunner: ex,
 	})
 	res, err := s.RunBuffered(ctx, "echo hello | tr a-z A-Z")
 	if err != nil {

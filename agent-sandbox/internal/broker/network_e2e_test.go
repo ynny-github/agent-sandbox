@@ -47,8 +47,16 @@ func runBrokered(t *testing.T, allowDomains []string, argv []string) int {
 		t.Fatalf("MkdirTemp() error = %v", err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
+	// The client sends its own working directory, which the executor validates
+	// against the directory it was given, so pass the test process's cwd here.
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+
 	sock := filepath.Join(dir, "e.sock")
-	srv, err := broker.NewServer(sock, broker.NewNonoExecutor(nonoPath, profilePath))
+	srv, err := broker.NewServer(sock,
+		broker.NewNonoExecutor(nonoPath, profilePath, cwd, cfg.Sandbox.Command.EnvPassthrough))
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}

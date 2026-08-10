@@ -294,13 +294,18 @@ func startCommandBroker(cfg *config.Config) (string, func(), error) {
 		return "", nil, err
 	}
 
-	sockPath, err := brokerSocketPath()
+	sockPath, err := BrokerSocketPath()
 	if err != nil {
 		cleanupProfile()
 		return "", nil, err
 	}
 
-	srv, err := broker.NewServer(sockPath, broker.NewNonoExecutor(nonoPath, profilePath))
+	// The executor is given the launcher's own working directory and the
+	// configured env allowlist: both bound what a request (which originates
+	// inside the sandbox) may ask the unsandboxed nono supervisor to do.
+	executor := broker.NewNonoExecutor(nonoPath, profilePath, cwd,
+		cfg.Sandbox.Command.EnvPassthrough)
+	srv, err := broker.NewServer(sockPath, executor)
 	if err != nil {
 		cleanupProfile()
 		return "", nil, err
@@ -314,10 +319,13 @@ func startCommandBroker(cfg *config.Config) (string, func(), error) {
 	return srv.SocketPath(), cleanup, nil
 }
 
-// brokerSocketPath returns a per-process socket path under
+// BrokerSocketPath returns a per-process socket path under
 // policysnapshot.StateDir(). It stays short on purpose: unix socket paths are
 // limited to about 104 bytes on macOS.
-func brokerSocketPath() (string, error) {
+//
+// It is exported so `agent-sandbox debug` can print the same
+// `--allow-unix-socket` grant the launcher builds.
+func BrokerSocketPath() (string, error) {
 	dir, err := policysnapshot.StateDir()
 	if err != nil {
 		return "", err

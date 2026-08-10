@@ -126,6 +126,63 @@ func TestServerForwardsStdin(t *testing.T) {
 	}
 }
 
+// blockingReader never returns data and never reports EOF until it is
+// released. It models the live upstream of a mixed pipeline such as
+// `tail -f app.log | grep -m1 ERROR`: once grep matches and exits, tail is
+// still running and sends nothing more, so the broker sees neither a stdin
+// frame nor a stdin-close frame.
+type blockingReader struct{ release chan struct{} }
+
+func (b *blockingReader) Read([]byte) (int, error) {
+	<-b.release
+	return 0, io.EOF
+}
+
+// Regression test for the broker deadlock: a sandboxed command that exits
+// without draining stdin must still produce an exit frame. Before the fix,
+// os/exec's own stdin copier kept cmd.Wait blocked forever, so no exit frame
+// was written and every caller — up to Claude's Bash tool — hung.
+//
+// The deadline makes this fail fast instead of hanging the suite.
+func TestServerReportsExitWhenStdinNeverCloses(t *testing.T) {
+	// The client sends its own working directory, which the executor validates.
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	// A stub "nono" whose child exits immediately without reading stdin.
+	stub := writeStub(t, "#!/bin/sh\nexit 5\n")
+	sock := startTestServer(t, broker.NewNonoExecutor(stub, "/tmp/p.json", cwd, nil))
+
+	stdin := &blockingReader{release: make(chan struct{})}
+	t.Cleanup(func() { close(stdin.release) })
+
+	type result struct {
+		code int
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		var out, errb testBuffer
+		code, rerr := broker.NewClient(sock).RunSandboxed(
+			context.Background(), []string{"grep", "-m1", "ERROR"}, nil, stdin, &out, &errb)
+		done <- result{code, rerr}
+	}()
+
+	select {
+	case r := <-done:
+		if r.err != nil {
+			t.Fatalf("RunSandboxed() error = %v", r.err)
+		}
+		if r.code != 5 {
+			t.Errorf("exit code = %d, want 5", r.code)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("RunSandboxed() did not return after the sandboxed command exited: " +
+			"the broker is waiting on stdin that never ends")
+	}
+}
+
 type testBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer

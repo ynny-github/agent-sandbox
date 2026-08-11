@@ -3,13 +3,16 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/broker"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/mcptool"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/router"
 )
 
 var serveCmd = &cobra.Command{
@@ -21,7 +24,7 @@ var serveCmd = &cobra.Command{
 const e2eLightweightEnv = "AGENT_SANDBOX_E2E_LIGHTWEIGHT"
 
 type serveDependencies struct {
-	containerRunner mcptool.ContainerRunner
+	commandRunner mcptool.CommandRunner
 }
 
 func init() {
@@ -35,11 +38,10 @@ func newCommandRouterServer(cfg *config.Config, deps serveDependencies) *mcp.Ser
 	}, nil)
 
 	mcptool.Register(server, mcptool.HandlerConfig{
-		OutputDir:               cfg.MCP.CommandOutputDir,
-		AllowPatterns:           allowPatterns(cfg),
-		DropRules:               dropRules(cfg),
-		ContainerRunner:         deps.containerRunner,
-		ContainerEnvPassthrough: cfg.Sandbox.Container.EnvPassthrough,
+		OutputDir:     cfg.MCP.CommandOutputDir,
+		AllowPatterns: allowPatterns(cfg),
+		DropRules:     dropRules(cfg),
+		CommandRunner: deps.commandRunner,
 	})
 
 	return server
@@ -63,14 +65,22 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return runLightweightServe(cfg)
 	}
 
-	runner, cleanup, err := newComposeContainerRunner(context.Background(), cfg)
+	runner, cleanup, err := newBrokerCommandRunner(context.Background(), cfg)
 	if err != nil {
-		return err
+		// Before the broker existed, a missing command sandbox did not stop the
+		// MCP server: host-routed and dropped commands still work, and refusing
+		// to start hides the reason behind a dead stdio server. Print the
+		// actionable hint and let sandbox-routed commands fail individually.
+		if !errors.Is(err, broker.ErrBrokerUnavailable) {
+			return err
+		}
+		fmt.Fprintln(os.Stderr, router.SandboxNotRunningHint)
+		runner, cleanup = unavailableRunner{err: err}, func() {}
 	}
 	defer cleanup()
 
 	server := newCommandRouterServer(cfg, serveDependencies{
-		containerRunner: runner,
+		commandRunner: runner,
 	})
 
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {

@@ -8,8 +8,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/broker"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/policysnapshot"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/router"
 )
 
 func TestRunExecCore_HostSuccess(t *testing.T) {
@@ -23,6 +25,28 @@ func TestRunExecCore_HostSuccess(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "hello") {
 		t.Errorf("stdout = %q, want it to contain hello", out.String())
+	}
+}
+
+// Running `agent-sandbox exec` outside a claude session leaves the broker
+// socket variable unset, so the runner cannot be built at all. That is the most
+// likely way a user meets this failure, and it must produce the actionable hint
+// rather than a raw setup error.
+func TestRunExecCore_NoBrokerSocket_ShowsHint(t *testing.T) {
+	t.Setenv(broker.SocketEnvVar, "")
+	cfg := &config.Config{}
+	cfg.Sandbox.Command.Allow = []string{"echo *"} // "true" is not allowed → sandbox
+
+	var out, errBuf bytes.Buffer
+	code := runExecCore(context.Background(), cfg, "true", &out, &errBuf)
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(errBuf.String(), router.SandboxNotRunningHint) {
+		t.Errorf("stderr = %q, want the actionable broker hint", errBuf.String())
+	}
+	if strings.Contains(errBuf.String(), "command broker setup:") {
+		t.Errorf("stderr = %q, want the hint instead of the raw setup error", errBuf.String())
 	}
 }
 
@@ -59,7 +83,7 @@ func TestRunExecCore_DropPattern_CustomMessage(t *testing.T) {
 }
 
 func TestRunExecCore_ParseFailure(t *testing.T) {
-	// An unterminated quote is a parse error; NeedsContainer returns the error
+	// An unterminated quote is a parse error; NeedsSandbox returns the error
 	// and runExecCore writes it to stderr, returning exit code 1.
 	cfg := &config.Config{}
 	cfg.Sandbox.Command.Allow = []string{"echo *"}
@@ -103,7 +127,7 @@ func TestResolveExecConfig_MissingPolicyFile_FailsClosed(t *testing.T) {
 func TestResolveExecConfig_FallsBackToConfig(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
-	body := "tool_mode=\"hook\"\n[sandbox.container]\nbuild_context=\"./x\"\ndockerfile=\"Dockerfile\"\nimage=\"img:1\"\n"
+	body := "tool_mode=\"hook\"\n"
 	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -5,13 +5,13 @@
 - Command output is returned inline in the tool result.
 {{else}}- The Bash and Monitor tools are disabled; use the `run_command` MCP tool to run shell commands.
 - Command output is written to files; read the returned stdout/stderr paths.
-{{end}}- Allowed commands run on the host; all others run in an isolated container.
+{{end}}- Allowed commands run directly on the host; all others run through a host-side command broker, each in its own `nono run` sandbox scoped to the working directory.
 
-## Filesystem: host and container share the same paths
-The project directory is bind-mounted into the container at the same absolute path it has on the host (an identity mount), so a project path means the same file everywhere:
+## Filesystem: the same paths everywhere
+There is no container and no bind mount — sandboxed commands run directly on the host filesystem, restricted to the current working directory (read+write):
 - Host commands (the allow list below) run in the real project directory using real host absolute paths.
-- Container commands run inside the sandbox with the project mounted at that same path (the working directory); HOME is `/tmp`.
-- A project absolute path you see from a container command is equally valid for host-side file tools and host commands — no translation needed. Only paths outside the project (e.g. under HOME) differ between host and container.
+- Sandboxed commands run in that same directory at that same absolute path — no translation needed. HOME keeps its real host value.
+- Paths outside the working directory are visible to a sandboxed command only as read-only paths pulled in by non-credential `sandbox.host` capabilities (e.g. `go`, `python`). Raw `sandbox.host.allow/read/allow_file/read_file` grants and the credential capabilities (`docker`, `ssh`) apply to the launched agent only, never to a sandboxed command.
 {{if .Safe}}
 ## Safe command wrappers
 Prefer these validated wrappers over running the tool directly; each refuses known-dangerous invocations before running:
@@ -22,12 +22,13 @@ Prefer these validated wrappers over running the tool directly; each refuses kno
 {{else}}- (none)
 {{end}}
 ## Refused commands (drop)
-These run on neither host nor container:
+These run on neither host nor sandbox:
 {{range .Drop}}- {{.Pattern}}{{if .Message}} — {{.Message}}{{end}}
 {{else}}- (none)
 {{end}}
-## Sandbox container
-- image: {{.Image}}
-{{if .NetworkExternal}}- network: external access allowed
-{{else}}- network: isolated (no external access)
+## Sandboxed command network
+Every sandboxed command runs under nono's "developer" network profile (LLM APIs, package registries, GitHub, sigstore, documentation).
+{{if .AllowDomains}}Extra allowed domains:
+{{range .AllowDomains}}- {{.}}
+{{end}}{{else}}No extra domains beyond the developer profile.
 {{end}}

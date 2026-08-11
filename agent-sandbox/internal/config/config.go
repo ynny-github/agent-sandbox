@@ -21,19 +21,19 @@ type MCPConfig struct {
 }
 
 type SandboxConfig struct {
-	Network   NetworkConfig   `toml:"network"`
-	Command   CommandConfig   `toml:"command"`
-	Container ContainerConfig `toml:"container"`
-	Host      HostConfig      `toml:"host"`
+	Network NetworkConfig `toml:"network"`
+	Command CommandConfig `toml:"command"`
+	Host    HostConfig    `toml:"host"`
 }
 
 type NetworkConfig struct {
-	AllowExternal bool `toml:"allow_external"`
+	AllowDomains []string `toml:"allow_domains"`
 }
 
 type CommandConfig struct {
-	Allow []string   `toml:"allow"`
-	Drop  []DropRule `toml:"drop"`
+	Allow          []string   `toml:"allow"`
+	Drop           []DropRule `toml:"drop"`
+	EnvPassthrough []string   `toml:"env_passthrough"`
 }
 
 // DropRule is one drop pattern with an optional custom refusal message. Every
@@ -52,14 +52,6 @@ type DropRule struct {
 	Message string `toml:"message"`
 }
 
-type ContainerConfig struct {
-	BuildContext    string   `toml:"build_context"`
-	Dockerfile      string   `toml:"dockerfile"`
-	Image           string   `toml:"image"`
-	ExternalNetwork string   `toml:"external_network"`
-	EnvPassthrough  []string `toml:"env_passthrough"`
-}
-
 // HostConfig declares, in nono-agnostic terms, the host-side access the
 // sandboxed agent process gets. Capabilities are named bundles expanded by
 // internal/sandboxhost; the remaining lists are raw grants.
@@ -75,8 +67,8 @@ type HostConfig struct {
 // Load composes the optional user-scope config
 // (~/.config/agent-sandbox/config.toml) with the project-scope config at path,
 // then validates the merged result. Scalars: project overrides user. Lists
-// (command.allow, command.drop, container.env_passthrough, and the
-// sandbox.host lists): de-duplicated union.
+// (command.allow, command.drop, command.env_passthrough,
+// network.allow_domains, and the sandbox.host lists): de-duplicated union.
 func Load(path string) (*Config, error) {
 	var cfg Config
 
@@ -85,8 +77,9 @@ func Load(path string) (*Config, error) {
 	//    decode reuses an existing slice's backing array in place when its cap is
 	//    large enough, so a plain header copy would be corrupted by the project
 	//    decode below.
-	var userAllow, userEnv []string
+	var userAllow []string
 	var userDrop []DropRule
+	var userAllowDomains, userCmdEnv []string
 	var hostSnap hostLists
 	if up, err := userConfigPath(); err == nil {
 		if _, statErr := os.Stat(up); statErr == nil {
@@ -99,7 +92,8 @@ func Load(path string) (*Config, error) {
 			}
 			userAllow = slices.Clone(cfg.Sandbox.Command.Allow)
 			userDrop = slices.Clone(cfg.Sandbox.Command.Drop)
-			userEnv = slices.Clone(cfg.Sandbox.Container.EnvPassthrough)
+			userAllowDomains = slices.Clone(cfg.Sandbox.Network.AllowDomains)
+			userCmdEnv = slices.Clone(cfg.Sandbox.Command.EnvPassthrough)
 			userHostCaps := slices.Clone(cfg.Sandbox.Host.Capabilities)
 			userHostAllow := slices.Clone(cfg.Sandbox.Host.Allow)
 			userHostRead := slices.Clone(cfg.Sandbox.Host.Read)
@@ -124,7 +118,8 @@ func Load(path string) (*Config, error) {
 	//    user's, so the union de-dupes back to the user's list (no change).
 	cfg.Sandbox.Command.Allow = dedupUnion(userAllow, cfg.Sandbox.Command.Allow)
 	cfg.Sandbox.Command.Drop = dedupUnionDrop(userDrop, cfg.Sandbox.Command.Drop)
-	cfg.Sandbox.Container.EnvPassthrough = dedupUnion(userEnv, cfg.Sandbox.Container.EnvPassthrough)
+	cfg.Sandbox.Network.AllowDomains = dedupUnion(userAllowDomains, cfg.Sandbox.Network.AllowDomains)
+	cfg.Sandbox.Command.EnvPassthrough = dedupUnion(userCmdEnv, cfg.Sandbox.Command.EnvPassthrough)
 	cfg.Sandbox.Host.Capabilities = dedupUnion(hostSnap.caps, cfg.Sandbox.Host.Capabilities)
 	cfg.Sandbox.Host.Allow = dedupUnion(hostSnap.allow, cfg.Sandbox.Host.Allow)
 	cfg.Sandbox.Host.Read = dedupUnion(hostSnap.read, cfg.Sandbox.Host.Read)
@@ -147,11 +142,20 @@ func decodeInto(path string, cfg *Config) (toml.MetaData, error) {
 	return md, nil
 }
 
-// checkDeprecated rejects the removed sandbox.network.allow_cidrs / allow_hosts
-// keys. It is applied per-file because the keys are not representable in Config.
+// checkDeprecated rejects the removed sandbox.network.allow_cidrs /
+// allow_hosts / allow_external keys and the removed sandbox.container
+// section. It is applied per-file because the keys are not representable in
+// Config, and must fire even when the file merely mentions a removed key with
+// no value that validate would otherwise check.
 func checkDeprecated(md toml.MetaData) error {
 	if md.IsDefined("sandbox", "network", "allow_cidrs") || md.IsDefined("sandbox", "network", "allow_hosts") {
 		return ErrDeprecatedNetworkKeys
+	}
+	if md.IsDefined("sandbox", "network", "allow_external") {
+		return ErrRemovedAllowExternal
+	}
+	if md.IsDefined("sandbox", "container") {
+		return ErrRemovedContainerSection
 	}
 	return nil
 }
@@ -173,18 +177,14 @@ func validate(cfg *Config) (*Config, error) {
 	if cfg.ToolMode == "mcp" && strings.TrimSpace(cfg.MCP.CommandOutputDir) == "" {
 		return nil, ErrMissingMCPCommandOutputDir
 	}
-	if strings.TrimSpace(cfg.Sandbox.Container.BuildContext) == "" {
-		return nil, ErrMissingContainerBuildContext
-	}
-	if strings.TrimSpace(cfg.Sandbox.Container.Dockerfile) == "" {
-		return nil, ErrMissingContainerDockerfile
-	}
-	if strings.TrimSpace(cfg.Sandbox.Container.Image) == "" {
-		return nil, ErrMissingContainerImage
-	}
 	for _, r := range cfg.Sandbox.Command.Drop {
 		if strings.TrimSpace(r.Pattern) == "" {
 			return nil, ErrDropRuleMissingPattern
+		}
+	}
+	for _, name := range cfg.Sandbox.Command.EnvPassthrough {
+		if strings.HasPrefix(strings.TrimSpace(name), "NONO_") {
+			return nil, fmt.Errorf("%w: %q", ErrEnvPassthroughNonoVar, name)
 		}
 	}
 	return cfg, nil

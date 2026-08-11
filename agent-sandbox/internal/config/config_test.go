@@ -37,11 +37,6 @@ func writeToml(t *testing.T, content string) string {
 const validBase = `
 [mcp]
 command_output_dir = "/tmp/out"
-
-[sandbox.container]
-build_context = "./docker/sandbox"
-dockerfile = "Dockerfile"
-image = "mysandbox"
 `
 
 func TestLoad_ValidConfig(t *testing.T) {
@@ -56,15 +51,6 @@ allow = ["git *", "make *"]
 	if cfg.MCP.CommandOutputDir != "/tmp/out" {
 		t.Errorf("CommandOutputDir = %q, want /tmp/out", cfg.MCP.CommandOutputDir)
 	}
-	if cfg.Sandbox.Container.BuildContext != "./docker/sandbox" {
-		t.Errorf("BuildContext = %q, want ./docker/sandbox", cfg.Sandbox.Container.BuildContext)
-	}
-	if cfg.Sandbox.Container.Dockerfile != "Dockerfile" {
-		t.Errorf("Dockerfile = %q, want Dockerfile", cfg.Sandbox.Container.Dockerfile)
-	}
-	if cfg.Sandbox.Container.Image != "mysandbox" {
-		t.Errorf("Image = %q, want mysandbox", cfg.Sandbox.Container.Image)
-	}
 	if len(cfg.Sandbox.Command.Allow) != 2 {
 		t.Errorf("Allow len = %d, want 2", len(cfg.Sandbox.Command.Allow))
 	}
@@ -72,59 +58,12 @@ allow = ["git *", "make *"]
 
 func TestLoad_MissingMCPCommandOutputDir(t *testing.T) {
 	path := writeToml(t, `
-[sandbox.container]
-build_context = "./docker/sandbox"
-dockerfile = "Dockerfile"
-image = "mysandbox"
+[sandbox.command]
+allow = ["git *"]
 `)
 	_, err := config.Load(path)
 	if !errors.Is(err, config.ErrMissingMCPCommandOutputDir) {
 		t.Errorf("err = %v, want ErrMissingMCPCommandOutputDir", err)
-	}
-}
-
-func TestLoad_MissingContainerBuildContext(t *testing.T) {
-	path := writeToml(t, `
-[mcp]
-command_output_dir = "/tmp/out"
-
-[sandbox.container]
-dockerfile = "Dockerfile"
-image = "mysandbox"
-`)
-	_, err := config.Load(path)
-	if !errors.Is(err, config.ErrMissingContainerBuildContext) {
-		t.Errorf("err = %v, want ErrMissingContainerBuildContext", err)
-	}
-}
-
-func TestLoad_MissingContainerDockerfile(t *testing.T) {
-	path := writeToml(t, `
-[mcp]
-command_output_dir = "/tmp/out"
-
-[sandbox.container]
-build_context = "./docker/sandbox"
-image = "mysandbox"
-`)
-	_, err := config.Load(path)
-	if !errors.Is(err, config.ErrMissingContainerDockerfile) {
-		t.Errorf("err = %v, want ErrMissingContainerDockerfile", err)
-	}
-}
-
-func TestLoad_MissingContainerImage(t *testing.T) {
-	path := writeToml(t, `
-[mcp]
-command_output_dir = "/tmp/out"
-
-[sandbox.container]
-build_context = "./docker/sandbox"
-dockerfile = "Dockerfile"
-`)
-	_, err := config.Load(path)
-	if !errors.Is(err, config.ErrMissingContainerImage) {
-		t.Errorf("err = %v, want ErrMissingContainerImage", err)
 	}
 }
 
@@ -139,52 +78,8 @@ func TestLoad_BlankRequiredFields(t *testing.T) {
 			content: `
 [mcp]
 command_output_dir = "   "
-
-[sandbox.container]
-build_context = "./docker/sandbox"
-dockerfile = "Dockerfile"
-image = "mysandbox"
 `,
 			want: config.ErrMissingMCPCommandOutputDir,
-		},
-		{
-			name: "build_context whitespace only",
-			content: `
-[mcp]
-command_output_dir = "/tmp/out"
-
-[sandbox.container]
-build_context = "  "
-dockerfile = "Dockerfile"
-image = "mysandbox"
-`,
-			want: config.ErrMissingContainerBuildContext,
-		},
-		{
-			name: "dockerfile whitespace only",
-			content: `
-[mcp]
-command_output_dir = "/tmp/out"
-
-[sandbox.container]
-build_context = "./docker/sandbox"
-dockerfile = "	"
-image = "mysandbox"
-`,
-			want: config.ErrMissingContainerDockerfile,
-		},
-		{
-			name: "image whitespace only",
-			content: `
-[mcp]
-command_output_dir = "/tmp/out"
-
-[sandbox.container]
-build_context = "./docker/sandbox"
-dockerfile = "Dockerfile"
-image = "  "
-`,
-			want: config.ErrMissingContainerImage,
 		},
 	}
 
@@ -311,58 +206,6 @@ func TestLoad_DropOmitted_IsEmpty(t *testing.T) {
 	}
 }
 
-func TestLoad_Container_EnvPassthrough_Loaded(t *testing.T) {
-	path := writeToml(t, validBase+`
-env_passthrough = ["AWS_PROFILE", "HOME"]
-`)
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(cfg.Sandbox.Container.EnvPassthrough) != 2 {
-		t.Errorf("EnvPassthrough len = %d, want 2", len(cfg.Sandbox.Container.EnvPassthrough))
-	}
-	if cfg.Sandbox.Container.EnvPassthrough[0] != "AWS_PROFILE" {
-		t.Errorf("EnvPassthrough[0] = %q, want AWS_PROFILE", cfg.Sandbox.Container.EnvPassthrough[0])
-	}
-}
-
-func TestLoad_Container_EnvPassthroughOmitted_IsEmpty(t *testing.T) {
-	path := writeToml(t, validBase)
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(cfg.Sandbox.Container.EnvPassthrough) != 0 {
-		t.Errorf("EnvPassthrough = %v, want empty", cfg.Sandbox.Container.EnvPassthrough)
-	}
-}
-
-func TestLoad_AllowExternal_Loaded(t *testing.T) {
-	path := writeToml(t, validBase+`
-[sandbox.network]
-allow_external = true
-`)
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !cfg.Sandbox.Network.AllowExternal {
-		t.Error("AllowExternal = false, want true")
-	}
-}
-
-func TestLoad_AllowExternal_OmittedDefaultsFalse(t *testing.T) {
-	path := writeToml(t, validBase)
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.Sandbox.Network.AllowExternal {
-		t.Error("AllowExternal = true, want false when omitted")
-	}
-}
-
 func TestLoad_DeprecatedAllowCIDRs_Rejected(t *testing.T) {
 	path := writeToml(t, validBase+`
 [sandbox.network]
@@ -382,48 +225,6 @@ allow_hosts = ["api.github.com"]
 	_, err := config.Load(path)
 	if !errors.Is(err, config.ErrDeprecatedNetworkKeys) {
 		t.Errorf("err = %v, want ErrDeprecatedNetworkKeys", err)
-	}
-}
-
-func TestLoad_ExternalNetwork_Loaded(t *testing.T) {
-	path := writeToml(t, `
-[mcp]
-command_output_dir = "/tmp/out"
-
-[sandbox.container]
-build_context = "./docker/sandbox"
-dockerfile = "Dockerfile"
-image = "mysandbox"
-external_network = "backend"
-`)
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.Sandbox.Container.ExternalNetwork != "backend" {
-		t.Errorf("ExternalNetwork = %q, want \"backend\"", cfg.Sandbox.Container.ExternalNetwork)
-	}
-}
-
-func TestLoad_ExternalNetwork_OmittedIsEmpty(t *testing.T) {
-	path := writeToml(t, validBase)
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.Sandbox.Container.ExternalNetwork != "" {
-		t.Errorf("ExternalNetwork = %q, want empty", cfg.Sandbox.Container.ExternalNetwork)
-	}
-}
-
-func TestLoad_MissingSandboxSection_ErrorsOnBuildContext(t *testing.T) {
-	path := writeToml(t, `
-[mcp]
-command_output_dir = "/tmp/out"
-`)
-	_, err := config.Load(path)
-	if !errors.Is(err, config.ErrMissingContainerBuildContext) {
-		t.Errorf("err = %v, want ErrMissingContainerBuildContext", err)
 	}
 }
 
@@ -460,11 +261,6 @@ func TestLoad_ToolMode_InvalidRejected(t *testing.T) {
 func TestLoad_HookModeAllowsMissingCommandOutputDir(t *testing.T) {
 	path := writeToml(t, `
 tool_mode = "hook"
-
-[sandbox.container]
-build_context = "./docker/sandbox"
-dockerfile = "Dockerfile"
-image = "mysandbox"
 `)
 	cfg, err := config.Load(path)
 	if err != nil {
@@ -506,15 +302,9 @@ func TestLoad_Compose_ScalarProjectWins(t *testing.T) {
 tool_mode = "mcp"
 [mcp]
 command_output_dir = "/u/out"
-[sandbox.container]
-build_context = "./uc"
-dockerfile = "UserDockerfile"
-image = "userimg"
 `)
 	project := writeToml(t, `
 tool_mode = "hook"
-[sandbox.container]
-image = "projimg"
 `)
 	cfg, err := config.Load(project)
 	if err != nil {
@@ -523,14 +313,8 @@ image = "projimg"
 	if cfg.ToolMode != "hook" {
 		t.Errorf("ToolMode = %q, want \"hook\" (project wins)", cfg.ToolMode)
 	}
-	if cfg.Sandbox.Container.Image != "projimg" {
-		t.Errorf("Image = %q, want \"projimg\" (project wins)", cfg.Sandbox.Container.Image)
-	}
-	if cfg.Sandbox.Container.Dockerfile != "UserDockerfile" {
-		t.Errorf("Dockerfile = %q, want \"UserDockerfile\" (user retained)", cfg.Sandbox.Container.Dockerfile)
-	}
-	if cfg.Sandbox.Container.BuildContext != "./uc" {
-		t.Errorf("BuildContext = %q, want \"./uc\" (user retained)", cfg.Sandbox.Container.BuildContext)
+	if cfg.MCP.CommandOutputDir != "/u/out" {
+		t.Errorf("CommandOutputDir = %q, want \"/u/out\" (user retained, project omitted it)", cfg.MCP.CommandOutputDir)
 	}
 }
 
@@ -541,22 +325,16 @@ func TestLoad_Compose_ListUnion(t *testing.T) {
 	writeUserToml(t, `
 [mcp]
 command_output_dir = "/u/out"
-[sandbox.container]
-build_context = "./uc"
-dockerfile = "Dockerfile"
-image = "userimg"
-env_passthrough = ["HOME", "AWS_PROFILE"]
 [sandbox.command]
 allow = ["git *", "make *"]
 drop = [{ pattern = "rm *" }]
+env_passthrough = ["HOME", "AWS_PROFILE"]
 `)
 	project := writeToml(t, `
-[sandbox.container]
-image = "projimg"
-env_passthrough = ["CI"]
 [sandbox.command]
 allow = ["make *", "npm *"]
 drop = [{ pattern = "sudo *" }]
+env_passthrough = ["CI"]
 `)
 	cfg, err := config.Load(project)
 	if err != nil {
@@ -572,7 +350,7 @@ drop = [{ pattern = "sudo *" }]
 	if !slices.Equal(gotDrop, []string{"rm *", "sudo *"}) {
 		t.Errorf("Drop = %v, want [rm * sudo *]", gotDrop)
 	}
-	if got := cfg.Sandbox.Container.EnvPassthrough; !slices.Equal(got, []string{"HOME", "AWS_PROFILE", "CI"}) {
+	if got := cfg.Sandbox.Command.EnvPassthrough; !slices.Equal(got, []string{"HOME", "AWS_PROFILE", "CI"}) {
 		t.Errorf("EnvPassthrough = %v, want [HOME AWS_PROFILE CI]", got)
 	}
 }
@@ -584,8 +362,8 @@ func TestLoad_Compose_NoHome_ProjectOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Sandbox.Container.Image != "mysandbox" {
-		t.Errorf("Image = %q, want mysandbox (project-only)", cfg.Sandbox.Container.Image)
+	if cfg.MCP.CommandOutputDir != "/tmp/out" {
+		t.Errorf("CommandOutputDir = %q, want /tmp/out (project-only)", cfg.MCP.CommandOutputDir)
 	}
 }
 
@@ -604,12 +382,9 @@ func TestLoad_Compose_ValidationOnMerged_UserSuppliesRequired(t *testing.T) {
 	writeUserToml(t, `
 [mcp]
 command_output_dir = "/u/out"
-[sandbox.container]
-build_context = "./uc"
-dockerfile = "Dockerfile"
-image = "userimg"
 `)
-	// Project omits every required field; the merge must satisfy validation.
+	// Project omits the required field; validate runs on the merged config, so
+	// the user's value must satisfy it.
 	project := writeToml(t, `
 tool_mode = "mcp"
 `)
@@ -620,17 +395,101 @@ tool_mode = "mcp"
 
 func TestLoad_Compose_ValidationOnMerged_MissingEverywhere(t *testing.T) {
 	writeUserToml(t, `
-[mcp]
-command_output_dir = "/u/out"
-[sandbox.container]
-build_context = "./uc"
-dockerfile = "Dockerfile"
+tool_mode = "mcp"
 `)
-	// image is absent from both scopes -> merged config fails validation.
+	// command_output_dir is absent from both scopes -> merged config fails validation.
 	project := writeToml(t, `
 tool_mode = "mcp"
 `)
-	if _, err := config.Load(project); !errors.Is(err, config.ErrMissingContainerImage) {
-		t.Errorf("err = %v, want ErrMissingContainerImage", err)
+	if _, err := config.Load(project); !errors.Is(err, config.ErrMissingMCPCommandOutputDir) {
+		t.Errorf("err = %v, want ErrMissingMCPCommandOutputDir", err)
+	}
+}
+
+func TestLoad_NetworkAllowDomains(t *testing.T) {
+	path := writeToml(t, `
+tool_mode = "hook"
+
+[sandbox.network]
+allow_domains = ["proxy.golang.org", "sum.golang.org"]
+`)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	want := []string{"proxy.golang.org", "sum.golang.org"}
+	if !slices.Equal(cfg.Sandbox.Network.AllowDomains, want) {
+		t.Errorf("AllowDomains = %v, want %v", cfg.Sandbox.Network.AllowDomains, want)
+	}
+}
+
+func TestLoad_CommandEnvPassthrough(t *testing.T) {
+	path := writeToml(t, `
+tool_mode = "hook"
+
+[sandbox.command]
+env_passthrough = ["AWS_PROFILE", "MISE_SHELL"]
+`)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	want := []string{"AWS_PROFILE", "MISE_SHELL"}
+	if !slices.Equal(cfg.Sandbox.Command.EnvPassthrough, want) {
+		t.Errorf("EnvPassthrough = %v, want %v", cfg.Sandbox.Command.EnvPassthrough, want)
+	}
+}
+
+func TestLoad_RejectsNonoEnvPassthrough(t *testing.T) {
+	path := writeToml(t, `
+tool_mode = "hook"
+
+[sandbox.command]
+env_passthrough = ["AWS_PROFILE", "NONO_ALLOW_DOMAIN"]
+`)
+	_, err := config.Load(path)
+	if !errors.Is(err, config.ErrEnvPassthroughNonoVar) {
+		t.Fatalf("Load() error = %v, want ErrEnvPassthroughNonoVar", err)
+	}
+}
+
+func TestLoad_RejectsRemovedContainerSection(t *testing.T) {
+	path := writeToml(t, `
+tool_mode = "hook"
+
+[sandbox.container]
+image = "sandbox:0.1.0"
+`)
+	_, err := config.Load(path)
+	if !errors.Is(err, config.ErrRemovedContainerSection) {
+		t.Fatalf("Load() error = %v, want ErrRemovedContainerSection", err)
+	}
+}
+
+func TestLoad_RejectsRemovedAllowExternal(t *testing.T) {
+	path := writeToml(t, `
+tool_mode = "hook"
+
+[sandbox.network]
+allow_external = true
+`)
+	_, err := config.Load(path)
+	if !errors.Is(err, config.ErrRemovedAllowExternal) {
+		t.Fatalf("Load() error = %v, want ErrRemovedAllowExternal", err)
+	}
+}
+
+// TestLoad_RejectsRemovedContainerSection_UserScope pins the user-scope call
+// site of checkDeprecated directly (Load's step 1, before the project decode)
+// rather than only exercising it indirectly via the deprecated-allow_cidrs
+// coverage in TestLoad_Compose_DeprecatedKeyInUserFile.
+func TestLoad_RejectsRemovedContainerSection_UserScope(t *testing.T) {
+	writeUserToml(t, `
+[sandbox.container]
+image = "sandbox:0.1.0"
+`)
+	project := writeToml(t, validBase)
+	if _, err := config.Load(project); !errors.Is(err, config.ErrRemovedContainerSection) {
+		t.Errorf("err = %v, want ErrRemovedContainerSection", err)
 	}
 }

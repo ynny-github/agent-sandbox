@@ -29,6 +29,12 @@ type nonoProfile struct {
 	Groups      *profileGroups     `json:"groups,omitempty"`
 	Filesystem  profileFilesystem  `json:"filesystem"`
 	Environment profileEnvironment `json:"environment"`
+	Network     *profileNetwork    `json:"network,omitempty"`
+}
+
+type profileNetwork struct {
+	NetworkProfile string   `json:"network_profile,omitempty"`
+	AllowDomain    []string `json:"allow_domain,omitempty"`
 }
 
 type profileMeta struct {
@@ -62,8 +68,11 @@ func Resolve(cfg *config.Config, agent string) (*Resolved, error) {
 
 	var groups, read, bypass, allowFile, allowVars, allow, readFile, deny []string
 
-	// Baseline (per agent).
+	// Baseline (per agent). agentOnlyEnv (e.g. the broker socket path) is
+	// granted here but deliberately not in ResolveCommand's profile — see
+	// baselineEnv's comment in catalog.go.
 	allowVars = append(allowVars, baselineEnv...)
+	allowVars = append(allowVars, agentOnlyEnv...)
 	allowFile = append(allowFile, baselineAllowFile...)
 
 	// Capabilities.
@@ -117,6 +126,76 @@ func Resolve(cfg *config.Config, agent string) (*Resolved, error) {
 		r.profile.Groups = &profileGroups{Include: g}
 	}
 	return r, nil
+}
+
+// ResolveCommand builds the profile for a single brokered command: the working
+// directory read+write, the non-credential capabilities from cfg.Sandbox.Host,
+// the env allowlist from cfg.Sandbox.Command.EnvPassthrough, and the fixed
+// developer network profile plus cfg.Sandbox.Network.AllowDomains.
+//
+// It deliberately does not reuse Resolve: the command sandbox is a different
+// policy, not a variation of the agent's, and sharing the expansion would make
+// it easy to leak a credential grant into it by accident.
+func ResolveCommand(cfg *config.Config, workdir string) (*Resolved, error) {
+	if strings.TrimSpace(workdir) == "" {
+		return nil, fmt.Errorf("sandboxhost: empty workdir for command profile")
+	}
+
+	var groups, read, readFile, allowVars []string
+	allowVars = append(allowVars, baselineEnv...)
+	allowVars = append(allowVars, cfg.Sandbox.Command.EnvPassthrough...)
+
+	for _, name := range cfg.Sandbox.Host.Capabilities {
+		if credentialCapabilities[name] {
+			continue
+		}
+		c, ok := catalog[name]
+		if !ok {
+			return nil, fmt.Errorf("sandboxhost: unknown capability %q (valid: %s)", name, validCapabilities())
+		}
+		groups = append(groups, c.groups...)
+		read = append(read, c.read...)
+		readFile = append(readFile, c.readFile...)
+		allowVars = append(allowVars, c.allowVars...)
+	}
+
+	r := &Resolved{
+		profile: nonoProfile{
+			Meta: profileMeta{Name: "agent-sandbox command"},
+			Filesystem: profileFilesystem{
+				Allow:     sortDedup([]string{workdir}),
+				Read:      sortDedup(read),
+				AllowFile: sortDedup(baselineAllowFile),
+				ReadFile:  sortDedup(readFile),
+			},
+			Environment: profileEnvironment{AllowVars: sortDedup(allowVars)},
+			Network: &profileNetwork{
+				NetworkProfile: commandNetworkProfile,
+				AllowDomain:    sortDedup(cfg.Sandbox.Network.AllowDomains),
+			},
+		},
+	}
+	if g := sortDedup(groups); len(g) > 0 {
+		r.profile.Groups = &profileGroups{Include: g}
+	}
+	return r, nil
+}
+
+// EnvAllowVars returns the profile's environment allow_vars patterns.
+//
+// The command broker uses it to build the nono supervisor's own environment:
+// it forwards exactly those of the launcher's variables that this list already
+// permits inside the sandbox. Sharing the list keeps the two in step — in
+// particular baselineEnv and the capability allowVars (the mise capability's
+// "MISE*" / "__MISE*") are declared in exactly one place, this package, rather
+// than being restated by the broker where they could silently drift.
+//
+// Entries are patterns, not plain names; see broker's envAllowlist for the
+// supported syntax.
+func (r *Resolved) EnvAllowVars() []string {
+	out := make([]string, len(r.profile.Environment.AllowVars))
+	copy(out, r.profile.Environment.AllowVars)
+	return out
 }
 
 // ProfileJSON marshals the resolved nono profile.

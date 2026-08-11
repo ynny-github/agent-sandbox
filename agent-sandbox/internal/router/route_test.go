@@ -12,18 +12,18 @@ func TestRoute_MatchingPattern_ReturnsHost(t *testing.T) {
 	}
 }
 
-func TestRoute_NoMatchingPattern_ReturnsContainer(t *testing.T) {
-	if got, _, _ := router.Route("npm test", []string{"git *"}, nil); got != "container" {
-		t.Errorf("got %q, want container", got)
+func TestRoute_NoMatchingPattern_ReturnsSandbox(t *testing.T) {
+	if got, _, _ := router.Route("npm test", []string{"git *"}, nil); got != "sandbox" {
+		t.Errorf("got %q, want sandbox", got)
 	}
 }
 
-func TestRoute_EmptyPatterns_ReturnsContainer(t *testing.T) {
-	if got, _, _ := router.Route("git status", nil, nil); got != "container" {
-		t.Errorf("got %q, want container", got)
+func TestRoute_EmptyPatterns_ReturnsSandbox(t *testing.T) {
+	if got, _, _ := router.Route("git status", nil, nil); got != "sandbox" {
+		t.Errorf("got %q, want sandbox", got)
 	}
-	if got, _, _ := router.Route("git status", []string{}, nil); got != "container" {
-		t.Errorf("got %q, want container", got)
+	if got, _, _ := router.Route("git status", []string{}, nil); got != "sandbox" {
+		t.Errorf("got %q, want sandbox", got)
 	}
 }
 
@@ -38,8 +38,8 @@ func TestRoute_MultiplePatterns_MatchesSecond(t *testing.T) {
 }
 
 func TestRoute_RawStringMatching_NoShellExpansion(t *testing.T) {
-	if got, _, _ := router.Route("echo $HOME", []string{"git *"}, nil); got != "container" {
-		t.Errorf("got %q, want container", got)
+	if got, _, _ := router.Route("echo $HOME", []string{"git *"}, nil); got != "sandbox" {
+		t.Errorf("got %q, want sandbox", got)
 	}
 	if got, _, _ := router.Route("echo $HOME", []string{"echo $HOME"}, nil); got != "host" {
 		t.Errorf("got %q, want host", got)
@@ -62,8 +62,8 @@ func TestRoute_RegexMetacharactersMatchLiterally(t *testing.T) {
 	if got, _, _ := router.Route("echo /tmp/file.txt", []string{"echo /tmp/file.txt"}, nil); got != "host" {
 		t.Errorf("got %q, want host", got)
 	}
-	if got, _, _ := router.Route("echo /tmp/fileXtxt", []string{"echo /tmp/file.txt"}, nil); got != "container" {
-		t.Errorf("got %q, want container", got)
+	if got, _, _ := router.Route("echo /tmp/fileXtxt", []string{"echo /tmp/file.txt"}, nil); got != "sandbox" {
+		t.Errorf("got %q, want sandbox", got)
 	}
 }
 
@@ -73,11 +73,11 @@ func TestRoute_ExactMatch_ReturnsHost(t *testing.T) {
 	}
 }
 
-func TestRoute_NoPatterns_NilAndEmpty_BothContainer(t *testing.T) {
+func TestRoute_NoPatterns_NilAndEmpty_BothSandbox(t *testing.T) {
 	cases := [][]string{nil, {}}
 	for _, patterns := range cases {
-		if got, _, _ := router.Route("anything", patterns, nil); got != "container" {
-			t.Errorf("patterns=%v: got %q, want container", patterns, got)
+		if got, _, _ := router.Route("anything", patterns, nil); got != "sandbox" {
+			t.Errorf("patterns=%v: got %q, want sandbox", patterns, got)
 		}
 	}
 }
@@ -134,16 +134,16 @@ func TestRoute_EmptyDropPatterns_BehaviorUnchanged(t *testing.T) {
 		if got, _, _ := router.Route("git status", []string{"git *"}, drop); got != "host" {
 			t.Errorf("drop=%v: got %q, want host", drop, got)
 		}
-		if got, _, _ := router.Route("npm test", []string{"git *"}, drop); got != "container" {
-			t.Errorf("drop=%v: got %q, want container", drop, got)
+		if got, _, _ := router.Route("npm test", []string{"git *"}, drop); got != "sandbox" {
+			t.Errorf("drop=%v: got %q, want sandbox", drop, got)
 		}
 	}
 }
 
-func TestRoute_DefaultContainer_MatchedEmpty(t *testing.T) {
+func TestRoute_DefaultSandbox_MatchedEmpty(t *testing.T) {
 	_, matched, _ := router.Route("nothing matches", []string{"git *"}, []router.DropRule{{Pattern: "rm *"}})
 	if matched != "" {
-		t.Errorf("matched = %q, want empty for default-container", matched)
+		t.Errorf("matched = %q, want empty for default-sandbox", matched)
 	}
 }
 

@@ -12,3 +12,6 @@ node_modules/
 
 # claude
 .claude/settings.local.json
+
+# superpowers scratch (ledgers, task briefs, review packages)
+.superpowers/

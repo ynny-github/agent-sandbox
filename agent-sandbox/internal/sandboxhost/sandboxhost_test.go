@@ -3,6 +3,7 @@ package sandboxhost
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -54,7 +55,7 @@ func TestResolve_Parity(t *testing.T) {
 			"bypass_protection": []any{"~/.docker", "~/.ssh"},
 		},
 		"environment": map[string]any{
-			"allow_vars": []any{"HOME", "LANG", "LC_ALL", "MISE*", "PATH", "TERM", "USER", "__MISE*"},
+			"allow_vars": []any{"AGENT_SANDBOX_BROKER_SOCKET", "HOME", "LANG", "LC_ALL", "MISE*", "PATH", "TERM", "USER", "__MISE*"},
 		},
 	}
 	if got := profileMap(t, r); !reflect.DeepEqual(got, want) {
@@ -76,7 +77,7 @@ func TestResolve_DenyRulesFromCapabilities(t *testing.T) {
 func TestResolve_BaselineOnlyWhenEmpty(t *testing.T) {
 	m := profileMap(t, resolve(t, config.HostConfig{}, "claude"))
 	env := m["environment"].(map[string]any)["allow_vars"].([]any)
-	if !reflect.DeepEqual(env, []any{"HOME", "LANG", "LC_ALL", "PATH", "TERM", "USER"}) {
+	if !reflect.DeepEqual(env, []any{"AGENT_SANDBOX_BROKER_SOCKET", "HOME", "LANG", "LC_ALL", "PATH", "TERM", "USER"}) {
 		t.Errorf("baseline env = %v", env)
 	}
 	fs := m["filesystem"].(map[string]any)
@@ -159,4 +160,72 @@ func hostCfg(h config.HostConfig) *config.Config {
 	cfg := &config.Config{}
 	cfg.Sandbox.Host = h
 	return cfg
+}
+
+func TestResolveCommand_ProfileShape(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Sandbox.Host.Capabilities = []string{"go", "docker", "ssh", "mise"}
+	cfg.Sandbox.Network.AllowDomains = []string{"proxy.golang.org"}
+	cfg.Sandbox.Command.EnvPassthrough = []string{"AWS_PROFILE"}
+
+	r, err := ResolveCommand(cfg, "/work/project")
+	if err != nil {
+		t.Fatalf("ResolveCommand() error = %v", err)
+	}
+	data, err := r.ProfileJSON()
+	if err != nil {
+		t.Fatalf("ProfileJSON() error = %v", err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal profile: %v", err)
+	}
+
+	network, ok := got["network"].(map[string]any)
+	if !ok {
+		t.Fatalf("profile has no network section: %s", data)
+	}
+	if network["network_profile"] != "developer" {
+		t.Errorf("network_profile = %v, want developer", network["network_profile"])
+	}
+	if !slices.Contains(toStrings(network["allow_domain"]), "proxy.golang.org") {
+		t.Errorf("allow_domain = %v, want to contain proxy.golang.org", network["allow_domain"])
+	}
+
+	fs := got["filesystem"].(map[string]any)
+	if !slices.Contains(toStrings(fs["allow"]), "/work/project") {
+		t.Errorf("filesystem.allow = %v, want to contain /work/project", fs["allow"])
+	}
+
+	// Credential capabilities must NOT leak into the command profile.
+	all := string(data)
+	for _, forbidden := range []string{".ssh", ".docker", ".orbstack"} {
+		if strings.Contains(all, forbidden) {
+			t.Errorf("command profile must not grant %s: %s", forbidden, all)
+		}
+	}
+
+	env := got["environment"].(map[string]any)
+	if !slices.Contains(toStrings(env["allow_vars"]), "AWS_PROFILE") {
+		t.Errorf("allow_vars = %v, want to contain AWS_PROFILE", env["allow_vars"])
+	}
+
+	// The broker socket path must never be allow-listed for a brokered
+	// command's own sandbox: a command that could reach the broker could
+	// recurse into it (broker.Server.Serve caps no concurrency), turning a
+	// self-dial into a host-side fork bomb outside the sandbox.
+	if slices.Contains(toStrings(env["allow_vars"]), "AGENT_SANDBOX_BROKER_SOCKET") {
+		t.Errorf("allow_vars = %v, must not contain AGENT_SANDBOX_BROKER_SOCKET", env["allow_vars"])
+	}
+}
+
+func toStrings(v any) []string {
+	items, _ := v.([]any)
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		s, _ := it.(string)
+		out = append(out, s)
+	}
+	return out
 }

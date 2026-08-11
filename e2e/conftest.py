@@ -55,47 +55,11 @@ def lightweight_config(tmp_path: Path, output_dir: Path) -> Path:
 command_output_dir = {toml_string(output_dir)}
 
 [sandbox.network]
-allow_cidrs = []
-allow_hosts = []
+allow_domains = []
 
 [sandbox.command]
 allow = ["echo *", "printf *"]
 drop = []
-
-[sandbox.container]
-build_context = {toml_string("./docker/sandbox")}
-dockerfile = "Dockerfile"
-image = "e2e"
-external_network = ""
-env_passthrough = []
-""".strip()
-        + "\n",
-        encoding="utf-8",
-    )
-    return config
-
-
-@pytest.fixture()
-def docker_config(tmp_path: Path, output_dir: Path) -> Path:
-    config = tmp_path / "agent-sandbox.toml"
-    config.write_text(
-        f"""
-[mcp]
-command_output_dir = {toml_string(output_dir)}
-
-[sandbox.network]
-allow_cidrs = []
-allow_hosts = []
-
-[sandbox.command]
-allow = ["echo host-*"]
-drop = []
-
-[sandbox.container]
-build_context = {toml_string(REPO_ROOT / "docker" / "sandbox")}
-dockerfile = "Dockerfile"
-image = "e2e"
-external_network = ""
 env_passthrough = []
 """.strip()
         + "\n",
@@ -143,17 +107,6 @@ def start_server(
     return process
 
 
-def run_sandbox_command(binary: Path, config: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [str(binary), *args, "--config", str(config)],
-        cwd=REPO_ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=180,
-    )
-
-
 def stop_server(process: subprocess.Popen[str]) -> str:
     if process.poll() is None:
         process.terminate()
@@ -195,16 +148,3 @@ def lightweight_mcp(
                 exc.add_note(message)
             else:
                 pytest.fail(message)
-
-
-def docker_available() -> bool:
-    try:
-        result = subprocess.run(
-            ["docker", "info"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=10,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return False
-    return result.returncode == 0

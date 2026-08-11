@@ -6,13 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/docker/cli/cli/command"
-	cliflags "github.com/docker/cli/cli/flags"
 	"github.com/spf13/cobra"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/policysnapshot"
 )
 
 var errDoctorChecksFailed = errors.New("doctor: checks failed")
@@ -35,8 +37,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	}
 	results := []checkResult{
 		checkNono(ctx),
-		checkDockerCompose(ctx),
-		checkDockerDaemon(ctx),
+		checkBrokerSocketDir(),
 	}
 	renderResults(cmd.OutOrStdout(), results)
 	for _, r := range results {
@@ -55,32 +56,14 @@ type checkResult struct {
 }
 
 var (
-	lookPath         = exec.LookPath
-	runCommand       = defaultRunCommand
-	pingDockerDaemon = defaultPingDockerDaemon
+	lookPath   = exec.LookPath
+	runCommand = defaultRunCommand
 )
 
 func defaultRunCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	return exec.CommandContext(ctx, name, args...).CombinedOutput()
-}
-
-func defaultPingDockerDaemon(ctx context.Context) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	cli, err := command.NewDockerCli()
-	if err != nil {
-		return "", err
-	}
-	if err := cli.Initialize(cliflags.NewClientOptions()); err != nil {
-		return "", err
-	}
-	defer cli.Client().Close()
-	if _, err := cli.Client().Ping(ctx); err != nil {
-		return "", err
-	}
-	return "reachable", nil
 }
 
 func firstLine(s string) string {
@@ -117,44 +100,44 @@ func checkNono(ctx context.Context) checkResult {
 	}
 }
 
-func checkDockerCompose(ctx context.Context) checkResult {
-	const name = "docker compose"
-	out, err := runCommand(ctx, "docker", "compose", "version")
+// checkBrokerSocketDir verifies the launcher can create the broker socket. A
+// failure here means `agent-sandbox claude` cannot start the command broker,
+// so every sandboxed command would fail.
+//
+// os.MkdirAll alone is not sufficient: it returns nil for a directory that
+// already exists, regardless of its permission bits, so an existing
+// unwritable state dir (e.g. left at mode 0500 by something else) would pass
+// even though the launcher cannot actually create a socket file inside it.
+// Binding a throwaway unix socket the same way the launcher does also catches
+// the ~104-byte sun_path limit a plain write wouldn't.
+func checkBrokerSocketDir() checkResult {
+	const name = "command broker"
+	dir, err := policysnapshot.StateDir()
 	if err != nil {
-		details := []string{fmt.Sprintf("error: \"docker compose version\" failed: %v", err)}
-		if trimmed := strings.TrimSpace(string(out)); trimmed != "" {
-			details = append(details, fmt.Sprintf("output: %s", firstLine(trimmed)))
-		}
-		return checkResult{
-			name:    name,
-			ok:      false,
-			details: details,
-			hint:    "install Docker (or a compatible CLI like colima/podman) so that \"docker compose version\" succeeds",
-		}
-	}
-	return checkResult{
-		name:    name,
-		ok:      true,
-		details: []string{firstLine(string(out))},
-	}
-}
-
-func checkDockerDaemon(ctx context.Context) checkResult {
-	const name = "docker daemon"
-	detail, err := pingDockerDaemon(ctx)
-	if err != nil {
-		return checkResult{
-			name:    name,
-			ok:      false,
+		return checkResult{name: name, ok: false,
 			details: []string{fmt.Sprintf("error: %v", err)},
-			hint:    "start the Docker daemon (e.g. open Docker Desktop, or \"colima start\")",
+			hint:    "set HOME or XDG_STATE_HOME"}
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return checkResult{name: name, ok: false,
+			details: []string{fmt.Sprintf("error: %v", err)},
+			hint:    fmt.Sprintf("make %s writable", dir)}
+	}
+
+	sockPath := filepath.Join(dir, fmt.Sprintf("doctor-%d.sock", os.Getpid()))
+	l, err := net.Listen("unix", sockPath)
+	if err != nil {
+		return checkResult{name: name, ok: false,
+			details: []string{fmt.Sprintf("error: %v", err)},
+			hint: fmt.Sprintf(
+				"make %s writable, or shorten XDG_STATE_HOME (unix socket paths are limited to ~104 bytes)", dir),
 		}
 	}
-	return checkResult{
-		name:    name,
-		ok:      true,
-		details: []string{detail},
-	}
+	l.Close()
+	os.Remove(sockPath)
+
+	return checkResult{name: name, ok: true,
+		details: []string{fmt.Sprintf("socket dir: %s", dir)}}
 }
 
 func renderResults(w io.Writer, results []checkResult) {

@@ -4,19 +4,18 @@
 package claude
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/agentconfig"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/broker"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/gitutil"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/policysnapshot"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandboxhost"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandboxlifecycle"
 )
 
 // agentName identifies the launched agent for host-policy resolution. Only
@@ -101,7 +100,8 @@ func ValidatePassthrough(claudeOpts []string, githubMCPEnabled bool) error {
 // routing it through that snapshot; otherwise it disables the Bash and
 // Monitor tools. denyRules are folded into the injected settings as
 // additional capability denies.
-func BuildArgs(cfg *config.Config, opts Options, snapshotPath, mcpConfigPath, profilePath string, denyRules []string) (string, []string, error) {
+func BuildArgs(cfg *config.Config, opts Options, snapshotPath, mcpConfigPath,
+	profilePath string, denyRules []string, brokerSocket string) (string, []string, error) {
 	nonoPath, err := exec.LookPath("nono")
 	if err != nil {
 		return "", nil, fmt.Errorf("nono not found in PATH: %w", err)
@@ -120,6 +120,9 @@ func BuildArgs(cfg *config.Config, opts Options, snapshotPath, mcpConfigPath, pr
 	}
 	if mcpConfigPath != "" {
 		args = append(args, "--read-file", mcpConfigPath)
+	}
+	if brokerSocket != "" {
+		args = append(args, "--allow-unix-socket", brokerSocket)
 	}
 	if profilePath != "" {
 		args = append(args, "--profile", profilePath)
@@ -146,28 +149,21 @@ func BuildArgs(cfg *config.Config, opts Options, snapshotPath, mcpConfigPath, pr
 	return nonoPath, args, nil
 }
 
-// sandboxHandle is the lifecycle surface the launcher needs after ensuring the
-// sandbox is up. *sandboxlifecycle.Result satisfies it.
-type sandboxHandle interface {
-	Started() bool
-	Down(context.Context) error
-	Close()
-}
-
 // runDeps holds the launcher's collaborators so run can be tested without
-// touching Docker, the real process, or os.Exit.
+// touching the command broker, the real process, or os.Exit.
 type runDeps struct {
 	writeSnapshot  func(*config.Config) (string, func(), error)
 	writeMCPConfig func(*config.Config) (string, func(), error)
 	writeProfile   func(*config.Config) (path string, deny []string, cleanup func(), err error)
-	ensureUp       func(context.Context, *config.Config) (sandboxHandle, error)
+	startBroker    func(*config.Config) (socket string, cleanup func(), err error)
 	supervise      func(path string, args []string) int
 	exit           func(code int)
 }
 
-// Run ensures the sandbox is up, launches Claude under it, and — if this call
-// started the sandbox — tears it down when Claude exits. It replaces the old
-// syscall.Exec approach so the launcher can outlive Claude and run teardown.
+// Run generates the sandbox profile, starts the command broker, launches
+// Claude under nono, and tears the broker down when Claude exits. It replaces
+// the old syscall.Exec approach so the launcher can outlive Claude and run
+// teardown.
 func Run(cfg *config.Config, opts Options) error {
 	return run(cfg, opts, runDeps{
 		writeSnapshot:  policysnapshot.Write,
@@ -183,11 +179,9 @@ func Run(cfg *config.Config, opts Options) error {
 			}
 			return path, r.DenyRules, cleanup, nil
 		},
-		ensureUp: func(ctx context.Context, c *config.Config) (sandboxHandle, error) {
-			return sandboxlifecycle.EnsureUp(ctx, c)
-		},
-		supervise: superviseProcess,
-		exit:      os.Exit,
+		startBroker: startCommandBroker,
+		supervise:   superviseProcess,
+		exit:        os.Exit,
 	})
 }
 
@@ -237,28 +231,27 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 		}
 	}()
 
-	nonoPath, nonoArgs, err := BuildArgs(cfg, opts, snapshotPath, mcpConfigPath, profilePath, denyRules)
+	brokerSocket, cleanupBroker, err := d.startBroker(cfg)
+	if err != nil {
+		return fmt.Errorf("command broker: %w", err)
+	}
+	defer func() {
+		if cleanupBroker != nil {
+			cleanupBroker()
+		}
+	}()
+
+	nonoPath, nonoArgs, err := BuildArgs(cfg, opts, snapshotPath, mcpConfigPath, profilePath, denyRules, brokerSocket)
 	if err != nil {
 		return err
 	}
 
-	handle, err := d.ensureUp(context.Background(), cfg)
-	if err != nil {
-		return fmt.Errorf("sandbox not available: %w (run `agent-sandbox doctor`)", err)
-	}
-	defer handle.Close()
+	// superviseProcess inherits the launcher's environment, so setting it here
+	// is the simplest correct way to hand the broker socket path to the child.
+	os.Setenv(broker.SocketEnvVar, brokerSocket)
 
 	code := d.supervise(nonoPath, nonoArgs)
 
-	if handle.Started() {
-		downCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if derr := handle.Down(downCtx); derr != nil {
-			fmt.Fprintf(os.Stderr, "warning: sandbox down failed: %v\n", derr)
-		}
-	}
-
-	handle.Close()
 	if cleanupSnapshot != nil {
 		cleanupSnapshot()
 		cleanupSnapshot = nil
@@ -271,6 +264,76 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 		cleanupProfile()
 		cleanupProfile = nil
 	}
+	if cleanupBroker != nil {
+		cleanupBroker()
+		cleanupBroker = nil
+	}
 	d.exit(code)
 	return nil
+}
+
+// startCommandBroker generates the per-command sandbox profile, opens the
+// broker socket, and starts serving. The returned cleanup closes the socket and
+// removes the profile.
+func startCommandBroker(cfg *config.Config) (string, func(), error) {
+	nonoPath, err := exec.LookPath("nono")
+	if err != nil {
+		return "", nil, fmt.Errorf("nono not found in PATH: %w", err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", nil, fmt.Errorf("getwd: %w", err)
+	}
+
+	resolved, err := sandboxhost.ResolveCommand(cfg, cwd)
+	if err != nil {
+		return "", nil, err
+	}
+	profilePath, cleanupProfile, err := resolved.WriteProfile()
+	if err != nil {
+		return "", nil, err
+	}
+
+	sockPath, err := BrokerSocketPath()
+	if err != nil {
+		cleanupProfile()
+		return "", nil, err
+	}
+
+	// The executor gets the launcher's own working directory and the very
+	// allow_vars list written into the profile. Both bound what a request
+	// (which originates inside the sandbox) can reach: the command runs only
+	// under cwd, and its environment is drawn from the launcher's variables
+	// filtered by the same list the sandbox itself enforces.
+	executor := broker.NewNonoExecutor(nonoPath, profilePath, cwd,
+		resolved.EnvAllowVars())
+	srv, err := broker.NewServer(sockPath, executor)
+	if err != nil {
+		cleanupProfile()
+		return "", nil, err
+	}
+	go srv.Serve()
+
+	cleanup := func() {
+		srv.Close()
+		cleanupProfile()
+	}
+	return srv.SocketPath(), cleanup, nil
+}
+
+// BrokerSocketPath returns a per-process socket path under
+// policysnapshot.StateDir(). It stays short on purpose: unix socket paths are
+// limited to about 104 bytes on macOS.
+//
+// It is exported so `agent-sandbox debug` can print the same
+// `--allow-unix-socket` grant the launcher builds.
+func BrokerSocketPath() (string, error) {
+	dir, err := policysnapshot.StateDir()
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create state dir: %w", err)
+	}
+	return filepath.Join(dir, fmt.Sprintf("broker-%d.sock", os.Getpid())), nil
 }

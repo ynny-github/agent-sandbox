@@ -21,20 +21,20 @@ func TestRunBuffered_HostEcho(t *testing.T) {
 	}
 }
 
-func TestNeedsContainer(t *testing.T) {
+func TestNeedsSandbox(t *testing.T) {
 	s := router.New(router.Config{AllowPatterns: []string{"echo *"}})
-	got, err := s.NeedsContainer("echo hi")
+	got, err := s.NeedsSandbox("echo hi")
 	if err != nil {
-		t.Fatalf("NeedsContainer error: %v", err)
+		t.Fatalf("NeedsSandbox error: %v", err)
 	}
 	if got {
-		t.Fatalf("NeedsContainer(host-allowed) = true, want false")
+		t.Fatalf("NeedsSandbox(host-allowed) = true, want false")
 	}
-	got, err = s.NeedsContainer("python script.py")
+	got, err = s.NeedsSandbox("python script.py")
 	if err != nil {
-		t.Fatalf("NeedsContainer error: %v", err)
+		t.Fatalf("NeedsSandbox error: %v", err)
 	}
 	if !got {
-		t.Fatalf("NeedsContainer(unmatched) = false, want true")
+		t.Fatalf("NeedsSandbox(unmatched) = false, want true")
 	}
 }

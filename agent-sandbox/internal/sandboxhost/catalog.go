@@ -49,6 +49,18 @@ var catalog = map[string]capability{
 	},
 }
 
+// credentialCapabilities expose host credentials. They are granted to the
+// launched agent but never to the per-command sandbox: commands need
+// toolchains, not keys.
+var credentialCapabilities = map[string]bool{
+	"docker": true,
+	"ssh":    true,
+}
+
+// commandNetworkProfile is the nono network profile every brokered command
+// runs under. Fixed by design; not configurable.
+const commandNetworkProfile = "developer"
+
 // agentBase maps a launch agent to its nono base profile and profile name.
 type agentBase struct {
 	extends  string
@@ -62,8 +74,28 @@ var agentBases = map[string]agentBase{
 // baselineEnv / baselineAllowFile are granted for every agent regardless of the
 // selected capabilities, so common shell/locale env and generic files never
 // have to be repeated per project.
+//
+// baselineEnv is shared by Resolve (the launched agent's profile) and
+// ResolveCommand (the per-command broker profile). Deliberately NOT included
+// here: "AGENT_SANDBOX_BROKER_SOCKET" (the literal value of
+// broker.SocketEnvVar). It is added only in Resolve, via agentOnlyEnv below,
+// so the per-command sandbox never allow-lists it. A brokered command that
+// could reach the broker socket would let it recurse into
+// broker.Server.Serve, which spawns handlers with no concurrency cap — a
+// host-side nono fork bomb outside the sandbox, not a privilege escalation,
+// but worth foreclosing structurally rather than relying on the socket
+// happening to live outside every path the command profile grants.
 var baselineEnv = []string{"PATH", "HOME", "TERM", "LANG", "LC_ALL", "USER"}
 var baselineAllowFile = []string{"/dev/null"}
+
+// agentOnlyEnv is granted only to the launched agent's own profile (Resolve),
+// never to the per-command broker profile (ResolveCommand). See baselineEnv's
+// comment for why "AGENT_SANDBOX_BROKER_SOCKET" belongs here instead of
+// there: it is the literal value of broker.SocketEnvVar, duplicated (rather
+// than imported) to keep this package free of a dependency on internal/broker.
+// Without it, nono would strip the variable and Claude could never reach the
+// command broker.
+var agentOnlyEnv = []string{"AGENT_SANDBOX_BROKER_SOCKET"}
 
 // protectedPrefixes are paths nono denies by default. A raw read/allow grant
 // targeting one is rejected (raw grants never add bypass_protection); the user

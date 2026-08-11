@@ -2,12 +2,14 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/broker"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/policysnapshot"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/router"
@@ -72,32 +74,37 @@ func commandFromArgs(cmd *cobra.Command, args []string) string {
 }
 
 // runExecCore routes command and runs it, writing to stdout/stderr. It returns
-// the exit code. A container runner is built lazily, only when the routing
-// decision is "container", so host/drop commands never touch Docker.
+// the exit code. A command runner is built lazily, only when the routing
+// decision is "sandbox", so host/drop commands never touch the broker.
 func runExecCore(ctx context.Context, cfg *config.Config, command string, stdout, stderr io.Writer) int {
 	s := router.New(router.Config{
-		AllowPatterns:           allowPatterns(cfg),
-		DropRules:               dropRules(cfg),
-		ContainerEnvPassthrough: cfg.Sandbox.Container.EnvPassthrough,
+		AllowPatterns: allowPatterns(cfg),
+		DropRules:     dropRules(cfg),
 	})
 
-	needs, err := s.NeedsContainer(command)
+	needs, err := s.NeedsSandbox(command)
 	if err != nil {
 		fmt.Fprintf(stderr, "%v\n", err)
 		return 1
 	}
 	if needs {
-		runner, cleanup, rerr := newComposeContainerRunner(ctx, cfg)
+		runner, cleanup, rerr := newBrokerCommandRunner(ctx, cfg)
 		if rerr != nil {
-			fmt.Fprintf(stderr, "container setup: %v\n", rerr)
+			// The overwhelmingly common cause is running `agent-sandbox exec`
+			// outside a `claude` session, so the socket variable is unset. Print
+			// the actionable hint instead of the raw dial/lookup error.
+			if errors.Is(rerr, broker.ErrBrokerUnavailable) {
+				fmt.Fprintln(stderr, router.SandboxNotRunningHint)
+			} else {
+				fmt.Fprintf(stderr, "command broker setup: %v\n", rerr)
+			}
 			return 1
 		}
 		defer cleanup()
 		s = router.New(router.Config{
-			AllowPatterns:           allowPatterns(cfg),
-			DropRules:               dropRules(cfg),
-			ContainerEnvPassthrough: cfg.Sandbox.Container.EnvPassthrough,
-			ContainerRunner:         runner,
+			AllowPatterns: allowPatterns(cfg),
+			DropRules:     dropRules(cfg),
+			CommandRunner: runner,
 		})
 	}
 

@@ -31,14 +31,19 @@ def test_run_command_host_route_returns_output_file(lightweight_mcp: McpStdioCli
     assert "stderr_path" not in body
 
 
-def test_run_command_rejects_shell_operator(lightweight_mcp: McpStdioClient) -> None:
+def test_run_command_pipeline_needing_sandbox_is_refused(
+    lightweight_mcp: McpStdioClient,
+) -> None:
+    # `echo` is host-allowed but `cat` is not, so the pipeline needs the command
+    # sandbox, which the lightweight server does not wire up. The command must
+    # fail without producing output rather than run partially on the host.
     result = lightweight_mcp.call_tool("run_command", {"command": "echo e2e-ok | cat"})
     assert result.get("isError", False) is False
     body = tool_result(result)
 
     assert body["exit_code"] == 1
     stderr_path = Path(body["stderr_path"])
-    assert "rejected" in stderr_path.read_text(encoding="utf-8")
+    assert "no command broker configured" in stderr_path.read_text(encoding="utf-8")
     assert "stdout_path" not in body
 
 

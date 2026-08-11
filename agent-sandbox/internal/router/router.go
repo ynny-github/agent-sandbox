@@ -7,12 +7,11 @@ import (
 	"strings"
 )
 
-// Config holds routing patterns and the optional container runner.
+// Config holds routing patterns and the optional command runner.
 type Config struct {
-	AllowPatterns           []string
-	DropRules               []DropRule
-	ContainerEnvPassthrough []string
-	ContainerRunner         ContainerRunner // nil allowed (host/drop-only lines)
+	AllowPatterns []string
+	DropRules     []DropRule
+	CommandRunner CommandRunner // nil allowed (host/drop-only lines)
 }
 
 // Router routes and runs command lines.
@@ -34,13 +33,12 @@ type Result struct {
 // code. The error is non-nil only on host-execution infrastructure failure.
 func (s *Router) Run(ctx context.Context, command string, stdout, stderr io.Writer) (int, error) {
 	return Run(ctx, Request{
-		Command:                 command,
-		AllowPatterns:           s.cfg.AllowPatterns,
-		DropRules:               s.cfg.DropRules,
-		ContainerRunner:         s.cfg.ContainerRunner,
-		ContainerEnvPassthrough: s.cfg.ContainerEnvPassthrough,
-		Stdout:                  stdout,
-		Stderr:                  stderr,
+		Command:       command,
+		AllowPatterns: s.cfg.AllowPatterns,
+		DropRules:     s.cfg.DropRules,
+		CommandRunner: s.cfg.CommandRunner,
+		Stdout:        stdout,
+		Stderr:        stderr,
 	})
 }
 
@@ -51,10 +49,10 @@ func (s *Router) RunBuffered(ctx context.Context, command string) (Result, error
 	return Result{Stdout: out.Bytes(), Stderr: errb.Bytes(), ExitCode: code}, err
 }
 
-// NeedsContainer reports whether running command requires a container runner.
+// NeedsSandbox reports whether running command requires a command runner.
 // It uses ParseLine to check each segment individually, so a pipeline with any
-// container-routed segment returns true, and a Fallback line always returns true.
-func (s *Router) NeedsContainer(command string) (bool, error) {
+// sandbox-routed segment returns true, and a Fallback line always returns true.
+func (s *Router) NeedsSandbox(command string) (bool, error) {
 	line, err := ParseLine(command)
 	if err != nil {
 		return false, err
@@ -64,7 +62,7 @@ func (s *Router) NeedsContainer(command string) (bool, error) {
 	}
 	for _, pl := range line.Pipelines {
 		for _, seg := range pl.Segments {
-			if decision, _, _ := Route(strings.TrimSpace(seg.Raw), s.cfg.AllowPatterns, s.cfg.DropRules); decision == "container" {
+			if decision, _, _ := Route(strings.TrimSpace(seg.Raw), s.cfg.AllowPatterns, s.cfg.DropRules); decision == "sandbox" {
 				return true, nil
 			}
 		}

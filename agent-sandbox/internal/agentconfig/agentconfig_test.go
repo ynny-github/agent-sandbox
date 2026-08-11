@@ -22,7 +22,6 @@ func TestExplain_HookMode(t *testing.T) {
 		{Pattern: "git push --force*"},
 		{Pattern: "gh *", Message: "gh is disabled; use the GitHub MCP tools."},
 	}
-	cfg.Sandbox.Container.Image = "sandbox:0.1.0"
 
 	got := agentconfig.Explain(cfg)
 	for _, want := range []string{
@@ -35,7 +34,6 @@ func TestExplain_HookMode(t *testing.T) {
 		"## Refused commands (drop)",
 		"- git push --force*",
 		"- gh * — gh is disabled; use the GitHub MCP tools.",
-		"sandbox:0.1.0",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("Explain() missing %q\nfull output:\n%s", want, got)
@@ -66,9 +64,11 @@ func TestExplain_FilesystemSection(t *testing.T) {
 	cfg := &config.Config{ToolMode: "hook"}
 	got := agentconfig.Explain(cfg)
 	for _, want := range []string{
-		"## Filesystem: host and container share the same paths",
-		"identity mount",
-		"HOME is `/tmp`",
+		"## Filesystem: the same paths everywhere",
+		"no bind mount",
+		"HOME keeps its real host value",
+		"only as read-only paths pulled in by non-credential `sandbox.host` capabilities",
+		"credential capabilities (`docker`, `ssh`) apply to the launched agent only",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("Explain() missing filesystem note %q\nfull output:\n%s", want, got)
@@ -100,22 +100,24 @@ func TestExplain_NoSafeWrappersSection_WhenNone(t *testing.T) {
 	}
 }
 
-func TestExplain_IsolatedByDefault(t *testing.T) {
+func TestExplain_NoExtraDomainsByDefault(t *testing.T) {
 	cfg := &config.Config{ToolMode: "mcp"}
 	got := agentconfig.Explain(cfg)
-	if !strings.Contains(got, "- network: isolated (no external access)") {
-		t.Errorf("Explain() should render isolated network when allow_external is false:\n%s", got)
+	if !strings.Contains(got, "No extra domains beyond the developer profile.") {
+		t.Errorf("Explain() should render no extra domains by default:\n%s", got)
 	}
 }
 
-func TestExplain_ExternalAllowed(t *testing.T) {
+func TestExplain_AllowDomainsListed(t *testing.T) {
 	cfg := &config.Config{ToolMode: "mcp"}
-	cfg.Sandbox.Network.AllowExternal = true
+	cfg.Sandbox.Network.AllowDomains = []string{"proxy.golang.org", "sum.golang.org"}
 	got := agentconfig.Explain(cfg)
-	if !strings.Contains(got, "- network: external access allowed") {
-		t.Errorf("Explain() should render external access allowed when allow_external is true:\n%s", got)
+	for _, want := range []string{"proxy.golang.org", "sum.golang.org"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Explain() missing allow domain %q:\n%s", want, got)
+		}
 	}
-	if strings.Contains(got, "- network: isolated") {
-		t.Errorf("Explain() should not render isolated network when allow_external is true:\n%s", got)
+	if strings.Contains(got, "No extra domains") {
+		t.Errorf("Explain() should not claim no extra domains when AllowDomains is set:\n%s", got)
 	}
 }

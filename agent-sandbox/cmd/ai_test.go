@@ -25,10 +25,8 @@ tool_mode = "hook"
 [mcp]
 command_output_dir = "./tmp"
 
-[sandbox.container]
-build_context = "./docker/sandbox"
-dockerfile = "Dockerfile"
-image = "sandbox:0.1.0"
+[sandbox.network]
+allow_domains = ["proxy.golang.org"]
 
 [sandbox.command]
 allow = ["git *", "go *"]
@@ -48,7 +46,7 @@ drop = [{ pattern = "git push --force*" }]
 		"- git *",
 		"- go *",
 		"- git push --force*",
-		"sandbox:0.1.0",
+		"proxy.golang.org",
 	} {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("output missing %q\n%s", want, buf.String())

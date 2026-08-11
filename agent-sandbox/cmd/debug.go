@@ -61,7 +61,15 @@ func runDebug(cmd *cobra.Command, args []string) error {
 	}
 	defer cleanupProfile()
 
-	_, nonoArgs, err := claude.BuildArgs(cfg, opts, snapshotPath, "", profilePath, r.DenyRules)
+	// debug exists to show the exact invocation the launcher builds, so it must
+	// include the broker socket grant; passing "" here would hide the only thing
+	// the command broker adds to the wrap invocation.
+	brokerSocket, err := claude.BrokerSocketPath()
+	if err != nil {
+		return err
+	}
+
+	_, nonoArgs, err := claude.BuildArgs(cfg, opts, snapshotPath, "", profilePath, r.DenyRules, brokerSocket)
 	if err != nil {
 		return err
 	}

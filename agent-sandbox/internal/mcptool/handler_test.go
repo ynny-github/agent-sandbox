@@ -15,17 +15,15 @@ import (
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/mcptool"
 )
 
-// mockRunner implements mcptool.ContainerRunner.
+// mockRunner implements mcptool.CommandRunner.
 type mockRunner struct {
-	exitCode    int
-	stdout      string
-	stderr      string
-	err         error
-	capturedEnv []string
+	exitCode int
+	stdout   string
+	stderr   string
+	err      error
 }
 
-func (m *mockRunner) RunContainer(ctx context.Context, argv []string, env []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
-	m.capturedEnv = env
+func (m *mockRunner) RunSandboxed(ctx context.Context, argv []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	if m.stdout != "" {
 		io.WriteString(stdout, m.stdout)
 	}
@@ -195,7 +193,7 @@ func TestRunCommand_PatternMismatch_ReturnsNonZeroExitAndStderrPath(t *testing.T
 	if readErr != nil {
 		t.Fatalf("read stderr file: %v", readErr)
 	}
-	if !strings.Contains(string(data), "no container configured") {
+	if !strings.Contains(string(data), "no command broker configured") {
 		t.Errorf("stderr file should contain rejection reason, got: %q", string(data))
 	}
 }
@@ -237,12 +235,12 @@ func TestRunCommand_ParseError_ReturnsNonZeroExitAndStderrPath(t *testing.T) {
 	}
 }
 
-func TestRunCommand_ContainerExecution_ReturnsExitCodeAndPaths(t *testing.T) {
+func TestRunCommand_SandboxExecution_ReturnsExitCodeAndPaths(t *testing.T) {
 	dir := t.TempDir()
 	cfg := mcptool.HandlerConfig{
-		OutputDir:       dir,
-		AllowPatterns:   []string{"git *"}, // npm test won't match → container
-		ContainerRunner: &mockRunner{exitCode: 0, stdout: "test output\n"},
+		OutputDir:     dir,
+		AllowPatterns: []string{"git *"}, // npm test won't match → sandbox
+		CommandRunner: &mockRunner{exitCode: 0, stdout: "test output\n"},
 	}
 	session := setupServerWithConfig(t, cfg)
 
@@ -266,12 +264,12 @@ func TestRunCommand_ContainerExecution_ReturnsExitCodeAndPaths(t *testing.T) {
 	}
 }
 
-func TestRunCommand_ContainerRunnerError_ReturnsStructuredResponse(t *testing.T) {
+func TestRunCommand_CommandRunnerError_ReturnsStructuredResponse(t *testing.T) {
 	dir := t.TempDir()
 	cfg := mcptool.HandlerConfig{
-		OutputDir:       dir,
-		AllowPatterns:   []string{},
-		ContainerRunner: &mockRunner{
+		OutputDir:     dir,
+		AllowPatterns: []string{},
+		CommandRunner: &mockRunner{
 			exitCode: 0,
 			stdout:   "partial output\n",
 			err:      errors.New("attach interrupted"),
@@ -305,13 +303,13 @@ func TestRunCommand_ContainerRunnerError_ReturnsStructuredResponse(t *testing.T)
 	if readErr != nil {
 		t.Fatalf("read stderr file: %v", readErr)
 	}
-	if !strings.Contains(string(data), "container exec: attach interrupted") {
+	if !strings.Contains(string(data), "sandbox exec: attach interrupted") {
 		t.Errorf("stderr file should contain runner error, got: %q", string(data))
 	}
 }
 
 // Ensure mockRunner satisfies the mcptool interface.
-var _ mcptool.ContainerRunner = (*mockRunner)(nil)
+var _ mcptool.CommandRunner = (*mockRunner)(nil)
 
 func TestRunCommand_TimeoutSeconds_Zero_ReturnsError(t *testing.T) {
 	dir := t.TempDir()
@@ -470,16 +468,16 @@ func TestRunCommand_DropPattern_WritesStderrAndExits1(t *testing.T) {
 	}
 }
 
-func TestRunCommand_DropPattern_DoesNotCallContainerRunner(t *testing.T) {
+func TestRunCommand_DropPattern_DoesNotCallCommandRunner(t *testing.T) {
 	dir := t.TempDir()
 	// If the runner is invoked it will write the contamination strings below
 	// to stdout/stderr; the assertions afterwards confirm those strings never
 	// appear, proving the drop branch skipped the runner entirely.
-	runner := &mockRunner{exitCode: 0, stdout: "container ran\n", stderr: "container err\n"}
+	runner := &mockRunner{exitCode: 0, stdout: "sandbox ran\n", stderr: "sandbox err\n"}
 	cfg := mcptool.HandlerConfig{
-		OutputDir:       dir,
-		DropRules:       []mcptool.DropRule{{Pattern: "rm -rf *"}},
-		ContainerRunner: runner,
+		OutputDir:     dir,
+		DropRules:     []mcptool.DropRule{{Pattern: "rm -rf *"}},
+		CommandRunner: runner,
 	}
 	session := setupServerWithConfig(t, cfg)
 
@@ -496,7 +494,7 @@ func TestRunCommand_DropPattern_DoesNotCallContainerRunner(t *testing.T) {
 		t.Errorf("exit_code = %d, want 1", result.ExitCode)
 	}
 	if result.StdoutPath != "" {
-		t.Errorf("stdout_path should be empty (container must not run), got %q", result.StdoutPath)
+		t.Errorf("stdout_path should be empty (sandbox must not run), got %q", result.StdoutPath)
 	}
 
 	data, readErr := os.ReadFile(result.StderrPath)
@@ -505,36 +503,7 @@ func TestRunCommand_DropPattern_DoesNotCallContainerRunner(t *testing.T) {
 	}
 	want := "dropped: command matches drop pattern \"rm -rf *\"\n"
 	if string(data) != want {
-		t.Errorf("stderr file = %q, want %q (container runner must not contribute output)", string(data), want)
-	}
-}
-
-func TestRunCommand_ContainerEnvPassthrough_PassesResolvedEnvToRunner(t *testing.T) {
-	t.Setenv("CR_HANDLER_TEST_VAR", "passedvalue")
-
-	dir := t.TempDir()
-	runner := &mockRunner{exitCode: 0}
-	cfg := mcptool.HandlerConfig{
-		OutputDir:               dir,
-		AllowPatterns:           []string{},
-		ContainerRunner:         runner,
-		ContainerEnvPassthrough: []string{"CR_HANDLER_TEST_VAR", "CR_HANDLER_TEST_ABSENT_XYZ"},
-	}
-	session := setupServerWithConfig(t, cfg)
-
-	_, err := session.CallTool(context.Background(), &mcp.CallToolParams{
-		Name:      "run_command",
-		Arguments: map[string]any{"command": "npm test"},
-	})
-	if err != nil {
-		t.Fatalf("CallTool error: %v", err)
-	}
-
-	if len(runner.capturedEnv) != 1 {
-		t.Fatalf("capturedEnv len = %d, want 1 (absent key skipped)", len(runner.capturedEnv))
-	}
-	if runner.capturedEnv[0] != "CR_HANDLER_TEST_VAR=passedvalue" {
-		t.Errorf("capturedEnv[0] = %q, want CR_HANDLER_TEST_VAR=passedvalue", runner.capturedEnv[0])
+		t.Errorf("stderr file = %q, want %q (sandbox runner must not contribute output)", string(data), want)
 	}
 }
 

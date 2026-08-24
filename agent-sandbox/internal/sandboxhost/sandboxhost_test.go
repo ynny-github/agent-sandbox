@@ -35,11 +35,11 @@ func profileMap(t *testing.T, r *Resolved) map[string]any {
 }
 
 // TestResolve_Parity reproduces the retired nono.jsonc from the migrated
-// [sandbox.host] and asserts the generated profile, modulo the two intentional
-// deltas (taskgate path, no gh).
+// sandbox sections and asserts the generated profile, modulo the one
+// intentional delta (no gh).
 func TestResolve_Parity(t *testing.T) {
 	r := resolve(t, config.HostConfig{
-		Capabilities: []string{"go", "python", "docker", "ssh", "mise", "taskgate"},
+		Capabilities: []string{"go", "python", "docker", "ssh", "mise"},
 	}, "claude")
 
 	want := map[string]any{
@@ -49,7 +49,7 @@ func TestResolve_Parity(t *testing.T) {
 		"filesystem": map[string]any{
 			"read": []any{
 				"~/.config/mise", "~/.docker", "~/.local/share/mise",
-				"~/.local/state/taskgate", "~/.orbstack", "~/.ssh",
+				"~/.orbstack", "~/.ssh",
 			},
 			"allow_file":        []any{"/dev/null", "~/.ssh/known_hosts"},
 			"bypass_protection": []any{"~/.docker", "~/.ssh"},

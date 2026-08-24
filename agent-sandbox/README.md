@@ -145,7 +145,7 @@ to put a grant in the shared base leaves a command sandbox without it; it can
 never silently gain one.
 
 All three sections take the same fields. `capabilities` are named bundles —
-`go`, `python`, `node`, `rust`, `docker`, `ssh`, `mise`, `taskgate`, `bashrc` —
+`go`, `python`, `node`, `rust`, `docker`, `ssh`, `mise`, `bashrc` —
 each expanding to the directories, files, and env vars that capability needs.
 Raw grants (`allow`, `read`, `allow_file`, `read_file`, `allow_env`) cover
 anything not already covered by a capability. The common `PATH`/`HOME`/... env
@@ -241,6 +241,7 @@ The configuration was reorganized; old keys are no longer accepted.
 | `sandbox.command.host` | `sandbox.shell` |
 | `sandbox.command.network.allow_domains` | `sandbox.shell.allow_domains` |
 | `sandbox.command.allow` / `sandbox.command.drop` | `sandbox.agent.allow_commands` / `sandbox.agent.drop_commands` |
+| `taskgate` capability | removed — grant `~/.local/state/taskgate` with a raw `read` if a project still needs it |
 | `agent-sandbox sandbox up/down/prune` | removed — `agent-sandbox claude` starts and stops the per-launch command broker automatically |
 
 The `deny` routing axis is gone. Patterns that previously forced a host-allowed command into the sandbox now have two options: leave them out of `allow` (so they default to the sandbox), or add them to `drop` if they should be refused entirely.

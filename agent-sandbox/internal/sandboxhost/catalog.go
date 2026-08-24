@@ -42,7 +42,6 @@ var catalog = map[string]capability{
 		read:      []string{"~/.local/share/mise", "~/.config/mise"},
 		allowVars: []string{"MISE*", "__MISE*"},
 	},
-	"taskgate": {read: []string{"~/.local/state/taskgate"}},
 	"bashrc": {
 		readFile: []string{"~/.bashrc", "/etc/bashrc", "/etc/bash.bashrc"},
 		bypass:   []string{"~/.bashrc"},

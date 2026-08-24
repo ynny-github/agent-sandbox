@@ -18,7 +18,7 @@ command_output_dir = "/tmp/mcp-output"
 #
 # Each section takes the same host-access fields:
 #   capabilities = []   # named bundles: go, python, node, rust, docker, ssh,
-#                       #                mise, taskgate, bashrc
+#                       #                mise, bashrc
 #   allow        = []   # read+write host directories
 #   read         = []   # read-only host directories
 #   allow_file   = []   # single file, read+write

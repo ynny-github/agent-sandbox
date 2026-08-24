@@ -1,5 +1,6 @@
-  # Tool execution mode: "hook" routes the agent's Bash/Monitor commands through
-  # the PreToolUse hook (see .claude/settings.json) into `agent-sandbox exec`.
+  # Tool execution mode: "hook" routes the agent's Bash/Monitor commands into
+  # `agent-sandbox exec` through a PreToolUse hook that `agent-sandbox claude`
+  # injects at launch via --settings (nothing is stored in .claude/settings.json).
   tool_mode = "hook"
 
   # Host access is declared per sandbox. [sandbox.shared] applies to both the

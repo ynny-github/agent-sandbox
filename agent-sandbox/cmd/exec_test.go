@@ -16,7 +16,7 @@ import (
 
 func TestRunExecCore_HostSuccess(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.Sandbox.Command.Allow = []string{"echo *"}
+	cfg.Sandbox.Agent.AllowCommands = []string{"echo *"}
 
 	var out, errBuf bytes.Buffer
 	code := runExecCore(context.Background(), cfg, "echo hello", &out, &errBuf)
@@ -35,7 +35,7 @@ func TestRunExecCore_HostSuccess(t *testing.T) {
 func TestRunExecCore_NoBrokerSocket_ShowsHint(t *testing.T) {
 	t.Setenv(broker.SocketEnvVar, "")
 	cfg := &config.Config{}
-	cfg.Sandbox.Command.Allow = []string{"echo *"} // "true" is not allowed → sandbox
+	cfg.Sandbox.Agent.AllowCommands = []string{"echo *"} // "true" is not allowed → sandbox
 
 	var out, errBuf bytes.Buffer
 	code := runExecCore(context.Background(), cfg, "true", &out, &errBuf)
@@ -52,7 +52,7 @@ func TestRunExecCore_NoBrokerSocket_ShowsHint(t *testing.T) {
 
 func TestRunExecCore_DropPattern(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.Sandbox.Command.Drop = []config.DropRule{{Pattern: "rm -rf *"}}
+	cfg.Sandbox.Agent.DropCommands = []config.DropRule{{Pattern: "rm -rf *"}}
 
 	var out, errBuf bytes.Buffer
 	code := runExecCore(context.Background(), cfg, "rm -rf /tmp/x", &out, &errBuf)
@@ -67,7 +67,7 @@ func TestRunExecCore_DropPattern(t *testing.T) {
 
 func TestRunExecCore_DropPattern_CustomMessage(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.Sandbox.Command.Drop = []config.DropRule{
+	cfg.Sandbox.Agent.DropCommands = []config.DropRule{
 		{Pattern: "gh *", Message: "gh is disabled; use the GitHub MCP tools."},
 	}
 
@@ -86,7 +86,7 @@ func TestRunExecCore_ParseFailure(t *testing.T) {
 	// An unterminated quote is a parse error; NeedsSandbox returns the error
 	// and runExecCore writes it to stderr, returning exit code 1.
 	cfg := &config.Config{}
-	cfg.Sandbox.Command.Allow = []string{"echo *"}
+	cfg.Sandbox.Agent.AllowCommands = []string{"echo *"}
 
 	var out, errBuf bytes.Buffer
 	code := runExecCore(context.Background(), cfg, `echo "hi`, &out, &errBuf)
@@ -101,7 +101,7 @@ func TestRunExecCore_ParseFailure(t *testing.T) {
 func TestResolveExecConfig_PolicyFileIgnoresConfig(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	snap := &config.Config{}
-	snap.Sandbox.Command.Allow = []string{"echo *"}
+	snap.Sandbox.Agent.AllowCommands = []string{"echo *"}
 	path, cleanup, err := policysnapshot.Write(snap)
 	if err != nil {
 		t.Fatal(err)
@@ -113,8 +113,8 @@ func TestResolveExecConfig_PolicyFileIgnoresConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(cfg.Sandbox.Command.Allow) != 1 || cfg.Sandbox.Command.Allow[0] != "echo *" {
-		t.Errorf("allow = %v, want [echo *] from snapshot", cfg.Sandbox.Command.Allow)
+	if len(cfg.Sandbox.Agent.AllowCommands) != 1 || cfg.Sandbox.Agent.AllowCommands[0] != "echo *" {
+		t.Errorf("allow = %v, want [echo *] from snapshot", cfg.Sandbox.Agent.AllowCommands)
 	}
 }
 

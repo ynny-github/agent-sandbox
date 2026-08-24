@@ -47,7 +47,7 @@ func runClaude(cmd *cobra.Command, args []string) error {
 	// process's env from envflag.Load above. They land on the agent section, not
 	// the shared base, so --env grants the launched agent alone — widening a
 	// brokered command's environment stays an explicit config edit.
-	cfg.Sandbox.Agent.Host.AllowEnv = append(cfg.Sandbox.Agent.Host.AllowEnv, envKeys...)
+	cfg.Sandbox.Agent.AllowEnv = append(cfg.Sandbox.Agent.AllowEnv, envKeys...)
 
 	return claude.Run(cfg, opts)
 }

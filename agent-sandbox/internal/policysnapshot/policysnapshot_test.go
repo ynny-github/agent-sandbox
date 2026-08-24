@@ -12,13 +12,13 @@ import (
 func TestWriteLoad_RoundTrip(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	cfg := &config.Config{ToolMode: "hook"}
-	cfg.Sandbox.Command.Allow = []string{"git *"}
-	cfg.Sandbox.Command.Drop = []config.DropRule{
+	cfg.Sandbox.Agent.AllowCommands = []string{"git *"}
+	cfg.Sandbox.Agent.DropCommands = []config.DropRule{
 		{Pattern: "git push -f*"},
 		{Pattern: "gh *", Message: "gh is disabled"},
 	}
-	cfg.Sandbox.Command.Network.AllowDomains = []string{"proxy.golang.org"}
-	cfg.Sandbox.Command.Host.AllowEnv = []string{"CI"}
+	cfg.Sandbox.Shell.AllowDomains = []string{"proxy.golang.org"}
+	cfg.Sandbox.Shell.AllowEnv = []string{"CI"}
 
 	path, cleanup, err := Write(cfg)
 	if err != nil {

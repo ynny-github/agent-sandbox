@@ -8,15 +8,15 @@ command_output_dir = "/tmp/mcp-output"
 
 # Host access is declared per sandbox, and nothing is inherited between them:
 #
-#   [sandbox.host]          -> both the launched agent and every brokered command
-#   [sandbox.agent.host]    -> the launched agent only
-#   [sandbox.command.host]  -> brokered commands only
+#   [sandbox.shared]  -> both the launched agent and the shell sandbox
+#   [sandbox.agent]   -> the launched agent only
+#   [sandbox.shell]   -> the sandbox brokered commands run in, only
 #
 # A grant reaches a sandbox only if it is written where that sandbox can see it,
 # so "keep this away from sandboxed commands" is expressed by declaring it under
-# [sandbox.agent.host] — there is nothing to subtract afterwards.
+# [sandbox.agent] — there is nothing to subtract afterwards.
 #
-# Each section takes the same fields:
+# Each section takes the same host-access fields:
 #   capabilities = []   # named bundles: go, python, node, rust, docker, ssh,
 #                       #                mise, taskgate, bashrc
 #   allow        = []   # read+write host directories
@@ -24,39 +24,38 @@ command_output_dir = "/tmp/mcp-output"
 #   allow_file   = []   # single file, read+write
 #   read_file    = []   # single file, read-only
 #   allow_env    = []   # env vars (beyond the always-on PATH/HOME/... baseline)
-[sandbox.host]
+[sandbox.shared]
 capabilities = ["go", "python"]
 
-[sandbox.agent.host]
+[sandbox.agent]
 # docker and ssh expose host credentials; declared here they never reach a
 # brokered command.
 capabilities = []
 
-[sandbox.command.host]
-# Environment variables forwarded to sandboxed commands. NONO_* is rejected in
-# every section: those variables reconfigure the command sandbox itself.
-allow_env = [
-  # "AWS_PROFILE",
-  # "CI",
-]
-
-[sandbox.command]
-allow = [
+# Command routing: allow_commands runs on the host, drop_commands is refused
+# outright, and everything else goes to the shell sandbox. Each drop_commands
+# entry is a { pattern, message } table; message is optional and, when omitted,
+# a default "dropped: command matches drop pattern ..." line is printed.
+allow_commands = [
   "git *",
   "make *",
   "npm run *",
 ]
-# Each drop entry is a { pattern, message } table; message is optional and, when
-# omitted, a default "dropped: command matches drop pattern ..." line is printed.
-drop = [
+drop_commands = [
   # { pattern = "rm -rf *" },
   # { pattern = "gh *", message = "gh is disabled; use the GitHub MCP tools." },
 ]
 
-[sandbox.command.network]
-# Commands routed to the sandbox run under nono's "developer" network profile
-# (LLM APIs, package registries, GitHub, sigstore, documentation). List any
-# extra domains here. The preset does NOT include proxy.golang.org.
+[sandbox.shell]
+# Environment variables forwarded to sandboxed commands. NONO_* is rejected in
+# every section: those variables reconfigure the shell sandbox itself.
+allow_env = [
+  # "AWS_PROFILE",
+  # "CI",
+]
+# Sandboxed commands run under nono's "developer" network profile (LLM APIs,
+# package registries, GitHub, sigstore, documentation). List any extra domains
+# here. The preset does NOT include proxy.golang.org.
 allow_domains = [
   # "proxy.golang.org",
   # "sum.golang.org",

@@ -285,7 +285,7 @@ func startCommandBroker(cfg *config.Config) (string, func(), error) {
 		return "", nil, fmt.Errorf("getwd: %w", err)
 	}
 
-	resolved, err := sandboxhost.ResolveCommand(cfg, cwd)
+	resolved, err := sandboxhost.ResolveShell(cfg, cwd)
 	if err != nil {
 		return "", nil, err
 	}

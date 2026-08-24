@@ -41,7 +41,7 @@ func runDebug(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("config error: %w", err)
 	}
 	// Agent section, matching cmd/claude.go: --env is for the launched agent.
-	cfg.Sandbox.Agent.Host.AllowEnv = append(cfg.Sandbox.Agent.Host.AllowEnv, envKeys...)
+	cfg.Sandbox.Agent.AllowEnv = append(cfg.Sandbox.Agent.AllowEnv, envKeys...)
 
 	var snapshotPath string
 	if cfg.ToolMode == "hook" {
@@ -87,39 +87,39 @@ func runDebug(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Print(formatGeneratedConfigs(profilePath, profileJSON, claude.GithubMCPEnabled(), mcpJSON))
 
-	// The command profile is the other half of the policy: same expansion, fed by
-	// [sandbox.host] + [sandbox.command.host] instead of [sandbox.agent.host].
-	// Printing both is what makes the split inspectable — the difference between
-	// them is exactly what the two sections declare.
+	// The shell profile is the other half of the policy: same expansion, fed by
+	// [sandbox.shared] + [sandbox.shell] instead of [sandbox.agent]. Printing
+	// both is what makes the split inspectable — the difference between them is
+	// exactly what the two sections declare.
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("getwd: %w", err)
 	}
-	cmdResolved, err := sandboxhost.ResolveCommand(cfg, cwd)
+	shellResolved, err := sandboxhost.ResolveShell(cfg, cwd)
 	if err != nil {
 		return err
 	}
-	cmdJSON, err := cmdResolved.ProfileJSON()
+	shellJSON, err := shellResolved.ProfileJSON()
 	if err != nil {
 		return err
 	}
-	fmt.Print(formatCommandProfile(cmdJSON, cmdResolved.ProtectedGrants()))
+	fmt.Print(formatShellProfile(shellJSON, shellResolved.ProtectedGrants()))
 	return nil
 }
 
-// formatCommandProfile renders the per-command nono profile, warning when it
+// formatShellProfile renders the shell sandbox's nono profile, warning when it
 // grants a protected path. Raw grants cannot produce one, so such a path always
 // comes from a credential capability (docker/ssh) declared in the shared
-// [sandbox.host] instead of [sandbox.agent.host] — host keys reachable from any
+// [sandbox.shared] instead of [sandbox.agent] — host keys reachable from any
 // sandboxed command, which is rarely what the author meant.
-func formatCommandProfile(profileJSON []byte, protected []string) string {
+func formatShellProfile(profileJSON []byte, protected []string) string {
 	var b strings.Builder
-	b.WriteString("\n# generated nono profile for brokered commands:\n")
+	b.WriteString("\n# generated nono profile for the shell sandbox:\n")
 	b.WriteString(indentJSON(profileJSON))
 	b.WriteString("\n")
 	if len(protected) > 0 {
 		fmt.Fprintf(&b, "\n# warning: brokered commands can read %s\n", strings.Join(protected, ", "))
-		b.WriteString("#          move the capability granting it to [sandbox.agent.host]\n")
+		b.WriteString("#          move the capability granting it to [sandbox.agent]\n")
 	}
 	return b.String()
 }

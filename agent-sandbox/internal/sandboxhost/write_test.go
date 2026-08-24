@@ -10,7 +10,7 @@ import (
 
 func TestWriteProfile_WritesAndCleans(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.Sandbox.Host = config.HostConfig{Capabilities: []string{"go"}}
+	cfg.Sandbox.Shared = config.HostConfig{Capabilities: []string{"go"}}
 	r, err := Resolve(cfg, "claude")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)

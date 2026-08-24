@@ -25,12 +25,12 @@ tool_mode = "hook"
 [mcp]
 command_output_dir = "./tmp"
 
-[sandbox.command.network]
+[sandbox.shell]
 allow_domains = ["proxy.golang.org"]
 
-[sandbox.command]
-allow = ["git *", "go *"]
-drop = [{ pattern = "git push --force*" }]
+[sandbox.agent]
+allow_commands = ["git *", "go *"]
+drop_commands = [{ pattern = "git push --force*" }]
 `)
 	orig := configPath
 	configPath = cfgPath

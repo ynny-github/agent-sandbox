@@ -18,16 +18,16 @@ var builtinAllowPatterns = []string{
 // self-allow patterns followed by the operator-configured allow list. It never
 // mutates cfg.
 func allowPatterns(cfg *config.Config) []string {
-	out := make([]string, 0, len(builtinAllowPatterns)+len(cfg.Sandbox.Command.Allow))
+	out := make([]string, 0, len(builtinAllowPatterns)+len(cfg.Sandbox.Agent.AllowCommands))
 	out = append(out, builtinAllowPatterns...)
-	out = append(out, cfg.Sandbox.Command.Allow...)
+	out = append(out, cfg.Sandbox.Agent.AllowCommands...)
 	return out
 }
 
 // dropRules converts the configured drop rules into the router's DropRule type,
 // keeping the router decoupled from the config package. It never mutates cfg.
 func dropRules(cfg *config.Config) []router.DropRule {
-	rules := cfg.Sandbox.Command.Drop
+	rules := cfg.Sandbox.Agent.DropCommands
 	if len(rules) == 0 {
 		return nil
 	}

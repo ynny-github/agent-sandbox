@@ -13,7 +13,7 @@ import (
 func resolve(t *testing.T, h config.HostConfig, agent string) *Resolved {
 	t.Helper()
 	cfg := &config.Config{}
-	cfg.Sandbox.Host = h
+	cfg.Sandbox.Shared = h
 	r, err := Resolve(cfg, agent)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
@@ -158,20 +158,20 @@ func TestResolve_BashrcCapability(t *testing.T) {
 
 func hostCfg(h config.HostConfig) *config.Config {
 	cfg := &config.Config{}
-	cfg.Sandbox.Host = h
+	cfg.Sandbox.Shared = h
 	return cfg
 }
 
-func TestResolveCommand_ProfileShape(t *testing.T) {
+func TestResolveShell_ProfileShape(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.Sandbox.Host.Capabilities = []string{"go", "mise"}
-	cfg.Sandbox.Agent.Host.Capabilities = []string{"docker", "ssh"}
-	cfg.Sandbox.Command.Network.AllowDomains = []string{"proxy.golang.org"}
-	cfg.Sandbox.Command.Host.AllowEnv = []string{"AWS_PROFILE"}
+	cfg.Sandbox.Shared.Capabilities = []string{"go", "mise"}
+	cfg.Sandbox.Agent.Capabilities = []string{"docker", "ssh"}
+	cfg.Sandbox.Shell.AllowDomains = []string{"proxy.golang.org"}
+	cfg.Sandbox.Shell.AllowEnv = []string{"AWS_PROFILE"}
 
-	r, err := ResolveCommand(cfg, "/work/project")
+	r, err := ResolveShell(cfg, "/work/project")
 	if err != nil {
-		t.Fatalf("ResolveCommand() error = %v", err)
+		t.Fatalf("ResolveShell() error = %v", err)
 	}
 	data, err := r.ProfileJSON()
 	if err != nil {
@@ -238,17 +238,17 @@ func toStrings(v any) []string {
 // scope is decided by placement, and no grant is subtracted anywhere.
 func TestSectionScoping(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.Sandbox.Host.Read = []string{"/srv/shared"}
-	cfg.Sandbox.Agent.Host.Read = []string{"/srv/agent-only"}
-	cfg.Sandbox.Command.Host.Read = []string{"/srv/command-only"}
+	cfg.Sandbox.Shared.Read = []string{"/srv/shared"}
+	cfg.Sandbox.Agent.Read = []string{"/srv/agent-only"}
+	cfg.Sandbox.Shell.Read = []string{"/srv/command-only"}
 
 	agent, err := Resolve(cfg, "claude")
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
-	command, err := ResolveCommand(cfg, "/work/project")
+	command, err := ResolveShell(cfg, "/work/project")
 	if err != nil {
-		t.Fatalf("ResolveCommand() error = %v", err)
+		t.Fatalf("ResolveShell() error = %v", err)
 	}
 
 	agentRead := toStrings(profileMap(t, agent)["filesystem"].(map[string]any)["read"])
@@ -277,13 +277,13 @@ func TestSectionScoping(t *testing.T) {
 // side they are granted there, and ProtectedGrants reports it so callers can
 // warn. Without this, removing credentialCapabilities could regress into a
 // silent re-exclusion and nobody would notice.
-func TestResolveCommand_CredentialCapabilityIsGrantedWhenDeclared(t *testing.T) {
+func TestResolveShell_CredentialCapabilityIsGrantedWhenDeclared(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.Sandbox.Command.Host.Capabilities = []string{"ssh"}
+	cfg.Sandbox.Shell.Capabilities = []string{"ssh"}
 
-	r, err := ResolveCommand(cfg, "/work/project")
+	r, err := ResolveShell(cfg, "/work/project")
 	if err != nil {
-		t.Fatalf("ResolveCommand() error = %v", err)
+		t.Fatalf("ResolveShell() error = %v", err)
 	}
 	read := toStrings(profileMap(t, r)["filesystem"].(map[string]any)["read"])
 	if !slices.Contains(read, "~/.ssh") {
@@ -296,11 +296,11 @@ func TestResolveCommand_CredentialCapabilityIsGrantedWhenDeclared(t *testing.T) 
 
 func TestProtectedGrants_EmptyWithoutCredentialCapability(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.Sandbox.Host.Capabilities = []string{"go", "mise"}
+	cfg.Sandbox.Shared.Capabilities = []string{"go", "mise"}
 
-	r, err := ResolveCommand(cfg, "/work/project")
+	r, err := ResolveShell(cfg, "/work/project")
 	if err != nil {
-		t.Fatalf("ResolveCommand() error = %v", err)
+		t.Fatalf("ResolveShell() error = %v", err)
 	}
 	if got := r.ProtectedGrants(); len(got) != 0 {
 		t.Errorf("ProtectedGrants() = %v, want none", got)
@@ -309,25 +309,25 @@ func TestProtectedGrants_EmptyWithoutCredentialCapability(t *testing.T) {
 
 // The protected-path guard on raw grants applies to the command profile too.
 // It used to be unreachable there only because raw grants never reached it.
-func TestResolveCommand_ProtectedRawPath(t *testing.T) {
+func TestResolveShell_ProtectedRawPath(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.Sandbox.Command.Host.Read = []string{"~/.aws"}
+	cfg.Sandbox.Shell.Read = []string{"~/.aws"}
 
-	if _, err := ResolveCommand(cfg, "/work/project"); err == nil {
-		t.Fatal("ResolveCommand() error = nil, want a protected-path rejection")
+	if _, err := ResolveShell(cfg, "/work/project"); err == nil {
+		t.Fatal("ResolveShell() error = nil, want a protected-path rejection")
 	}
 }
 
 // A capability's bypass_protection and allow_file entries follow it to
 // whichever side declares it. The command profile used to receive the bundle's
 // read_file without its bypass, leaving the grant half-applied.
-func TestResolveCommand_CapabilityBypassAndAllowFile(t *testing.T) {
+func TestResolveShell_CapabilityBypassAndAllowFile(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.Sandbox.Host.Capabilities = []string{"bashrc"}
+	cfg.Sandbox.Shared.Capabilities = []string{"bashrc"}
 
-	r, err := ResolveCommand(cfg, "/work/project")
+	r, err := ResolveShell(cfg, "/work/project")
 	if err != nil {
-		t.Fatalf("ResolveCommand() error = %v", err)
+		t.Fatalf("ResolveShell() error = %v", err)
 	}
 	fs := profileMap(t, r)["filesystem"].(map[string]any)
 	if got := toStrings(fs["bypass_protection"]); !slices.Contains(got, "~/.bashrc") {
@@ -337,13 +337,13 @@ func TestResolveCommand_CapabilityBypassAndAllowFile(t *testing.T) {
 
 // Deny rules constrain the agent's own file tools, so they belong to the agent
 // profile alone; emitting them for a command would be meaningless.
-func TestResolveCommand_NoDenyRules(t *testing.T) {
+func TestResolveShell_NoDenyRules(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.Sandbox.Host.Capabilities = []string{"ssh"}
+	cfg.Sandbox.Shared.Capabilities = []string{"ssh"}
 
-	r, err := ResolveCommand(cfg, "/work/project")
+	r, err := ResolveShell(cfg, "/work/project")
 	if err != nil {
-		t.Fatalf("ResolveCommand() error = %v", err)
+		t.Fatalf("ResolveShell() error = %v", err)
 	}
 	if len(r.DenyRules) != 0 {
 		t.Errorf("DenyRules = %v, want none on the command profile", r.DenyRules)
@@ -354,18 +354,18 @@ func TestResolveCommand_NoDenyRules(t *testing.T) {
 // its working directory" — the question agent-facing docs need. It must draw
 // from the shared base and the command section only, split by write access, and
 // leave out the baseline files every command gets regardless of config.
-func TestCommandFilesystemGrants(t *testing.T) {
+func TestShellFilesystemGrants(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.Sandbox.Host.Capabilities = []string{"mise"}
-	cfg.Sandbox.Host.Read = []string{"/srv/shared"}
-	cfg.Sandbox.Agent.Host.Read = []string{"/srv/agent-only"}
-	cfg.Sandbox.Agent.Host.Capabilities = []string{"ssh"}
-	cfg.Sandbox.Command.Host.Allow = []string{"/srv/cache"}
-	cfg.Sandbox.Command.Host.ReadFile = []string{"/etc/hosts"}
+	cfg.Sandbox.Shared.Capabilities = []string{"mise"}
+	cfg.Sandbox.Shared.Read = []string{"/srv/shared"}
+	cfg.Sandbox.Agent.Read = []string{"/srv/agent-only"}
+	cfg.Sandbox.Agent.Capabilities = []string{"ssh"}
+	cfg.Sandbox.Shell.Allow = []string{"/srv/cache"}
+	cfg.Sandbox.Shell.ReadFile = []string{"/etc/hosts"}
 
-	got, err := CommandFilesystemGrants(cfg)
+	got, err := ShellFilesystemGrants(cfg)
 	if err != nil {
-		t.Fatalf("CommandFilesystemGrants() error = %v", err)
+		t.Fatalf("ShellFilesystemGrants() error = %v", err)
 	}
 	wantWrite := []string{"/srv/cache"}
 	wantRead := []string{"/etc/hosts", "/srv/shared", "~/.config/mise", "~/.local/share/mise"}
@@ -377,21 +377,21 @@ func TestCommandFilesystemGrants(t *testing.T) {
 	}
 }
 
-func TestCommandFilesystemGrants_EmptyConfig(t *testing.T) {
-	got, err := CommandFilesystemGrants(&config.Config{})
+func TestShellFilesystemGrants_EmptyConfig(t *testing.T) {
+	got, err := ShellFilesystemGrants(&config.Config{})
 	if err != nil {
-		t.Fatalf("CommandFilesystemGrants() error = %v", err)
+		t.Fatalf("ShellFilesystemGrants() error = %v", err)
 	}
 	if len(got.Write) != 0 || len(got.Read) != 0 {
-		t.Errorf("CommandFilesystemGrants() = %+v, want both lists empty (the baseline /dev/null is not a config grant)", got)
+		t.Errorf("ShellFilesystemGrants() = %+v, want both lists empty (the baseline /dev/null is not a config grant)", got)
 	}
 }
 
-func TestCommandFilesystemGrants_UnknownCapability(t *testing.T) {
+func TestShellFilesystemGrants_UnknownCapability(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.Sandbox.Command.Host.Capabilities = []string{"nope"}
+	cfg.Sandbox.Shell.Capabilities = []string{"nope"}
 
-	if _, err := CommandFilesystemGrants(cfg); err == nil {
-		t.Fatal("CommandFilesystemGrants() error = nil, want an unknown-capability error")
+	if _, err := ShellFilesystemGrants(cfg); err == nil {
+		t.Fatal("ShellFilesystemGrants() error = nil, want an unknown-capability error")
 	}
 }

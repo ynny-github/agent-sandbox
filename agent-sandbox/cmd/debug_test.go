@@ -109,25 +109,25 @@ func TestFormatGeneratedConfigs_MCPDisabledLabel(t *testing.T) {
 	}
 }
 
-func TestFormatCommandProfile_NoWarningWithoutProtectedGrants(t *testing.T) {
-	out := formatCommandProfile([]byte(`{"meta":{"name":"agent-sandbox command"}}`), nil)
-	if !strings.Contains(out, "# generated nono profile for brokered commands:") {
-		t.Errorf("output missing the command profile header; got:\n%s", out)
+func TestFormatShellProfile_NoWarningWithoutProtectedGrants(t *testing.T) {
+	out := formatShellProfile([]byte(`{"meta":{"name":"agent-sandbox shell"}}`), nil)
+	if !strings.Contains(out, "# generated nono profile for the shell sandbox:") {
+		t.Errorf("output missing the shell profile header; got:\n%s", out)
 	}
 	if strings.Contains(out, "warning") {
 		t.Errorf("unexpected warning for a profile with no protected grants; got:\n%s", out)
 	}
 }
 
-// A credential capability declared in the shared [sandbox.host] instead of
-// [sandbox.agent.host] hands host keys to every brokered command. Nothing
+// A credential capability declared in the shared [sandbox.shared] instead of
+// [sandbox.agent] hands host keys to every brokered command. Nothing
 // rejects it — it is a legitimate, if unusual, configuration — so debug is
 // where the author gets told.
-func TestFormatCommandProfile_WarnsOnProtectedGrants(t *testing.T) {
-	out := formatCommandProfile([]byte(`{"a":1}`), []string{"~/.ssh", "~/.ssh/known_hosts"})
+func TestFormatShellProfile_WarnsOnProtectedGrants(t *testing.T) {
+	out := formatShellProfile([]byte(`{"a":1}`), []string{"~/.ssh", "~/.ssh/known_hosts"})
 	for _, want := range []string{
 		"# warning: brokered commands can read ~/.ssh, ~/.ssh/known_hosts",
-		"[sandbox.agent.host]",
+		"[sandbox.agent]",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q; got:\n%s", want, out)

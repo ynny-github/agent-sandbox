@@ -17,8 +17,8 @@ func TestPointer_MentionsExplainCommand(t *testing.T) {
 
 func TestExplain_HookMode(t *testing.T) {
 	cfg := &config.Config{ToolMode: "hook"}
-	cfg.Sandbox.Command.Allow = []string{"git *"}
-	cfg.Sandbox.Command.Drop = []config.DropRule{
+	cfg.Sandbox.Agent.AllowCommands = []string{"git *"}
+	cfg.Sandbox.Agent.DropCommands = []config.DropRule{
 		{Pattern: "git push --force*"},
 		{Pattern: "gh *", Message: "gh is disabled; use the GitHub MCP tools."},
 	}
@@ -67,8 +67,8 @@ func TestExplain_FilesystemSection(t *testing.T) {
 		"## Filesystem: the same paths everywhere",
 		"no bind mount",
 		"HOME keeps its real host value",
-		"`[sandbox.host]` (shared with the agent) or `[sandbox.command.host]`",
-		"Anything declared under `[sandbox.agent.host]`",
+		"`[sandbox.shared]` (shared with the agent) or `[sandbox.shell]`",
+		"Anything declared under `[sandbox.agent]`",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("Explain() missing filesystem note %q\nfull output:\n%s", want, got)
@@ -110,7 +110,7 @@ func TestExplain_NoExtraDomainsByDefault(t *testing.T) {
 
 func TestExplain_AllowDomainsListed(t *testing.T) {
 	cfg := &config.Config{ToolMode: "mcp"}
-	cfg.Sandbox.Command.Network.AllowDomains = []string{"proxy.golang.org", "sum.golang.org"}
+	cfg.Sandbox.Shell.AllowDomains = []string{"proxy.golang.org", "sum.golang.org"}
 	got := agentconfig.Explain(cfg)
 	for _, want := range []string{"proxy.golang.org", "sum.golang.org"} {
 		if !strings.Contains(got, want) {
@@ -127,9 +127,9 @@ func TestExplain_AllowDomainsListed(t *testing.T) {
 // guessing, since which grants apply depends on where they were written.
 func TestExplain_ResolvedOutsidePaths(t *testing.T) {
 	cfg := &config.Config{ToolMode: "hook"}
-	cfg.Sandbox.Host.Capabilities = []string{"mise"}
-	cfg.Sandbox.Command.Host.Allow = []string{"/srv/cache"}
-	cfg.Sandbox.Agent.Host.Capabilities = []string{"ssh"}
+	cfg.Sandbox.Shared.Capabilities = []string{"mise"}
+	cfg.Sandbox.Shell.Allow = []string{"/srv/cache"}
+	cfg.Sandbox.Agent.Capabilities = []string{"ssh"}
 
 	got := agentconfig.Explain(cfg)
 	for _, want := range []string{
@@ -142,7 +142,7 @@ func TestExplain_ResolvedOutsidePaths(t *testing.T) {
 	}
 	// The agent's own credential grant must not be listed as reachable.
 	if strings.Contains(got, "~/.ssh") {
-		t.Errorf("Explain() lists an [sandbox.agent.host] grant as command-reachable:\n%s", got)
+		t.Errorf("Explain() lists an [sandbox.agent] grant as command-reachable:\n%s", got)
 	}
 }
 

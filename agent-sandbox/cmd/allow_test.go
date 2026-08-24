@@ -9,7 +9,7 @@ import (
 
 func TestAllowPatterns_IncludesBuiltinSelfAllow(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.Sandbox.Command.Allow = []string{"git *"}
+	cfg.Sandbox.Agent.AllowCommands = []string{"git *"}
 
 	got := allowPatterns(cfg)
 	for _, want := range []string{"agent-sandbox ai", "agent-sandbox ai *", "git *"} {
@@ -21,10 +21,10 @@ func TestAllowPatterns_IncludesBuiltinSelfAllow(t *testing.T) {
 
 func TestAllowPatterns_DoesNotMutateConfig(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.Sandbox.Command.Allow = []string{"git *"}
+	cfg.Sandbox.Agent.AllowCommands = []string{"git *"}
 	_ = allowPatterns(cfg)
-	if len(cfg.Sandbox.Command.Allow) != 1 || cfg.Sandbox.Command.Allow[0] != "git *" {
-		t.Errorf("config allow was mutated: %v", cfg.Sandbox.Command.Allow)
+	if len(cfg.Sandbox.Agent.AllowCommands) != 1 || cfg.Sandbox.Agent.AllowCommands[0] != "git *" {
+		t.Errorf("config allow was mutated: %v", cfg.Sandbox.Agent.AllowCommands)
 	}
 }
 
@@ -38,7 +38,7 @@ func TestAllowPatterns_RoutesAiExplainToHost(t *testing.T) {
 
 func TestAllowPatterns_IncludesBuiltinSafeSelfAllow(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.Sandbox.Command.Allow = []string{"git *"}
+	cfg.Sandbox.Agent.AllowCommands = []string{"git *"}
 
 	got := allowPatterns(cfg)
 	for _, want := range []string{"agent-sandbox safe", "agent-sandbox safe *"} {
@@ -50,7 +50,7 @@ func TestAllowPatterns_IncludesBuiltinSafeSelfAllow(t *testing.T) {
 
 func TestAllowPatterns_RoutesSafeWrappersToHost(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.Sandbox.Command.Drop = []config.DropRule{{Pattern: "git push --force*"}}
+	cfg.Sandbox.Agent.DropCommands = []config.DropRule{{Pattern: "git push --force*"}}
 
 	for _, cmd := range []string{
 		"agent-sandbox safe git status",

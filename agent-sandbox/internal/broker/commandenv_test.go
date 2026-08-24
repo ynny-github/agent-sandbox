@@ -12,7 +12,7 @@ import (
 )
 
 // childEnvFor drives the whole production path that decides a brokered
-// command's environment — config → sandboxhost.ResolveCommand → EnvAllowVars →
+// command's environment — config → sandboxhost.ResolveShell → EnvAllowVars →
 // NewNonoExecutor → broker.Server → broker.Client → child process — and returns
 // what the child actually received.
 //
@@ -29,7 +29,7 @@ func childEnvFor(t *testing.T, cfg *config.Config) string {
 		t.Fatalf("Getwd() error = %v", err)
 	}
 
-	resolved, err := sandboxhost.ResolveCommand(cfg, cwd)
+	resolved, err := sandboxhost.ResolveShell(cfg, cwd)
 	if err != nil {
 		t.Fatalf("ResolveCommand() error = %v", err)
 	}
@@ -67,7 +67,7 @@ func TestCommandAllowEnvVariableReachesTheCommand(t *testing.T) {
 	t.Setenv("ASB_TEST_WITHHELD", "no")
 
 	cfg := &config.Config{}
-	cfg.Sandbox.Command.Host.AllowEnv = []string{"ASB_TEST_FORWARDED"}
+	cfg.Sandbox.Shell.AllowEnv = []string{"ASB_TEST_FORWARDED"}
 
 	env := childEnvFor(t, cfg)
 	if !strings.Contains(env, "ASB_TEST_FORWARDED=yes") {
@@ -87,7 +87,7 @@ func TestMiseCapabilityEnvReachesTheCommand(t *testing.T) {
 	t.Setenv("MISCELLANEOUS", "no")
 
 	cfg := &config.Config{}
-	cfg.Sandbox.Host.Capabilities = []string{"mise"}
+	cfg.Sandbox.Shared.Capabilities = []string{"mise"}
 
 	env := childEnvFor(t, cfg)
 	for _, want := range []string{"MISE_SHELL=fish", "__MISE_SESSION=abc"} {

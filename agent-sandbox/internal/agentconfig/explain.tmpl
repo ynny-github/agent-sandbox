@@ -11,7 +11,7 @@
 There is no container and no bind mount — sandboxed commands run directly on the host filesystem, restricted to the current working directory (read+write):
 - Host commands (the allow list below) run in the real project directory using real host absolute paths.
 - Sandboxed commands run in that same directory at that same absolute path — no translation needed. HOME keeps its real host value.
-- Paths outside the working directory are reachable only where the config grants them to the command sandbox: `[sandbox.host]` (shared with the agent) or `[sandbox.command.host]`. Anything declared under `[sandbox.agent.host]` — typically the credential capabilities `docker` and `ssh` — belongs to the launched agent alone and is not reachable from a sandboxed command.
+- Paths outside the working directory are reachable only where the config grants them to the shell sandbox: `[sandbox.shared]` (shared with the agent) or `[sandbox.shell]`. Anything declared under `[sandbox.agent]` — typically the credential capabilities `docker` and `ssh` — belongs to the launched agent alone and is not reachable from a sandboxed command.
 {{if .Resolved}}{{if or .OutsideWrite .OutsideRead}}- Resolved from the active config, a sandboxed command also reaches:
 {{range .OutsideWrite}}  - `{{.}}` (read+write)
 {{end}}{{range .OutsideRead}}  - `{{.}}` (read-only)

@@ -2,27 +2,28 @@
   # the PreToolUse hook (see .claude/settings.json) into `agent-sandbox exec`.
   tool_mode = "hook"
 
-  # Host access is declared per sandbox. [sandbox.host] applies to both the
-  # launched agent and every brokered command; [sandbox.agent.host] and
-  # [sandbox.command.host] apply to exactly one of them. Nothing is inherited
-  # between the two, so a grant reaches a sandbox only if it is written where
-  # that sandbox can see it.
+  # Host access is declared per sandbox. [sandbox.shared] applies to both the
+  # launched agent and the shell sandbox brokered commands run in;
+  # [sandbox.agent] and [sandbox.shell] apply to exactly one of them. Nothing is
+  # inherited between the two, so a grant reaches a sandbox only if it is
+  # written where that sandbox can see it.
   #
   # Capabilities are named bundles (go/python -> runtime groups; docker/ssh ->
   # credential reads + the matching agent read-block; mise/taskgate -> tool
   # state). Raw grants (allow/read/allow_file/read_file/allow_env) cover
   # anything not bundled.
-  [sandbox.host]
+  [sandbox.shared]
   capabilities = ["go", "python", "mise", "taskgate", "bashrc"]
 
+  [sandbox.agent]
   # docker and ssh expose host credentials. Declaring them here — and not in
   # the shared base — is what keeps them away from brokered commands: commands
   # need toolchains, not keys.
-  [sandbox.agent.host]
   capabilities = ["docker", "ssh"]
 
-  [sandbox.command]
-  allow = [
+  # Command routing. allow_commands runs on the host; everything unmatched goes
+  # to the shell sandbox.
+  allow_commands = [
     "taskgate ai *",
     "go *"
   ]
@@ -33,16 +34,16 @@
   # config writes, ...). The wrapper itself is always host-allowed.
   #
   # gh is refused here (formerly a built-in rule) so the agent uses the GitHub
-  # MCP server's tools instead of the gh CLI. Each drop entry is a
+  # MCP server's tools instead of the gh CLI. Each entry is a
   # { pattern, message } table; message is optional and, when omitted, the
   # default "dropped: command matches drop pattern ..." line is printed.
-  drop = [
+  drop_commands = [
     { pattern = "git *" },
     { pattern = "gh", message = "gh is disabled in this sandbox. Use the GitHub MCP server's tools instead." },
     { pattern = "gh *", message = "gh is disabled in this sandbox. Use the GitHub MCP server's tools instead." },
   ]
 
-  [sandbox.command.network]
+  [sandbox.shell]
   # Extra domains on top of nono's fixed "developer" network profile, which
   # every brokered command runs under. The preset does not include the Go
   # module proxy, so this project must add it.

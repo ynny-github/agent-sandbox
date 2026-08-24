@@ -18,7 +18,7 @@ type capability struct {
 // The credential-exposing bundles ("docker", "ssh") carry no special handling:
 // like every other capability they apply to whichever side declares them, so
 // keeping host keys away from brokered commands is a matter of declaring them
-// under [sandbox.agent.host] rather than the shared [sandbox.host].
+// under [sandbox.agent] rather than the shared [sandbox.shared].
 var catalog = map[string]capability{
 	"go":     {groups: []string{"go_runtime"}},
 	"python": {groups: []string{"python_runtime"}},
@@ -54,9 +54,9 @@ var catalog = map[string]capability{
 	},
 }
 
-// commandNetworkProfile is the nono network profile every brokered command
-// runs under. Fixed by design; not configurable.
-const commandNetworkProfile = "developer"
+// shellNetworkProfile is the nono network profile every brokered command runs
+// under. Fixed by design; not configurable.
+const shellNetworkProfile = "developer"
 
 // agentBase maps a launch agent to its nono base profile and profile name.
 type agentBase struct {
@@ -73,7 +73,7 @@ var agentBases = map[string]agentBase{
 // have to be repeated per project.
 //
 // baselineEnv is shared by Resolve (the launched agent's profile) and
-// ResolveCommand (the per-command broker profile). Deliberately NOT included
+// ResolveShell (the per-command shell profile). Deliberately NOT included
 // here: "AGENT_SANDBOX_BROKER_SOCKET" (the literal value of
 // broker.SocketEnvVar). It is added only in Resolve, via agentOnlyEnv below,
 // so the per-command sandbox never allow-lists it. A brokered command that
@@ -86,7 +86,7 @@ var baselineEnv = []string{"PATH", "HOME", "TERM", "LANG", "LC_ALL", "USER"}
 var baselineAllowFile = []string{"/dev/null"}
 
 // agentOnlyEnv is granted only to the launched agent's own profile (Resolve),
-// never to the per-command broker profile (ResolveCommand). See baselineEnv's
+// never to the per-command shell profile (ResolveShell). See baselineEnv's
 // comment for why "AGENT_SANDBOX_BROKER_SOCKET" belongs here instead of
 // there: it is the literal value of broker.SocketEnvVar, duplicated (rather
 // than imported) to keep this package free of a dependency on internal/broker.

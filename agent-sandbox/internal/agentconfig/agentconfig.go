@@ -64,16 +64,16 @@ type explainView struct {
 func Explain(cfg *config.Config, safe ...SafeCommand) string {
 	view := explainView{
 		Hook:         cfg.ToolMode == "hook",
-		Allow:        cfg.Sandbox.Command.Allow,
-		Drop:         cfg.Sandbox.Command.Drop,
+		Allow:        cfg.Sandbox.Agent.AllowCommands,
+		Drop:         cfg.Sandbox.Agent.DropCommands,
 		Safe:         safe,
-		AllowDomains: cfg.Sandbox.Command.Network.AllowDomains,
+		AllowDomains: cfg.Sandbox.Shell.AllowDomains,
 	}
 	// A resolve error means an unknown capability name, which stops
 	// `agent-sandbox claude` at launch — no session can reach this code with
 	// such a config. Should one ever get here, fall back to the prose above the
 	// list rather than printing a wrong (empty) list as if it were resolved.
-	if grants, err := sandboxhost.CommandFilesystemGrants(cfg); err == nil {
+	if grants, err := sandboxhost.ShellFilesystemGrants(cfg); err == nil {
 		view.OutsideWrite = grants.Write
 		view.OutsideRead = grants.Read
 		view.Resolved = true

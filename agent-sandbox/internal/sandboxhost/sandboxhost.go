@@ -1,8 +1,8 @@
 // Package sandboxhost is the single source of truth for host-access
 // capabilities. It expands the config's host sections into the two nono
 // profiles agent-sandbox needs — one for the launched agent (Resolve), one for
-// each brokered command (ResolveCommand) — plus the coordinated Claude
-// permission-deny rules for the agent's own file tools. Both profiles come from
+// the shell sandbox each brokered command runs in (ResolveShell) — plus the
+// coordinated permission-deny rules for the agent's own file tools. Both profiles come from
 // the same expansion and differ only in which config sections feed them, so a
 // grant's scope is decided by where it is written, not by a rule in here. The
 // nono-specific JSON rendering lives here; nothing about nono leaks into the
@@ -70,7 +70,7 @@ type sideOptions struct {
 	// extraEnv is granted on top of baselineEnv. Only the agent side passes
 	// anything (agentOnlyEnv, the broker socket); see catalog.go for why.
 	extraEnv []string
-	// workdir, when set, is granted read+write. Only the command side sets it:
+	// workdir, when set, is granted read+write. Only the shell side sets it:
 	// the agent's own working directory comes from its nono base profile.
 	workdir string
 	network *profileNetwork
@@ -81,7 +81,7 @@ type sideOptions struct {
 
 // expand turns host sections into one nono profile. Sections are unioned in
 // order, so a grant reaches the profile if any of them declares it — the shared
-// [sandbox.host] base plus that side's own section. Nothing is subtracted:
+// [sandbox.shared] base plus that side's own section. Nothing is subtracted:
 // whatever a side must not have is simply not among the sections it is given.
 //
 // All output lists are sorted and de-duplicated so the result is deterministic.
@@ -153,16 +153,16 @@ func expand(sections []config.HostConfig, opts sideOptions) (*Resolved, error) {
 }
 
 // Resolve builds the profile for the launched agent: the shared
-// [sandbox.host] base plus [sandbox.agent.host], on the given agent's nono base
+// [sandbox.shared] base plus [sandbox.agent], on the given agent's nono base
 // profile. agentOnlyEnv (the broker socket path) is granted here and never in
-// ResolveCommand's profile — see baselineEnv's comment in catalog.go.
+// ResolveShell's profile — see baselineEnv's comment in catalog.go.
 func Resolve(cfg *config.Config, agent string) (*Resolved, error) {
 	base, ok := agentBases[agent]
 	if !ok {
 		return nil, fmt.Errorf("sandboxhost: unknown agent %q", agent)
 	}
 	return expand(
-		[]config.HostConfig{cfg.Sandbox.Host, cfg.Sandbox.Agent.Host},
+		[]config.HostConfig{cfg.Sandbox.Shared, cfg.Sandbox.Agent.HostConfig},
 		sideOptions{
 			extends:  base.extends,
 			metaName: base.metaName,
@@ -172,52 +172,51 @@ func Resolve(cfg *config.Config, agent string) (*Resolved, error) {
 	)
 }
 
-// ResolveCommand builds the profile for a single brokered command: the working
-// directory read+write, the shared [sandbox.host] base plus
-// [sandbox.command.host], and the fixed developer network profile plus
-// cfg.Sandbox.Command.Network.AllowDomains.
+// ResolveShell builds the profile for the shell sandbox a single brokered
+// command runs in: the working directory read+write, the shared
+// [sandbox.shared] base plus [sandbox.shell], and the fixed developer network
+// profile plus cfg.Sandbox.Shell.AllowDomains.
 //
 // It shares expand with Resolve because the two profiles differ only in which
-// config sections feed them: a grant the command sandbox must not have belongs
-// under [sandbox.agent.host], where this call never looks.
-func ResolveCommand(cfg *config.Config, workdir string) (*Resolved, error) {
+// config sections feed them: a grant the shell sandbox must not have belongs
+// under [sandbox.agent], where this call never looks.
+func ResolveShell(cfg *config.Config, workdir string) (*Resolved, error) {
 	if strings.TrimSpace(workdir) == "" {
-		return nil, fmt.Errorf("sandboxhost: empty workdir for command profile")
+		return nil, fmt.Errorf("sandboxhost: empty workdir for shell profile")
 	}
 	return expand(
-		[]config.HostConfig{cfg.Sandbox.Host, cfg.Sandbox.Command.Host},
+		[]config.HostConfig{cfg.Sandbox.Shared, cfg.Sandbox.Shell.HostConfig},
 		sideOptions{
-			metaName: "agent-sandbox command",
+			metaName: "agent-sandbox shell",
 			workdir:  workdir,
 			network: &profileNetwork{
-				NetworkProfile: commandNetworkProfile,
-				AllowDomain:    sortDedup(cfg.Sandbox.Command.Network.AllowDomains),
+				NetworkProfile: shellNetworkProfile,
+				AllowDomain:    sortDedup(cfg.Sandbox.Shell.AllowDomains),
 			},
 		},
 	)
 }
 
-// CommandGrants are the filesystem paths a brokered command's sandbox can reach
-// outside its working directory — the shared [sandbox.host] base plus
-// [sandbox.command.host], expanded. The working directory and the built-in
-// baseline files are excluded: they are true of every command and say nothing
-// about this config.
-type CommandGrants struct {
+// ShellGrants are the filesystem paths the shell sandbox can reach outside its
+// working directory — the shared [sandbox.shared] base plus [sandbox.shell],
+// expanded. The working directory and the built-in baseline files are excluded:
+// they are true of every command and say nothing about this config.
+type ShellGrants struct {
 	Write []string // read+write
 	Read  []string // read-only
 }
 
-// CommandFilesystemGrants resolves CommandGrants for cfg. It exists so
-// agent-facing documentation can state what a sandboxed command actually
-// reaches instead of describing the config sections and leaving the agent to
-// work it out — the answer depends entirely on where grants were written.
-func CommandFilesystemGrants(cfg *config.Config) (CommandGrants, error) {
-	r, err := expand([]config.HostConfig{cfg.Sandbox.Host, cfg.Sandbox.Command.Host}, sideOptions{})
+// ShellFilesystemGrants resolves ShellGrants for cfg. It exists so agent-facing
+// documentation can state what a sandboxed command actually reaches instead of
+// describing the config sections and leaving the agent to work it out — the
+// answer depends entirely on where grants were written.
+func ShellFilesystemGrants(cfg *config.Config) (ShellGrants, error) {
+	r, err := expand([]config.HostConfig{cfg.Sandbox.Shared, cfg.Sandbox.Shell.HostConfig}, sideOptions{})
 	if err != nil {
-		return CommandGrants{}, err
+		return ShellGrants{}, err
 	}
 	fs := r.profile.Filesystem
-	return CommandGrants{
+	return ShellGrants{
 		Write: sortDedup(exclude(concat(fs.Allow, fs.AllowFile), baselineAllowFile)),
 		Read:  sortDedup(concat(fs.Read, fs.ReadFile)),
 	}, nil
@@ -250,7 +249,7 @@ func exclude(in, drop []string) []string {
 // ProtectedGrants returns the profile's filesystem grants that fall under
 // protectedPrefixes, sorted. Raw grants can never produce one (expand rejects
 // them), so a non-empty result means a capability carrying host credentials was
-// declared for this side — worth surfacing on the command profile, where it is
+// declared for this side — worth surfacing on the shell profile, where it is
 // usually a mistake.
 func (r *Resolved) ProtectedGrants() []string {
 	var out []string

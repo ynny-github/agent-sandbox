@@ -9,11 +9,11 @@
   # written where that sandbox can see it.
   #
   # Capabilities are named bundles (go/python -> runtime groups; docker/ssh ->
-  # credential reads + the matching agent read-block; mise/taskgate -> tool
-  # state). Raw grants (allow/read/allow_file/read_file/allow_env) cover
-  # anything not bundled.
+  # credential reads + the matching agent read-block; mise -> tool state).
+  # Raw grants (allow/read/allow_file/read_file/allow_env) cover anything not
+  # bundled.
   [sandbox.shared]
-  capabilities = ["go", "python", "mise", "taskgate", "bashrc"]
+  capabilities = ["go", "python", "mise", "bashrc"]
 
   [sandbox.agent]
   # docker and ssh expose host credentials. Declaring them here — and not in
@@ -24,7 +24,6 @@
   # Command routing. allow_commands runs on the host; everything unmatched goes
   # to the shell sandbox.
   allow_commands = [
-    "taskgate ai *",
     "go *"
   ]
 

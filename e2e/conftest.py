@@ -54,13 +54,15 @@ def lightweight_config(tmp_path: Path, output_dir: Path) -> Path:
 [mcp]
 command_output_dir = {toml_string(output_dir)}
 
-[sandbox.network]
-allow_domains = []
-
 [sandbox.command]
 allow = ["echo *", "printf *"]
 drop = []
-env_passthrough = []
+
+[sandbox.command.host]
+allow_env = []
+
+[sandbox.command.network]
+allow_domains = []
 """.strip()
         + "\n",
         encoding="utf-8",

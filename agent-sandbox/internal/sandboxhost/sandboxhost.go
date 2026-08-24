@@ -1,7 +1,10 @@
 // Package sandboxhost is the single source of truth for host-access
-// capabilities. It expands a config.HostConfig for a launch agent into a nono
-// profile (what the host process may touch) and the coordinated Claude
-// permission-deny rules (what the agent's own file tools may not read). The
+// capabilities. It expands the config's host sections into the two nono
+// profiles agent-sandbox needs — one for the launched agent (Resolve), one for
+// each brokered command (ResolveCommand) — plus the coordinated Claude
+// permission-deny rules for the agent's own file tools. Both profiles come from
+// the same expansion and differ only in which config sections feed them, so a
+// grant's scope is decided by where it is written, not by a rule in here. The
 // nono-specific JSON rendering lives here; nothing about nono leaks into the
 // user-facing config.
 package sandboxhost
@@ -57,60 +60,78 @@ type profileEnvironment struct {
 	AllowVars []string `json:"allow_vars,omitempty"`
 }
 
-// Resolve expands cfg.Sandbox.Host for the given launch agent. All output lists
-// are sorted and de-duplicated so the result is deterministic.
-func Resolve(cfg *config.Config, agent string) (*Resolved, error) {
-	base, ok := agentBases[agent]
-	if !ok {
-		return nil, fmt.Errorf("sandboxhost: unknown agent %q", agent)
-	}
-	h := cfg.Sandbox.Host
+// sideOptions carries what differs between the two profiles agent-sandbox
+// generates. The grants themselves never differ by side — those come from the
+// config sections expand is handed — so everything here is structural: how the
+// profile is framed, and which built-ins only one side may have.
+type sideOptions struct {
+	extends  string
+	metaName string
+	// extraEnv is granted on top of baselineEnv. Only the agent side passes
+	// anything (agentOnlyEnv, the broker socket); see catalog.go for why.
+	extraEnv []string
+	// workdir, when set, is granted read+write. Only the command side sets it:
+	// the agent's own working directory comes from its nono base profile.
+	workdir string
+	network *profileNetwork
+	// emitDeny renders the capabilities' Claude permission-deny rules. They
+	// constrain the agent's own file tools, so only the agent side wants them.
+	emitDeny bool
+}
 
+// expand turns host sections into one nono profile. Sections are unioned in
+// order, so a grant reaches the profile if any of them declares it — the shared
+// [sandbox.host] base plus that side's own section. Nothing is subtracted:
+// whatever a side must not have is simply not among the sections it is given.
+//
+// All output lists are sorted and de-duplicated so the result is deterministic.
+func expand(sections []config.HostConfig, opts sideOptions) (*Resolved, error) {
 	var groups, read, bypass, allowFile, allowVars, allow, readFile, deny []string
 
-	// Baseline (per agent). agentOnlyEnv (e.g. the broker socket path) is
-	// granted here but deliberately not in ResolveCommand's profile — see
-	// baselineEnv's comment in catalog.go.
 	allowVars = append(allowVars, baselineEnv...)
-	allowVars = append(allowVars, agentOnlyEnv...)
+	allowVars = append(allowVars, opts.extraEnv...)
 	allowFile = append(allowFile, baselineAllowFile...)
-
-	// Capabilities.
-	for _, name := range h.Capabilities {
-		c, ok := catalog[name]
-		if !ok {
-			return nil, fmt.Errorf("sandboxhost: unknown capability %q (valid: %s)", name, validCapabilities())
-		}
-		groups = append(groups, c.groups...)
-		read = append(read, c.read...)
-		readFile = append(readFile, c.readFile...)
-		bypass = append(bypass, c.bypass...)
-		allowFile = append(allowFile, c.allowFile...)
-		allowVars = append(allowVars, c.allowVars...)
-		deny = append(deny, c.deny...)
+	if opts.workdir != "" {
+		allow = append(allow, opts.workdir)
 	}
 
-	// Raw grants (no bypass). Guard protected paths on the read/allow lists.
-	for _, p := range h.Allow {
-		if isProtected(p) {
-			return nil, protectedErr(p)
+	for _, h := range sections {
+		for _, name := range h.Capabilities {
+			c, ok := catalog[name]
+			if !ok {
+				return nil, fmt.Errorf("sandboxhost: unknown capability %q (valid: %s)", name, validCapabilities())
+			}
+			groups = append(groups, c.groups...)
+			read = append(read, c.read...)
+			readFile = append(readFile, c.readFile...)
+			bypass = append(bypass, c.bypass...)
+			allowFile = append(allowFile, c.allowFile...)
+			allowVars = append(allowVars, c.allowVars...)
+			deny = append(deny, c.deny...)
 		}
-	}
-	for _, p := range h.Read {
-		if isProtected(p) {
-			return nil, protectedErr(p)
+
+		// Raw grants (no bypass). Guard protected paths on the read/allow lists.
+		for _, p := range h.Allow {
+			if isProtected(p) {
+				return nil, protectedErr(p)
+			}
 		}
+		for _, p := range h.Read {
+			if isProtected(p) {
+				return nil, protectedErr(p)
+			}
+		}
+		allow = append(allow, h.Allow...)
+		read = append(read, h.Read...)
+		allowFile = append(allowFile, h.AllowFile...)
+		readFile = append(readFile, h.ReadFile...)
+		allowVars = append(allowVars, h.AllowEnv...)
 	}
-	allow = append(allow, h.Allow...)
-	read = append(read, h.Read...)
-	allowFile = append(allowFile, h.AllowFile...)
-	readFile = append(readFile, h.ReadFile...)
-	allowVars = append(allowVars, h.AllowEnv...)
 
 	r := &Resolved{
 		profile: nonoProfile{
-			Extends: base.extends,
-			Meta:    profileMeta{Name: base.metaName},
+			Extends: opts.extends,
+			Meta:    profileMeta{Name: opts.metaName},
 			Filesystem: profileFilesystem{
 				Allow:            sortDedup(allow),
 				Read:             sortDedup(read),
@@ -119,8 +140,11 @@ func Resolve(cfg *config.Config, agent string) (*Resolved, error) {
 				BypassProtection: sortDedup(bypass),
 			},
 			Environment: profileEnvironment{AllowVars: sortDedup(allowVars)},
+			Network:     opts.network,
 		},
-		DenyRules: sortDedup(deny),
+	}
+	if opts.emitDeny {
+		r.DenyRules = sortDedup(deny)
 	}
 	if g := sortDedup(groups); len(g) > 0 {
 		r.profile.Groups = &profileGroups{Include: g}
@@ -128,57 +152,117 @@ func Resolve(cfg *config.Config, agent string) (*Resolved, error) {
 	return r, nil
 }
 
+// Resolve builds the profile for the launched agent: the shared
+// [sandbox.host] base plus [sandbox.agent.host], on the given agent's nono base
+// profile. agentOnlyEnv (the broker socket path) is granted here and never in
+// ResolveCommand's profile — see baselineEnv's comment in catalog.go.
+func Resolve(cfg *config.Config, agent string) (*Resolved, error) {
+	base, ok := agentBases[agent]
+	if !ok {
+		return nil, fmt.Errorf("sandboxhost: unknown agent %q", agent)
+	}
+	return expand(
+		[]config.HostConfig{cfg.Sandbox.Host, cfg.Sandbox.Agent.Host},
+		sideOptions{
+			extends:  base.extends,
+			metaName: base.metaName,
+			extraEnv: agentOnlyEnv,
+			emitDeny: true,
+		},
+	)
+}
+
 // ResolveCommand builds the profile for a single brokered command: the working
-// directory read+write, the non-credential capabilities from cfg.Sandbox.Host,
-// the env allowlist from cfg.Sandbox.Command.EnvPassthrough, and the fixed
-// developer network profile plus cfg.Sandbox.Network.AllowDomains.
+// directory read+write, the shared [sandbox.host] base plus
+// [sandbox.command.host], and the fixed developer network profile plus
+// cfg.Sandbox.Command.Network.AllowDomains.
 //
-// It deliberately does not reuse Resolve: the command sandbox is a different
-// policy, not a variation of the agent's, and sharing the expansion would make
-// it easy to leak a credential grant into it by accident.
+// It shares expand with Resolve because the two profiles differ only in which
+// config sections feed them: a grant the command sandbox must not have belongs
+// under [sandbox.agent.host], where this call never looks.
 func ResolveCommand(cfg *config.Config, workdir string) (*Resolved, error) {
 	if strings.TrimSpace(workdir) == "" {
 		return nil, fmt.Errorf("sandboxhost: empty workdir for command profile")
 	}
-
-	var groups, read, readFile, allowVars []string
-	allowVars = append(allowVars, baselineEnv...)
-	allowVars = append(allowVars, cfg.Sandbox.Command.EnvPassthrough...)
-
-	for _, name := range cfg.Sandbox.Host.Capabilities {
-		if credentialCapabilities[name] {
-			continue
-		}
-		c, ok := catalog[name]
-		if !ok {
-			return nil, fmt.Errorf("sandboxhost: unknown capability %q (valid: %s)", name, validCapabilities())
-		}
-		groups = append(groups, c.groups...)
-		read = append(read, c.read...)
-		readFile = append(readFile, c.readFile...)
-		allowVars = append(allowVars, c.allowVars...)
-	}
-
-	r := &Resolved{
-		profile: nonoProfile{
-			Meta: profileMeta{Name: "agent-sandbox command"},
-			Filesystem: profileFilesystem{
-				Allow:     sortDedup([]string{workdir}),
-				Read:      sortDedup(read),
-				AllowFile: sortDedup(baselineAllowFile),
-				ReadFile:  sortDedup(readFile),
-			},
-			Environment: profileEnvironment{AllowVars: sortDedup(allowVars)},
-			Network: &profileNetwork{
+	return expand(
+		[]config.HostConfig{cfg.Sandbox.Host, cfg.Sandbox.Command.Host},
+		sideOptions{
+			metaName: "agent-sandbox command",
+			workdir:  workdir,
+			network: &profileNetwork{
 				NetworkProfile: commandNetworkProfile,
-				AllowDomain:    sortDedup(cfg.Sandbox.Network.AllowDomains),
+				AllowDomain:    sortDedup(cfg.Sandbox.Command.Network.AllowDomains),
 			},
 		},
+	)
+}
+
+// CommandGrants are the filesystem paths a brokered command's sandbox can reach
+// outside its working directory — the shared [sandbox.host] base plus
+// [sandbox.command.host], expanded. The working directory and the built-in
+// baseline files are excluded: they are true of every command and say nothing
+// about this config.
+type CommandGrants struct {
+	Write []string // read+write
+	Read  []string // read-only
+}
+
+// CommandFilesystemGrants resolves CommandGrants for cfg. It exists so
+// agent-facing documentation can state what a sandboxed command actually
+// reaches instead of describing the config sections and leaving the agent to
+// work it out — the answer depends entirely on where grants were written.
+func CommandFilesystemGrants(cfg *config.Config) (CommandGrants, error) {
+	r, err := expand([]config.HostConfig{cfg.Sandbox.Host, cfg.Sandbox.Command.Host}, sideOptions{})
+	if err != nil {
+		return CommandGrants{}, err
 	}
-	if g := sortDedup(groups); len(g) > 0 {
-		r.profile.Groups = &profileGroups{Include: g}
+	fs := r.profile.Filesystem
+	return CommandGrants{
+		Write: sortDedup(exclude(concat(fs.Allow, fs.AllowFile), baselineAllowFile)),
+		Read:  sortDedup(concat(fs.Read, fs.ReadFile)),
+	}, nil
+}
+
+func concat(lists ...[]string) []string {
+	var out []string
+	for _, l := range lists {
+		out = append(out, l...)
 	}
-	return r, nil
+	return out
+}
+
+// exclude drops every entry of in that appears in drop.
+func exclude(in, drop []string) []string {
+	skip := make(map[string]struct{}, len(drop))
+	for _, d := range drop {
+		skip[d] = struct{}{}
+	}
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		if _, ok := skip[v]; ok {
+			continue
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+// ProtectedGrants returns the profile's filesystem grants that fall under
+// protectedPrefixes, sorted. Raw grants can never produce one (expand rejects
+// them), so a non-empty result means a capability carrying host credentials was
+// declared for this side — worth surfacing on the command profile, where it is
+// usually a mistake.
+func (r *Resolved) ProtectedGrants() []string {
+	var out []string
+	fs := r.profile.Filesystem
+	for _, list := range [][]string{fs.Allow, fs.Read, fs.AllowFile, fs.ReadFile} {
+		for _, p := range list {
+			if isProtected(p) {
+				out = append(out, p)
+			}
+		}
+	}
+	return sortDedup(out)
 }
 
 // EnvAllowVars returns the profile's environment allow_vars patterns.

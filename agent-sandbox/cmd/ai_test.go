@@ -25,7 +25,7 @@ tool_mode = "hook"
 [mcp]
 command_output_dir = "./tmp"
 
-[sandbox.network]
+[sandbox.command.network]
 allow_domains = ["proxy.golang.org"]
 
 [sandbox.command]

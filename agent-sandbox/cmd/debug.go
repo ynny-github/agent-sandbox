@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -39,7 +40,8 @@ func runDebug(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("config error: %w", err)
 	}
-	cfg.Sandbox.Host.AllowEnv = append(cfg.Sandbox.Host.AllowEnv, envKeys...)
+	// Agent section, matching cmd/claude.go: --env is for the launched agent.
+	cfg.Sandbox.Agent.Host.AllowEnv = append(cfg.Sandbox.Agent.Host.AllowEnv, envKeys...)
 
 	var snapshotPath string
 	if cfg.ToolMode == "hook" {
@@ -84,7 +86,42 @@ func runDebug(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	fmt.Print(formatGeneratedConfigs(profilePath, profileJSON, claude.GithubMCPEnabled(), mcpJSON))
+
+	// The command profile is the other half of the policy: same expansion, fed by
+	// [sandbox.host] + [sandbox.command.host] instead of [sandbox.agent.host].
+	// Printing both is what makes the split inspectable — the difference between
+	// them is exactly what the two sections declare.
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("getwd: %w", err)
+	}
+	cmdResolved, err := sandboxhost.ResolveCommand(cfg, cwd)
+	if err != nil {
+		return err
+	}
+	cmdJSON, err := cmdResolved.ProfileJSON()
+	if err != nil {
+		return err
+	}
+	fmt.Print(formatCommandProfile(cmdJSON, cmdResolved.ProtectedGrants()))
 	return nil
+}
+
+// formatCommandProfile renders the per-command nono profile, warning when it
+// grants a protected path. Raw grants cannot produce one, so such a path always
+// comes from a credential capability (docker/ssh) declared in the shared
+// [sandbox.host] instead of [sandbox.agent.host] — host keys reachable from any
+// sandboxed command, which is rarely what the author meant.
+func formatCommandProfile(profileJSON []byte, protected []string) string {
+	var b strings.Builder
+	b.WriteString("\n# generated nono profile for brokered commands:\n")
+	b.WriteString(indentJSON(profileJSON))
+	b.WriteString("\n")
+	if len(protected) > 0 {
+		fmt.Fprintf(&b, "\n# warning: brokered commands can read %s\n", strings.Join(protected, ", "))
+		b.WriteString("#          move the capability granting it to [sandbox.agent.host]\n")
+	}
+	return b.String()
 }
 
 // formatGeneratedConfigs renders the generated nono profile (no secrets) and

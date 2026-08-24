@@ -67,8 +67,8 @@ func TestExplain_FilesystemSection(t *testing.T) {
 		"## Filesystem: the same paths everywhere",
 		"no bind mount",
 		"HOME keeps its real host value",
-		"only as read-only paths pulled in by non-credential `sandbox.host` capabilities",
-		"credential capabilities (`docker`, `ssh`) apply to the launched agent only",
+		"`[sandbox.host]` (shared with the agent) or `[sandbox.command.host]`",
+		"Anything declared under `[sandbox.agent.host]`",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("Explain() missing filesystem note %q\nfull output:\n%s", want, got)
@@ -110,7 +110,7 @@ func TestExplain_NoExtraDomainsByDefault(t *testing.T) {
 
 func TestExplain_AllowDomainsListed(t *testing.T) {
 	cfg := &config.Config{ToolMode: "mcp"}
-	cfg.Sandbox.Network.AllowDomains = []string{"proxy.golang.org", "sum.golang.org"}
+	cfg.Sandbox.Command.Network.AllowDomains = []string{"proxy.golang.org", "sum.golang.org"}
 	got := agentconfig.Explain(cfg)
 	for _, want := range []string{"proxy.golang.org", "sum.golang.org"} {
 		if !strings.Contains(got, want) {
@@ -119,5 +119,36 @@ func TestExplain_AllowDomainsListed(t *testing.T) {
 	}
 	if strings.Contains(got, "No extra domains") {
 		t.Errorf("Explain() should not claim no extra domains when AllowDomains is set:\n%s", got)
+	}
+}
+
+// The filesystem section names the paths a sandboxed command actually reaches,
+// resolved from the config. Describing the sections alone would leave the agent
+// guessing, since which grants apply depends on where they were written.
+func TestExplain_ResolvedOutsidePaths(t *testing.T) {
+	cfg := &config.Config{ToolMode: "hook"}
+	cfg.Sandbox.Host.Capabilities = []string{"mise"}
+	cfg.Sandbox.Command.Host.Allow = []string{"/srv/cache"}
+	cfg.Sandbox.Agent.Host.Capabilities = []string{"ssh"}
+
+	got := agentconfig.Explain(cfg)
+	for _, want := range []string{
+		"- `/srv/cache` (read+write)",
+		"- `~/.config/mise` (read-only)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Explain() missing resolved path %q\nfull output:\n%s", want, got)
+		}
+	}
+	// The agent's own credential grant must not be listed as reachable.
+	if strings.Contains(got, "~/.ssh") {
+		t.Errorf("Explain() lists an [sandbox.agent.host] grant as command-reachable:\n%s", got)
+	}
+}
+
+func TestExplain_NoOutsidePaths(t *testing.T) {
+	got := agentconfig.Explain(&config.Config{ToolMode: "hook"})
+	if !strings.Contains(got, "nothing outside the working directory") {
+		t.Errorf("Explain() should say so when no grant reaches outside the working directory:\n%s", got)
 	}
 }

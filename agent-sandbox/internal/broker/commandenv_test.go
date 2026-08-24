@@ -17,7 +17,7 @@ import (
 // what the child actually received.
 //
 // Testing ProcessEnv in isolation is not enough: the regression this guards
-// against (sandbox.command.env_passthrough silently becoming a no-op) left
+// against (sandbox.command.host.allow_env silently becoming a no-op) left
 // every unit test green, because each layer looked correct on its own and only
 // the seam between them was broken.
 func childEnvFor(t *testing.T, cfg *config.Config) string {
@@ -57,24 +57,24 @@ func childEnvFor(t *testing.T, cfg *config.Config) string {
 	return out.String()
 }
 
-// A variable listed in sandbox.command.env_passthrough and present in the
+// A variable listed in sandbox.command.host.allow_env and present in the
 // launcher's environment must reach the command; one that is not listed must
 // not. The launcher is the only workable source: the agent's own nono profile
-// does not allow-list env_passthrough, so these variables are stripped long
+// does not allow-list the command section, so these variables are stripped long
 // before the sandboxed router could report them back to the broker.
-func TestEnvPassthroughVariableReachesTheCommand(t *testing.T) {
+func TestCommandAllowEnvVariableReachesTheCommand(t *testing.T) {
 	t.Setenv("ASB_TEST_FORWARDED", "yes")
 	t.Setenv("ASB_TEST_WITHHELD", "no")
 
 	cfg := &config.Config{}
-	cfg.Sandbox.Command.EnvPassthrough = []string{"ASB_TEST_FORWARDED"}
+	cfg.Sandbox.Command.Host.AllowEnv = []string{"ASB_TEST_FORWARDED"}
 
 	env := childEnvFor(t, cfg)
 	if !strings.Contains(env, "ASB_TEST_FORWARDED=yes") {
-		t.Errorf("env_passthrough variable never reached the command; child env:\n%s", env)
+		t.Errorf("command allow_env variable never reached the command; child env:\n%s", env)
 	}
 	if strings.Contains(env, "ASB_TEST_WITHHELD") {
-		t.Errorf("a variable outside env_passthrough reached the command; child env:\n%s", env)
+		t.Errorf("a variable outside the command allow_env reached the command; child env:\n%s", env)
 	}
 }
 

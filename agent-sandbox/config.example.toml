@@ -6,13 +6,38 @@ tool_mode = "mcp"
 [mcp]
 command_output_dir = "/tmp/mcp-output"
 
-[sandbox.network]
-# Commands routed to the sandbox run under nono's "developer" network profile
-# (LLM APIs, package registries, GitHub, sigstore, documentation). List any
-# extra domains here. The preset does NOT include proxy.golang.org.
-allow_domains = [
-  # "proxy.golang.org",
-  # "sum.golang.org",
+# Host access is declared per sandbox, and nothing is inherited between them:
+#
+#   [sandbox.host]          -> both the launched agent and every brokered command
+#   [sandbox.agent.host]    -> the launched agent only
+#   [sandbox.command.host]  -> brokered commands only
+#
+# A grant reaches a sandbox only if it is written where that sandbox can see it,
+# so "keep this away from sandboxed commands" is expressed by declaring it under
+# [sandbox.agent.host] — there is nothing to subtract afterwards.
+#
+# Each section takes the same fields:
+#   capabilities = []   # named bundles: go, python, node, rust, docker, ssh,
+#                       #                mise, taskgate, bashrc
+#   allow        = []   # read+write host directories
+#   read         = []   # read-only host directories
+#   allow_file   = []   # single file, read+write
+#   read_file    = []   # single file, read-only
+#   allow_env    = []   # env vars (beyond the always-on PATH/HOME/... baseline)
+[sandbox.host]
+capabilities = ["go", "python"]
+
+[sandbox.agent.host]
+# docker and ssh expose host credentials; declared here they never reach a
+# brokered command.
+capabilities = []
+
+[sandbox.command.host]
+# Environment variables forwarded to sandboxed commands. NONO_* is rejected in
+# every section: those variables reconfigure the command sandbox itself.
+allow_env = [
+  # "AWS_PROFILE",
+  # "CI",
 ]
 
 [sandbox.command]
@@ -27,19 +52,12 @@ drop = [
   # { pattern = "rm -rf *" },
   # { pattern = "gh *", message = "gh is disabled; use the GitHub MCP tools." },
 ]
-# Environment variables forwarded to sandboxed commands. NONO_* is rejected:
-# those variables reconfigure the command sandbox itself.
-env_passthrough = [
-  # "AWS_PROFILE",
-  # "HOME",
-]
 
-[sandbox.host]
-# Named capability bundles (go, python, node, rust, docker, ssh, mise, taskgate, bashrc).
-capabilities = ["go", "python"]
-# Raw host grants for anything not covered by a capability (optional):
-# allow      = []   # read+write host directories
-# read       = []   # read-only host directories
-# allow_file = []   # single file, read+write
-# read_file  = []   # single file, read-only
-# allow_env  = []   # extra env vars (beyond the always-on PATH/HOME/... baseline)
+[sandbox.command.network]
+# Commands routed to the sandbox run under nono's "developer" network profile
+# (LLM APIs, package registries, GitHub, sigstore, documentation). List any
+# extra domains here. The preset does NOT include proxy.golang.org.
+allow_domains = [
+  # "proxy.golang.org",
+  # "sum.golang.org",
+]

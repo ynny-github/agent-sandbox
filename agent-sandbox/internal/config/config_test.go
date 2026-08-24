@@ -328,13 +328,15 @@ command_output_dir = "/u/out"
 [sandbox.command]
 allow = ["git *", "make *"]
 drop = [{ pattern = "rm *" }]
-env_passthrough = ["HOME", "AWS_PROFILE"]
+[sandbox.command.host]
+allow_env = ["HOME", "AWS_PROFILE"]
 `)
 	project := writeToml(t, `
 [sandbox.command]
 allow = ["make *", "npm *"]
 drop = [{ pattern = "sudo *" }]
-env_passthrough = ["CI"]
+[sandbox.command.host]
+allow_env = ["CI"]
 `)
 	cfg, err := config.Load(project)
 	if err != nil {
@@ -350,8 +352,8 @@ env_passthrough = ["CI"]
 	if !slices.Equal(gotDrop, []string{"rm *", "sudo *"}) {
 		t.Errorf("Drop = %v, want [rm * sudo *]", gotDrop)
 	}
-	if got := cfg.Sandbox.Command.EnvPassthrough; !slices.Equal(got, []string{"HOME", "AWS_PROFILE", "CI"}) {
-		t.Errorf("EnvPassthrough = %v, want [HOME AWS_PROFILE CI]", got)
+	if got := cfg.Sandbox.Command.Host.AllowEnv; !slices.Equal(got, []string{"HOME", "AWS_PROFILE", "CI"}) {
+		t.Errorf("Command.Host.AllowEnv = %v, want [HOME AWS_PROFILE CI]", got)
 	}
 }
 
@@ -406,11 +408,11 @@ tool_mode = "mcp"
 	}
 }
 
-func TestLoad_NetworkAllowDomains(t *testing.T) {
+func TestLoad_CommandNetworkAllowDomains(t *testing.T) {
 	path := writeToml(t, `
 tool_mode = "hook"
 
-[sandbox.network]
+[sandbox.command.network]
 allow_domains = ["proxy.golang.org", "sum.golang.org"]
 `)
 	cfg, err := config.Load(path)
@@ -418,38 +420,81 @@ allow_domains = ["proxy.golang.org", "sum.golang.org"]
 		t.Fatalf("Load() error = %v", err)
 	}
 	want := []string{"proxy.golang.org", "sum.golang.org"}
-	if !slices.Equal(cfg.Sandbox.Network.AllowDomains, want) {
-		t.Errorf("AllowDomains = %v, want %v", cfg.Sandbox.Network.AllowDomains, want)
+	if !slices.Equal(cfg.Sandbox.Command.Network.AllowDomains, want) {
+		t.Errorf("AllowDomains = %v, want %v", cfg.Sandbox.Command.Network.AllowDomains, want)
 	}
 }
 
-func TestLoad_CommandEnvPassthrough(t *testing.T) {
+func TestLoad_CommandHostAllowEnv(t *testing.T) {
 	path := writeToml(t, `
 tool_mode = "hook"
 
-[sandbox.command]
-env_passthrough = ["AWS_PROFILE", "MISE_SHELL"]
+[sandbox.command.host]
+allow_env = ["AWS_PROFILE", "MISE_SHELL"]
 `)
 	cfg, err := config.Load(path)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
 	want := []string{"AWS_PROFILE", "MISE_SHELL"}
-	if !slices.Equal(cfg.Sandbox.Command.EnvPassthrough, want) {
-		t.Errorf("EnvPassthrough = %v, want %v", cfg.Sandbox.Command.EnvPassthrough, want)
+	if !slices.Equal(cfg.Sandbox.Command.Host.AllowEnv, want) {
+		t.Errorf("Command.Host.AllowEnv = %v, want %v", cfg.Sandbox.Command.Host.AllowEnv, want)
 	}
 }
 
-func TestLoad_RejectsNonoEnvPassthrough(t *testing.T) {
-	path := writeToml(t, `
+// NONO_* reconfigures the command sandbox, so it is refused in every allow_env
+// list — the shared base and both sides — not just the command section.
+func TestLoad_RejectsNonoAllowEnv_InEverySection(t *testing.T) {
+	sections := []string{"sandbox.host", "sandbox.agent.host", "sandbox.command.host"}
+	for _, section := range sections {
+		t.Run(section, func(t *testing.T) {
+			path := writeToml(t, "tool_mode = \"hook\"\n\n["+section+"]\nallow_env = [\"AWS_PROFILE\", \"NONO_ALLOW_DOMAIN\"]\n")
+			_, err := config.Load(path)
+			if !errors.Is(err, config.ErrAllowEnvNonoVar) {
+				t.Fatalf("Load() error = %v, want ErrAllowEnvNonoVar", err)
+			}
+		})
+	}
+}
+
+// The two keys that moved when the host config split into three sections. Both
+// only ever configured brokered commands, so they now live under
+// [sandbox.command.*]; loading the old spelling must say where they went rather
+// than silently ignoring them.
+func TestLoad_RejectsMovedKeys(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    error
+	}{
+		{
+			name: "sandbox.network section",
+			content: `
+tool_mode = "hook"
+
+[sandbox.network]
+allow_domains = ["proxy.golang.org"]
+`,
+			want: config.ErrMovedNetworkSection,
+		},
+		{
+			name: "command env_passthrough",
+			content: `
 tool_mode = "hook"
 
 [sandbox.command]
-env_passthrough = ["AWS_PROFILE", "NONO_ALLOW_DOMAIN"]
-`)
-	_, err := config.Load(path)
-	if !errors.Is(err, config.ErrEnvPassthroughNonoVar) {
-		t.Fatalf("Load() error = %v, want ErrEnvPassthroughNonoVar", err)
+env_passthrough = ["CI"]
+`,
+			want: config.ErrMovedEnvPassthrough,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeToml(t, tt.content)
+			if _, err := config.Load(path); !errors.Is(err, tt.want) {
+				t.Errorf("Load() error = %v, want %v", err, tt.want)
+			}
+		})
 	}
 }
 

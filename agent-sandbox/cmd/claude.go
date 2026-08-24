@@ -44,8 +44,10 @@ func runClaude(cmd *cobra.Command, args []string) error {
 
 	// Expose the --env keys to the sandboxed agent: nono forwards only vars
 	// listed in the profile's allow_vars, and the values are already in this
-	// process's env from envflag.Load above.
-	cfg.Sandbox.Host.AllowEnv = append(cfg.Sandbox.Host.AllowEnv, envKeys...)
+	// process's env from envflag.Load above. They land on the agent section, not
+	// the shared base, so --env grants the launched agent alone — widening a
+	// brokered command's environment stays an explicit config edit.
+	cfg.Sandbox.Agent.Host.AllowEnv = append(cfg.Sandbox.Agent.Host.AllowEnv, envKeys...)
 
 	return claude.Run(cfg, opts)
 }

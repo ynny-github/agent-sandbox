@@ -7,6 +7,7 @@ import (
 	"text/template"
 
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandboxhost"
 )
 
 // Pointer returns the short guidance injected into the agent's system prompt at
@@ -42,6 +43,17 @@ type explainView struct {
 	Drop         []config.DropRule
 	Safe         []SafeCommand
 	AllowDomains []string
+	// OutsideWrite / OutsideRead are the paths a sandboxed command reaches
+	// beyond its working directory, resolved from the config rather than
+	// described in the abstract: which grants apply depends on which section
+	// they were written in, so only the resolved lists answer the question an
+	// agent actually has.
+	OutsideWrite []string
+	OutsideRead  []string
+	// Resolved reports whether the two lists above were resolved at all, so the
+	// template can distinguish "nothing outside the working directory" from
+	// "could not tell".
+	Resolved bool
 }
 
 // Explain renders a Markdown description of the sandbox environment from cfg,
@@ -55,7 +67,16 @@ func Explain(cfg *config.Config, safe ...SafeCommand) string {
 		Allow:        cfg.Sandbox.Command.Allow,
 		Drop:         cfg.Sandbox.Command.Drop,
 		Safe:         safe,
-		AllowDomains: cfg.Sandbox.Network.AllowDomains,
+		AllowDomains: cfg.Sandbox.Command.Network.AllowDomains,
+	}
+	// A resolve error means an unknown capability name, which stops
+	// `agent-sandbox claude` at launch — no session can reach this code with
+	// such a config. Should one ever get here, fall back to the prose above the
+	// list rather than printing a wrong (empty) list as if it were resolved.
+	if grants, err := sandboxhost.CommandFilesystemGrants(cfg); err == nil {
+		view.OutsideWrite = grants.Write
+		view.OutsideRead = grants.Read
+		view.Resolved = true
 	}
 
 	var buf bytes.Buffer

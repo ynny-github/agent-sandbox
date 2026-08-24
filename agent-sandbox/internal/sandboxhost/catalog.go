@@ -14,6 +14,11 @@ type capability struct {
 }
 
 // catalog is the fixed, built-in set of capabilities. Unknown names are errors.
+//
+// The credential-exposing bundles ("docker", "ssh") carry no special handling:
+// like every other capability they apply to whichever side declares them, so
+// keeping host keys away from brokered commands is a matter of declaring them
+// under [sandbox.agent.host] rather than the shared [sandbox.host].
 var catalog = map[string]capability{
 	"go":     {groups: []string{"go_runtime"}},
 	"python": {groups: []string{"python_runtime"}},
@@ -47,14 +52,6 @@ var catalog = map[string]capability{
 			"Read(/etc/bash.bashrc)",
 		},
 	},
-}
-
-// credentialCapabilities expose host credentials. They are granted to the
-// launched agent but never to the per-command sandbox: commands need
-// toolchains, not keys.
-var credentialCapabilities = map[string]bool{
-	"docker": true,
-	"ssh":    true,
 }
 
 // commandNetworkProfile is the nono network profile every brokered command

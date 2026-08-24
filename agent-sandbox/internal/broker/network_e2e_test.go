@@ -25,7 +25,7 @@ func runBrokered(t *testing.T, allowDomains []string, argv []string) int {
 	}
 
 	cfg := &config.Config{}
-	cfg.Sandbox.Network.AllowDomains = allowDomains
+	cfg.Sandbox.Command.Network.AllowDomains = allowDomains
 
 	workdir := t.TempDir()
 	resolved, err := sandboxhost.ResolveCommand(cfg, workdir)

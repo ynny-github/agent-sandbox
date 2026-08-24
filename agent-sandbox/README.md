@@ -16,14 +16,17 @@ Copy `config.example.toml` to `config.toml` and edit:
 [mcp]
 command_output_dir = "/tmp/mcp-output"
 
-[sandbox.network]
-allow_domains = ["proxy.golang.org"]   # extra domains on top of nono's "developer" network profile
+[sandbox.host]                         # host access for both sandboxes
+capabilities = ["go", "python"]
 
 [sandbox.command]
 allow = [
   "git *",
   "make *",
 ]
+
+[sandbox.command.network]
+allow_domains = ["proxy.golang.org"]   # extra domains on top of nono's "developer" network profile
 ```
 
 ## Usage
@@ -47,7 +50,8 @@ actually bind a unix socket in its socket directory
 launch. Exits 0 when all checks pass, 1 otherwise.
 
 Run Claude inside the nono sandbox. Options after `--` go to `claude`; the
-sandbox profile is generated from `[sandbox.host]` in `agent-sandbox.toml`,
+sandbox profile is generated from the `[sandbox.host]` / `[sandbox.agent.host]`
+sections of `agent-sandbox.toml`,
 and `agent-sandbox` no longer forwards options to `nono`:
 
 ```bash
@@ -58,7 +62,7 @@ agent-sandbox claude -- --model opus
 socket server) before launching Claude, and tears it down when Claude exits.
 Sandboxed commands never run in a persistent container: each one is sent to
 the broker, which runs it under its own `nono run` invocation, scoped to the
-current working directory and the `[sandbox.network]` policy. There is
+current working directory and the `[sandbox.command.network]` policy. There is
 nothing to start beforehand — no `sandbox up` step. If `nono` cannot be found
 or the broker socket cannot be created, Claude is not launched; run
 `agent-sandbox doctor` to diagnose.
@@ -121,17 +125,42 @@ agent-sandbox claude --env file:.secrets.env -- --model opus
 # where .secrets.env contains: GITHUB_MCP_TOKEN=ghp_...
 ```
 
-### `[sandbox.host]`
+### Host access: `[sandbox.host]`, `[sandbox.agent.host]`, `[sandbox.command.host]`
 
-`sandbox.host` in `agent-sandbox.toml` controls the host-side access granted
-to the sandboxed agent; it is translated into the nono profile generated at
-launch. `capabilities` are named bundles — `go`, `python`, `node`, `rust`,
-`docker`, `ssh`, `mise`, `taskgate`, `bashrc` — each expanding to the
-directories, files, and env vars that capability needs. Raw grants (`allow`,
-`read`, `allow_file`, `read_file`, `allow_env`) cover anything not already
-covered by a capability. The common
-`PATH`/`HOME`/... env vars and `/dev/null` are always granted from a built-in
-baseline.
+agent-sandbox generates two nono profiles — one for the launched agent, one for
+each brokered command — and host access is declared per profile:
+
+| section | applies to |
+|---|---|
+| `[sandbox.host]` | both the launched agent and every brokered command |
+| `[sandbox.agent.host]` | the launched agent only |
+| `[sandbox.command.host]` | brokered commands only |
+
+**Nothing is inherited between the two sides.** A grant reaches a sandbox only
+if it is written where that sandbox can see it, which is why there is no way to
+subtract one: "keep this away from sandboxed commands" is expressed by
+declaring it under `[sandbox.agent.host]` instead of the shared base. Forgetting
+to put a grant in the shared base leaves a command sandbox without it; it can
+never silently gain one.
+
+All three sections take the same fields. `capabilities` are named bundles —
+`go`, `python`, `node`, `rust`, `docker`, `ssh`, `mise`, `taskgate`, `bashrc` —
+each expanding to the directories, files, and env vars that capability needs.
+Raw grants (`allow`, `read`, `allow_file`, `read_file`, `allow_env`) cover
+anything not already covered by a capability. The common `PATH`/`HOME`/... env
+vars and `/dev/null` are always granted from a built-in baseline.
+
+`docker` and `ssh` expose host credentials but are otherwise ordinary
+capabilities: they apply to whichever side declares them. Put them in
+`[sandbox.agent.host]`, not the shared base, unless a sandboxed command really
+needs the keys. `agent-sandbox debug` prints both resolved profiles and warns
+when the command profile ends up granting a credential path, and
+`agent-sandbox ai explain` lists the paths a sandboxed command actually reaches
+outside the working directory, resolved from the active config.
+
+`--env KEY=VALUE` grants the launched agent alone (it is appended to
+`[sandbox.agent.host].allow_env`), so exposing a variable to sandboxed commands
+stays an explicit config edit.
 
 ## Safe wrappers
 
@@ -165,7 +194,7 @@ fixed and built-in.
 
 - Commands matching an allow pattern are executed on the **host** (after shell-safety validation).
 - Commands matching a drop pattern are **refused** — neither the host nor the sandbox runs them; the response carries exit code 1 and a stderr line. Each drop entry is a `{ pattern, message }` table; when `message` is set it is printed on refusal, otherwise the default `dropped: command matches drop pattern "<pattern>"` line is used.
-- All other commands are sent to the host-side command broker started by `agent-sandbox claude`, which runs each one under its own **`nono run`** invocation, scoped to the current working directory and nono's `developer` network profile plus `sandbox.network.allow_domains`.
+- All other commands are sent to the host-side command broker started by `agent-sandbox claude`, which runs each one under its own **`nono run`** invocation, scoped to the current working directory and nono's `developer` network profile plus `sandbox.command.network.allow_domains`.
 - Allow wins over drop: a command matching both an allow and a drop pattern runs on the host.
 - Output is always written to separate stdout/stderr files; the MCP response returns file paths and exit code only.
 
@@ -191,17 +220,21 @@ The configuration was reorganized; old keys are no longer accepted.
 | `sandbox.image` | removed — commands run under nono, not Docker |
 | `sandbox.external_network` | removed — commands run under nono, not Docker |
 | `sandbox.container` (whole section) | removed — commands run under nono, not Docker |
-| `sandbox.network.allow_external` | removed — use `sandbox.network.allow_domains` |
-| `sandbox.allow_cidrs` | removed — network access is now `sandbox.network.allow_domains` |
-| `sandbox.allow_hosts` | removed — network access is now `sandbox.network.allow_domains` |
-| `sandbox.network.allow_cidrs` | removed — replaced by `sandbox.network.allow_domains` |
-| `sandbox.network.allow_hosts` | removed — replaced by `sandbox.network.allow_domains` |
+| `sandbox.network.allow_external` | removed — use `sandbox.command.network.allow_domains` |
+| `sandbox.allow_cidrs` | removed — network access is now `sandbox.command.network.allow_domains` |
+| `sandbox.allow_hosts` | removed — network access is now `sandbox.command.network.allow_domains` |
+| `sandbox.network.allow_cidrs` | removed — replaced by `sandbox.command.network.allow_domains` |
+| `sandbox.network.allow_hosts` | removed — replaced by `sandbox.command.network.allow_domains` |
 | `[allow_patterns] patterns` | `sandbox.command.allow` |
 | `[drop_patterns] patterns` | `sandbox.command.drop` |
 | `[deny_patterns] patterns` | removed — move destructive entries into `sandbox.command.drop` |
-| `[container] env_passthrough` | `sandbox.command.env_passthrough` |
-| `sandbox.container.env_passthrough` | `sandbox.command.env_passthrough` |
+| `[container] env_passthrough` | `allow_env` in `[sandbox.command.host]` |
+| `sandbox.container.env_passthrough` | `allow_env` in `[sandbox.command.host]` |
 | `[nono] profile` | removed — configure the sandbox profile in `[sandbox.host]` (nono options are no longer forwarded) |
+| `sandbox.network` (whole section) | `sandbox.command.network` — it only ever configured brokered commands |
+| `sandbox.network.allow_domains` | `sandbox.command.network.allow_domains` |
+| `sandbox.command.env_passthrough` | `allow_env` in `[sandbox.command.host]` |
+| `docker` / `ssh` in `[sandbox.host]` | move to `[sandbox.agent.host]` — the shared base now reaches brokered commands too, and these capabilities no longer carry a built-in exclusion |
 | `agent-sandbox sandbox up/down/prune` | removed — `agent-sandbox claude` starts and stops the per-launch command broker automatically |
 
 The `deny` routing axis is gone. Patterns that previously forced a host-allowed command into the sandbox now have two options: leave them out of `allow` (so they default to the sandbox), or add them to `drop` if they should be refused entirely.

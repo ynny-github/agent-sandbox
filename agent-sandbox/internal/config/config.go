@@ -20,20 +20,40 @@ type MCPConfig struct {
 	CommandOutputDir string `toml:"command_output_dir"`
 }
 
+// SandboxConfig spans the two sandboxes agent-sandbox generates a profile for:
+// the launched agent and each brokered command. Host is the shared base,
+// expanded into both; Agent.Host and Command.Host add grants to exactly one of
+// them.
+//
+// Nothing is inherited between the two sides. A grant reaches a profile only if
+// it is written in that side's section or in the shared base, which is why
+// there is no subtraction axis: anything you do not want in a profile is simply
+// not written where that profile can see it.
 type SandboxConfig struct {
-	Network NetworkConfig `toml:"network"`
-	Command CommandConfig `toml:"command"`
 	Host    HostConfig    `toml:"host"`
+	Agent   SideConfig    `toml:"agent"`
+	Command CommandConfig `toml:"command"`
+}
+
+// SideConfig is one side's host-access section. Only the agent side uses this
+// shape on its own; the command side carries the same Host field alongside its
+// routing and network settings in CommandConfig.
+type SideConfig struct {
+	Host HostConfig `toml:"host"`
 }
 
 type NetworkConfig struct {
 	AllowDomains []string `toml:"allow_domains"`
 }
 
+// CommandConfig holds everything scoped to brokered commands: how a command is
+// routed (Allow/Drop), the host access its sandbox gets (Host), and the network
+// it may reach (Network).
 type CommandConfig struct {
-	Allow          []string   `toml:"allow"`
-	Drop           []DropRule `toml:"drop"`
-	EnvPassthrough []string   `toml:"env_passthrough"`
+	Allow   []string      `toml:"allow"`
+	Drop    []DropRule    `toml:"drop"`
+	Host    HostConfig    `toml:"host"`
+	Network NetworkConfig `toml:"network"`
 }
 
 // DropRule is one drop pattern with an optional custom refusal message. Every
@@ -52,9 +72,9 @@ type DropRule struct {
 	Message string `toml:"message"`
 }
 
-// HostConfig declares, in nono-agnostic terms, the host-side access the
-// sandboxed agent process gets. Capabilities are named bundles expanded by
-// internal/sandboxhost; the remaining lists are raw grants.
+// HostConfig declares, in nono-agnostic terms, host-side access for one
+// sandbox. Capabilities are named bundles expanded by internal/sandboxhost; the
+// remaining lists are raw grants.
 type HostConfig struct {
 	Capabilities []string `toml:"capabilities"`
 	Allow        []string `toml:"allow"`
@@ -67,8 +87,8 @@ type HostConfig struct {
 // Load composes the optional user-scope config
 // (~/.config/agent-sandbox/config.toml) with the project-scope config at path,
 // then validates the merged result. Scalars: project overrides user. Lists
-// (command.allow, command.drop, command.env_passthrough,
-// network.allow_domains, and the sandbox.host lists): de-duplicated union.
+// (command.allow, command.drop, command.network.allow_domains, and every list
+// in the three host sections): de-duplicated union.
 func Load(path string) (*Config, error) {
 	var cfg Config
 
@@ -79,8 +99,8 @@ func Load(path string) (*Config, error) {
 	//    decode below.
 	var userAllow []string
 	var userDrop []DropRule
-	var userAllowDomains, userCmdEnv []string
-	var hostSnap hostLists
+	var userAllowDomains []string
+	var userHost, userAgentHost, userCommandHost HostConfig
 	if up, err := userConfigPath(); err == nil {
 		if _, statErr := os.Stat(up); statErr == nil {
 			md, derr := decodeInto(up, &cfg)
@@ -92,15 +112,10 @@ func Load(path string) (*Config, error) {
 			}
 			userAllow = slices.Clone(cfg.Sandbox.Command.Allow)
 			userDrop = slices.Clone(cfg.Sandbox.Command.Drop)
-			userAllowDomains = slices.Clone(cfg.Sandbox.Network.AllowDomains)
-			userCmdEnv = slices.Clone(cfg.Sandbox.Command.EnvPassthrough)
-			userHostCaps := slices.Clone(cfg.Sandbox.Host.Capabilities)
-			userHostAllow := slices.Clone(cfg.Sandbox.Host.Allow)
-			userHostRead := slices.Clone(cfg.Sandbox.Host.Read)
-			userHostAllowFile := slices.Clone(cfg.Sandbox.Host.AllowFile)
-			userHostReadFile := slices.Clone(cfg.Sandbox.Host.ReadFile)
-			userHostAllowEnv := slices.Clone(cfg.Sandbox.Host.AllowEnv)
-			hostSnap = hostLists{userHostCaps, userHostAllow, userHostRead, userHostAllowFile, userHostReadFile, userHostAllowEnv}
+			userAllowDomains = slices.Clone(cfg.Sandbox.Command.Network.AllowDomains)
+			userHost = cloneHost(cfg.Sandbox.Host)
+			userAgentHost = cloneHost(cfg.Sandbox.Agent.Host)
+			userCommandHost = cloneHost(cfg.Sandbox.Command.Host)
 		}
 	}
 
@@ -118,14 +133,10 @@ func Load(path string) (*Config, error) {
 	//    user's, so the union de-dupes back to the user's list (no change).
 	cfg.Sandbox.Command.Allow = dedupUnion(userAllow, cfg.Sandbox.Command.Allow)
 	cfg.Sandbox.Command.Drop = dedupUnionDrop(userDrop, cfg.Sandbox.Command.Drop)
-	cfg.Sandbox.Network.AllowDomains = dedupUnion(userAllowDomains, cfg.Sandbox.Network.AllowDomains)
-	cfg.Sandbox.Command.EnvPassthrough = dedupUnion(userCmdEnv, cfg.Sandbox.Command.EnvPassthrough)
-	cfg.Sandbox.Host.Capabilities = dedupUnion(hostSnap.caps, cfg.Sandbox.Host.Capabilities)
-	cfg.Sandbox.Host.Allow = dedupUnion(hostSnap.allow, cfg.Sandbox.Host.Allow)
-	cfg.Sandbox.Host.Read = dedupUnion(hostSnap.read, cfg.Sandbox.Host.Read)
-	cfg.Sandbox.Host.AllowFile = dedupUnion(hostSnap.allowFile, cfg.Sandbox.Host.AllowFile)
-	cfg.Sandbox.Host.ReadFile = dedupUnion(hostSnap.readFile, cfg.Sandbox.Host.ReadFile)
-	cfg.Sandbox.Host.AllowEnv = dedupUnion(hostSnap.allowEnv, cfg.Sandbox.Host.AllowEnv)
+	cfg.Sandbox.Command.Network.AllowDomains = dedupUnion(userAllowDomains, cfg.Sandbox.Command.Network.AllowDomains)
+	cfg.Sandbox.Host = unionHost(userHost, cfg.Sandbox.Host)
+	cfg.Sandbox.Agent.Host = unionHost(userAgentHost, cfg.Sandbox.Agent.Host)
+	cfg.Sandbox.Command.Host = unionHost(userCommandHost, cfg.Sandbox.Command.Host)
 
 	// 4. Validate the merged config.
 	return validate(&cfg)
@@ -142,17 +153,24 @@ func decodeInto(path string, cfg *Config) (toml.MetaData, error) {
 	return md, nil
 }
 
-// checkDeprecated rejects the removed sandbox.network.allow_cidrs /
-// allow_hosts / allow_external keys and the removed sandbox.container
-// section. It is applied per-file because the keys are not representable in
-// Config, and must fire even when the file merely mentions a removed key with
-// no value that validate would otherwise check.
+// checkDeprecated rejects keys that were removed or moved: the old
+// sandbox.network section (now sandbox.command.network), the
+// sandbox.command.env_passthrough list (now sandbox.command.host.allow_env),
+// and the sandbox.container section. It is applied per-file because the keys
+// are not representable in Config, and must fire even when the file merely
+// mentions a removed key with no value that validate would otherwise check.
 func checkDeprecated(md toml.MetaData) error {
 	if md.IsDefined("sandbox", "network", "allow_cidrs") || md.IsDefined("sandbox", "network", "allow_hosts") {
 		return ErrDeprecatedNetworkKeys
 	}
 	if md.IsDefined("sandbox", "network", "allow_external") {
 		return ErrRemovedAllowExternal
+	}
+	if md.IsDefined("sandbox", "network") {
+		return ErrMovedNetworkSection
+	}
+	if md.IsDefined("sandbox", "command", "env_passthrough") {
+		return ErrMovedEnvPassthrough
 	}
 	if md.IsDefined("sandbox", "container") {
 		return ErrRemovedContainerSection
@@ -182,18 +200,43 @@ func validate(cfg *Config) (*Config, error) {
 			return nil, ErrDropRuleMissingPattern
 		}
 	}
-	for _, name := range cfg.Sandbox.Command.EnvPassthrough {
-		if strings.HasPrefix(strings.TrimSpace(name), "NONO_") {
-			return nil, fmt.Errorf("%w: %q", ErrEnvPassthroughNonoVar, name)
+	// NONO_* is rejected in every allow_env list, not just the command side: the
+	// launched agent spawns the commands, so a NONO_* variable reaching either
+	// profile can reconfigure the command sandbox.
+	for _, h := range []HostConfig{cfg.Sandbox.Host, cfg.Sandbox.Agent.Host, cfg.Sandbox.Command.Host} {
+		for _, name := range h.AllowEnv {
+			if strings.HasPrefix(strings.TrimSpace(name), "NONO_") {
+				return nil, fmt.Errorf("%w: %q", ErrAllowEnvNonoVar, name)
+			}
 		}
 	}
 	return cfg, nil
 }
 
-// hostLists snapshots the user-scope sandbox.host list fields so they can be
-// unioned with the project-scope values after the project decode.
-type hostLists struct {
-	caps, allow, read, allowFile, readFile, allowEnv []string
+// cloneHost deep-copies a host section's lists. See Load step 1 for why a
+// header copy is not enough.
+func cloneHost(h HostConfig) HostConfig {
+	return HostConfig{
+		Capabilities: slices.Clone(h.Capabilities),
+		Allow:        slices.Clone(h.Allow),
+		Read:         slices.Clone(h.Read),
+		AllowFile:    slices.Clone(h.AllowFile),
+		ReadFile:     slices.Clone(h.ReadFile),
+		AllowEnv:     slices.Clone(h.AllowEnv),
+	}
+}
+
+// unionHost de-duplicates the union of two host sections field by field, a's
+// entries first.
+func unionHost(a, b HostConfig) HostConfig {
+	return HostConfig{
+		Capabilities: dedupUnion(a.Capabilities, b.Capabilities),
+		Allow:        dedupUnion(a.Allow, b.Allow),
+		Read:         dedupUnion(a.Read, b.Read),
+		AllowFile:    dedupUnion(a.AllowFile, b.AllowFile),
+		ReadFile:     dedupUnion(a.ReadFile, b.ReadFile),
+		AllowEnv:     dedupUnion(a.AllowEnv, b.AllowEnv),
+	}
 }
 
 // dedupUnion returns the concatenation of a and b with duplicates removed,

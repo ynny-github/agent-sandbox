@@ -2,11 +2,24 @@
   # the PreToolUse hook (see .claude/settings.json) into `agent-sandbox exec`.
   tool_mode = "hook"
 
-  [sandbox.network]
-  # Extra domains on top of nono's fixed "developer" network profile, which
-  # every brokered command runs under. The preset does not include the Go
-  # module proxy, so this project must add it.
-  allow_domains = ["proxy.golang.org", "sum.golang.org"]
+  # Host access is declared per sandbox. [sandbox.host] applies to both the
+  # launched agent and every brokered command; [sandbox.agent.host] and
+  # [sandbox.command.host] apply to exactly one of them. Nothing is inherited
+  # between the two, so a grant reaches a sandbox only if it is written where
+  # that sandbox can see it.
+  #
+  # Capabilities are named bundles (go/python -> runtime groups; docker/ssh ->
+  # credential reads + the matching agent read-block; mise/taskgate -> tool
+  # state). Raw grants (allow/read/allow_file/read_file/allow_env) cover
+  # anything not bundled.
+  [sandbox.host]
+  capabilities = ["go", "python", "mise", "taskgate", "bashrc"]
+
+  # docker and ssh expose host credentials. Declaring them here — and not in
+  # the shared base — is what keeps them away from brokered commands: commands
+  # need toolchains, not keys.
+  [sandbox.agent.host]
+  capabilities = ["docker", "ssh"]
 
   [sandbox.command]
   allow = [
@@ -29,10 +42,8 @@
     { pattern = "gh *", message = "gh is disabled in this sandbox. Use the GitHub MCP server's tools instead." },
   ]
 
-  # Host-side access for the sandboxed agent (translated into the nono profile
-  # generated at launch; nono.jsonc is no longer used). Capabilities are named
-  # bundles (go/python -> runtime groups; docker/ssh -> credential reads + the
-  # matching agent read-block; mise/taskgate -> tool state).
-  # Raw grants (allow/read/allow_file/read_file/allow_env) cover anything not bundled.
-  [sandbox.host]
-  capabilities = ["go", "python", "docker", "ssh", "mise", "taskgate", "bashrc"]
+  [sandbox.command.network]
+  # Extra domains on top of nono's fixed "developer" network profile, which
+  # every brokered command runs under. The preset does not include the Go
+  # module proxy, so this project must add it.
+  allow_domains = ["proxy.golang.org", "sum.golang.org"]

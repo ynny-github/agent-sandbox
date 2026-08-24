@@ -164,9 +164,10 @@ func hostCfg(h config.HostConfig) *config.Config {
 
 func TestResolveCommand_ProfileShape(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.Sandbox.Host.Capabilities = []string{"go", "docker", "ssh", "mise"}
-	cfg.Sandbox.Network.AllowDomains = []string{"proxy.golang.org"}
-	cfg.Sandbox.Command.EnvPassthrough = []string{"AWS_PROFILE"}
+	cfg.Sandbox.Host.Capabilities = []string{"go", "mise"}
+	cfg.Sandbox.Agent.Host.Capabilities = []string{"docker", "ssh"}
+	cfg.Sandbox.Command.Network.AllowDomains = []string{"proxy.golang.org"}
+	cfg.Sandbox.Command.Host.AllowEnv = []string{"AWS_PROFILE"}
 
 	r, err := ResolveCommand(cfg, "/work/project")
 	if err != nil {
@@ -198,7 +199,9 @@ func TestResolveCommand_ProfileShape(t *testing.T) {
 		t.Errorf("filesystem.allow = %v, want to contain /work/project", fs["allow"])
 	}
 
-	// Credential capabilities must NOT leak into the command profile.
+	// Nothing declared under [sandbox.agent.host] may appear here. That section
+	// is the only thing keeping host credentials away from brokered commands —
+	// there is no implicit exclusion behind it.
 	all := string(data)
 	for _, forbidden := range []string{".ssh", ".docker", ".orbstack"} {
 		if strings.Contains(all, forbidden) {
@@ -228,4 +231,167 @@ func toStrings(v any) []string {
 		out = append(out, s)
 	}
 	return out
+}
+
+// The three sections and what each profile sees: the shared base reaches both,
+// and each side's own section reaches only that side. This is the whole model —
+// scope is decided by placement, and no grant is subtracted anywhere.
+func TestSectionScoping(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Sandbox.Host.Read = []string{"/srv/shared"}
+	cfg.Sandbox.Agent.Host.Read = []string{"/srv/agent-only"}
+	cfg.Sandbox.Command.Host.Read = []string{"/srv/command-only"}
+
+	agent, err := Resolve(cfg, "claude")
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	command, err := ResolveCommand(cfg, "/work/project")
+	if err != nil {
+		t.Fatalf("ResolveCommand() error = %v", err)
+	}
+
+	agentRead := toStrings(profileMap(t, agent)["filesystem"].(map[string]any)["read"])
+	commandRead := toStrings(profileMap(t, command)["filesystem"].(map[string]any)["read"])
+
+	for _, tc := range []struct {
+		path      string
+		wantAgent bool
+		wantCmd   bool
+		section   string
+	}{
+		{"/srv/shared", true, true, "[sandbox.host]"},
+		{"/srv/agent-only", true, false, "[sandbox.agent.host]"},
+		{"/srv/command-only", false, true, "[sandbox.command.host]"},
+	} {
+		if got := slices.Contains(agentRead, tc.path); got != tc.wantAgent {
+			t.Errorf("%s: agent profile read contains %q = %v, want %v (read = %v)", tc.section, tc.path, got, tc.wantAgent, agentRead)
+		}
+		if got := slices.Contains(commandRead, tc.path); got != tc.wantCmd {
+			t.Errorf("%s: command profile read contains %q = %v, want %v (read = %v)", tc.section, tc.path, got, tc.wantCmd, commandRead)
+		}
+	}
+}
+
+// docker/ssh carry no built-in exclusion any more: declared for the command
+// side they are granted there, and ProtectedGrants reports it so callers can
+// warn. Without this, removing credentialCapabilities could regress into a
+// silent re-exclusion and nobody would notice.
+func TestResolveCommand_CredentialCapabilityIsGrantedWhenDeclared(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Sandbox.Command.Host.Capabilities = []string{"ssh"}
+
+	r, err := ResolveCommand(cfg, "/work/project")
+	if err != nil {
+		t.Fatalf("ResolveCommand() error = %v", err)
+	}
+	read := toStrings(profileMap(t, r)["filesystem"].(map[string]any)["read"])
+	if !slices.Contains(read, "~/.ssh") {
+		t.Errorf("read = %v, want to contain ~/.ssh (declared under [sandbox.command.host])", read)
+	}
+	if got := r.ProtectedGrants(); !slices.Equal(got, []string{"~/.ssh", "~/.ssh/known_hosts"}) {
+		t.Errorf("ProtectedGrants() = %v, want [~/.ssh ~/.ssh/known_hosts]", got)
+	}
+}
+
+func TestProtectedGrants_EmptyWithoutCredentialCapability(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Sandbox.Host.Capabilities = []string{"go", "mise"}
+
+	r, err := ResolveCommand(cfg, "/work/project")
+	if err != nil {
+		t.Fatalf("ResolveCommand() error = %v", err)
+	}
+	if got := r.ProtectedGrants(); len(got) != 0 {
+		t.Errorf("ProtectedGrants() = %v, want none", got)
+	}
+}
+
+// The protected-path guard on raw grants applies to the command profile too.
+// It used to be unreachable there only because raw grants never reached it.
+func TestResolveCommand_ProtectedRawPath(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Sandbox.Command.Host.Read = []string{"~/.aws"}
+
+	if _, err := ResolveCommand(cfg, "/work/project"); err == nil {
+		t.Fatal("ResolveCommand() error = nil, want a protected-path rejection")
+	}
+}
+
+// A capability's bypass_protection and allow_file entries follow it to
+// whichever side declares it. The command profile used to receive the bundle's
+// read_file without its bypass, leaving the grant half-applied.
+func TestResolveCommand_CapabilityBypassAndAllowFile(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Sandbox.Host.Capabilities = []string{"bashrc"}
+
+	r, err := ResolveCommand(cfg, "/work/project")
+	if err != nil {
+		t.Fatalf("ResolveCommand() error = %v", err)
+	}
+	fs := profileMap(t, r)["filesystem"].(map[string]any)
+	if got := toStrings(fs["bypass_protection"]); !slices.Contains(got, "~/.bashrc") {
+		t.Errorf("bypass_protection = %v, want to contain ~/.bashrc", got)
+	}
+}
+
+// Deny rules constrain the agent's own file tools, so they belong to the agent
+// profile alone; emitting them for a command would be meaningless.
+func TestResolveCommand_NoDenyRules(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Sandbox.Host.Capabilities = []string{"ssh"}
+
+	r, err := ResolveCommand(cfg, "/work/project")
+	if err != nil {
+		t.Fatalf("ResolveCommand() error = %v", err)
+	}
+	if len(r.DenyRules) != 0 {
+		t.Errorf("DenyRules = %v, want none on the command profile", r.DenyRules)
+	}
+}
+
+// CommandFilesystemGrants answers "what does a sandboxed command reach outside
+// its working directory" — the question agent-facing docs need. It must draw
+// from the shared base and the command section only, split by write access, and
+// leave out the baseline files every command gets regardless of config.
+func TestCommandFilesystemGrants(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Sandbox.Host.Capabilities = []string{"mise"}
+	cfg.Sandbox.Host.Read = []string{"/srv/shared"}
+	cfg.Sandbox.Agent.Host.Read = []string{"/srv/agent-only"}
+	cfg.Sandbox.Agent.Host.Capabilities = []string{"ssh"}
+	cfg.Sandbox.Command.Host.Allow = []string{"/srv/cache"}
+	cfg.Sandbox.Command.Host.ReadFile = []string{"/etc/hosts"}
+
+	got, err := CommandFilesystemGrants(cfg)
+	if err != nil {
+		t.Fatalf("CommandFilesystemGrants() error = %v", err)
+	}
+	wantWrite := []string{"/srv/cache"}
+	wantRead := []string{"/etc/hosts", "/srv/shared", "~/.config/mise", "~/.local/share/mise"}
+	if !slices.Equal(got.Write, wantWrite) {
+		t.Errorf("Write = %v, want %v", got.Write, wantWrite)
+	}
+	if !slices.Equal(got.Read, wantRead) {
+		t.Errorf("Read = %v, want %v", got.Read, wantRead)
+	}
+}
+
+func TestCommandFilesystemGrants_EmptyConfig(t *testing.T) {
+	got, err := CommandFilesystemGrants(&config.Config{})
+	if err != nil {
+		t.Fatalf("CommandFilesystemGrants() error = %v", err)
+	}
+	if len(got.Write) != 0 || len(got.Read) != 0 {
+		t.Errorf("CommandFilesystemGrants() = %+v, want both lists empty (the baseline /dev/null is not a config grant)", got)
+	}
+}
+
+func TestCommandFilesystemGrants_UnknownCapability(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Sandbox.Command.Host.Capabilities = []string{"nope"}
+
+	if _, err := CommandFilesystemGrants(cfg); err == nil {
+		t.Fatal("CommandFilesystemGrants() error = nil, want an unknown-capability error")
+	}
 }

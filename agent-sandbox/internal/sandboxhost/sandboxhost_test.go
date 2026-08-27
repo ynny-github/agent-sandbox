@@ -337,6 +337,96 @@ func TestResolveShell_CapabilityBypassAndAllowFile(t *testing.T) {
 
 // Deny rules constrain the agent's own file tools, so they belong to the agent
 // profile alone; emitting them for a command would be meaningless.
+// A capability's domains reach the shell profile, unioned with what
+// [sandbox.shell] wrote by hand: declaring "go" is enough to get the module
+// proxy, so a config never has to restate a toolchain's own network needs.
+func TestResolveShell_CapabilityDomains(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Sandbox.Shared.Capabilities = []string{"go"}
+	cfg.Sandbox.Shell.AllowDomains = []string{"sum.golang.org", "example.test"}
+
+	r, err := ResolveShell(cfg, "/work/project")
+	if err != nil {
+		t.Fatalf("ResolveShell() error = %v", err)
+	}
+	network := profileMap(t, r)["network"].(map[string]any)
+	want := []string{"example.test", "proxy.golang.org", "sum.golang.org"}
+	if got := toStrings(network["allow_domain"]); !slices.Equal(got, want) {
+		t.Errorf("allow_domain = %v, want %v", got, want)
+	}
+}
+
+// The catalog's domains are part of what a capability means, so they are
+// pinned here: a bundle silently losing its registry would only show up as a
+// sandboxed build that cannot fetch.
+func TestResolveShell_CatalogDomains(t *testing.T) {
+	for _, tc := range []struct {
+		capability string
+		want       []string
+	}{
+		{"go", []string{"proxy.golang.org", "sum.golang.org"}},
+		{"python", []string{"files.pythonhosted.org", "pypi.org"}},
+		{"node", []string{"registry.npmjs.org"}},
+		{"rust", []string{"crates.io", "index.crates.io", "static.crates.io"}},
+		{"docker", []string{
+			"auth.docker.io", "index.docker.io",
+			"production.cloudflare.docker.com", "registry-1.docker.io",
+		}},
+		{"mise", []string{"mise-versions.jdx.dev", "mise.jdx.dev"}},
+		{"ssh", nil},
+		{"bashrc", nil},
+	} {
+		t.Run(tc.capability, func(t *testing.T) {
+			cfg := &config.Config{}
+			cfg.Sandbox.Shell.Capabilities = []string{tc.capability}
+
+			got, err := ShellAllowDomains(cfg)
+			if err != nil {
+				t.Fatalf("ShellAllowDomains() error = %v", err)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("%s domains = %v, want %v", tc.capability, got, tc.want)
+			}
+		})
+	}
+}
+
+// The agent profile has no network section of its own — it inherits the one in
+// its nono base profile — so a capability's domains must not conjure one.
+func TestResolve_CapabilityDomainsDoNotAddNetwork(t *testing.T) {
+	m := profileMap(t, resolve(t, config.HostConfig{Capabilities: []string{"go"}}, "claude"))
+	if m["network"] != nil {
+		t.Errorf("agent profile network = %#v, want none", m["network"])
+	}
+}
+
+func TestShellAllowDomains(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Sandbox.Shared.Capabilities = []string{"go"}
+	cfg.Sandbox.Shell.AllowDomains = []string{"example.test"}
+	// [sandbox.agent] feeds the agent profile only, and that profile has no
+	// network: its capability's domains must not show up here.
+	cfg.Sandbox.Agent.Capabilities = []string{"go"}
+
+	got, err := ShellAllowDomains(cfg)
+	if err != nil {
+		t.Fatalf("ShellAllowDomains() error = %v", err)
+	}
+	want := []string{"example.test", "proxy.golang.org", "sum.golang.org"}
+	if !slices.Equal(got, want) {
+		t.Errorf("ShellAllowDomains() = %v, want %v", got, want)
+	}
+}
+
+func TestShellAllowDomains_UnknownCapability(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Sandbox.Shell.Capabilities = []string{"nope"}
+
+	if _, err := ShellAllowDomains(cfg); err == nil {
+		t.Fatal("ShellAllowDomains() error = nil, want an unknown-capability error")
+	}
+}
+
 func TestResolveShell_NoDenyRules(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Sandbox.Shared.Capabilities = []string{"ssh"}

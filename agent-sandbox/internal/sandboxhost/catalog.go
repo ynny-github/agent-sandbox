@@ -1,8 +1,15 @@
 package sandboxhost
 
 // capability is a named bundle that expands into nono grants (groups, reads,
-// bypass exemptions, allow-files, env vars) plus the Claude permission-deny
-// rules for any credential path it exposes.
+// bypass exemptions, allow-files, env vars, network domains) plus the Claude
+// permission-deny rules for any credential path it exposes.
+//
+// Two fields reach only one of the two profiles, because only one of them has
+// somewhere to put them: deny constrains the agent's own file tools, and
+// domains widen the network of the shell sandbox brokered commands run in (the
+// agent's own network comes from its nono base profile, which agent-sandbox
+// does not configure). Both are still declared per capability rather than per
+// side, so a bundle stays one entry no matter which section names it.
 type capability struct {
 	groups    []string
 	read      []string
@@ -10,6 +17,7 @@ type capability struct {
 	bypass    []string
 	allowFile []string
 	allowVars []string
+	domains   []string
 	deny      []string
 }
 
@@ -20,14 +28,43 @@ type capability struct {
 // keeping host keys away from brokered commands is a matter of declaring them
 // under [sandbox.agent] rather than the shared [sandbox.shared].
 var catalog = map[string]capability{
-	"go":     {groups: []string{"go_runtime"}},
-	"python": {groups: []string{"python_runtime"}},
-	"node":   {groups: []string{"node_runtime"}},
-	"rust":   {groups: []string{"rust_runtime"}},
+	// Each runtime names its own registry rather than leaning on the developer
+	// network profile, which covers most of them today: a preset that changes
+	// under us must not silently take a toolchain's package fetches with it.
+	// Listing a domain the preset already grants is harmless — the two are
+	// unioned.
+	"go": {
+		groups:  []string{"go_runtime"},
+		domains: []string{"proxy.golang.org", "sum.golang.org"},
+	},
+	"python": {
+		groups: []string{"python_runtime"},
+		// pypi.org resolves the package; files.pythonhosted.org serves the
+		// sdists and wheels themselves. The index alone cannot install.
+		domains: []string{"pypi.org", "files.pythonhosted.org"},
+	},
+	"node": {
+		groups:  []string{"node_runtime"},
+		domains: []string{"registry.npmjs.org"},
+	},
+	"rust": {
+		groups: []string{"rust_runtime"},
+		// index.crates.io is cargo's sparse index (the default protocol);
+		// static.crates.io serves the .crate files.
+		domains: []string{"crates.io", "index.crates.io", "static.crates.io"},
+	},
 	"docker": {
 		read:   []string{"~/.docker", "~/.orbstack"},
 		bypass: []string{"~/.docker"},
-		deny:   []string{"Read(~/.docker/**)"},
+		// A pull needs all four: index/registry for the manifest, auth for the
+		// bearer token, and the Cloudflare host for the layer blobs.
+		domains: []string{
+			"auth.docker.io",
+			"index.docker.io",
+			"production.cloudflare.docker.com",
+			"registry-1.docker.io",
+		},
+		deny: []string{"Read(~/.docker/**)"},
 	},
 	"ssh": {
 		read:      []string{"~/.ssh"},
@@ -41,6 +78,12 @@ var catalog = map[string]capability{
 	"mise": {
 		read:      []string{"~/.local/share/mise", "~/.config/mise"},
 		allowVars: []string{"MISE*", "__MISE*"},
+		// mise's own hosts: self-update and the version listings. Where it
+		// fetches a tool *from* is per-tool (GitHub releases, nodejs.org,
+		// python-build-standalone, ...) and cannot be enumerated here, so a
+		// project that runs `mise install` sandboxed adds those to
+		// [sandbox.shell] allow_domains itself.
+		domains: []string{"mise.jdx.dev", "mise-versions.jdx.dev"},
 	},
 	"bashrc": {
 		readFile: []string{"~/.bashrc", "/etc/bashrc", "/etc/bash.bashrc"},

@@ -122,6 +122,20 @@ func TestExplain_AllowDomainsListed(t *testing.T) {
 	}
 }
 
+// The domain list an agent reads must be the resolved one: a capability can
+// carry domains that never appear in [sandbox.shell] allow_domains.
+func TestExplain_CapabilityDomainsListed(t *testing.T) {
+	cfg := &config.Config{ToolMode: "mcp"}
+	cfg.Sandbox.Shared.Capabilities = []string{"go"}
+	got := agentconfig.Explain(cfg)
+	if !strings.Contains(got, "proxy.golang.org") {
+		t.Errorf("Explain() missing the go capability's domains:\n%s", got)
+	}
+	if strings.Contains(got, "No extra domains") {
+		t.Errorf("Explain() should not claim no extra domains when a capability adds some:\n%s", got)
+	}
+}
+
 // The filesystem section names the paths a sandboxed command actually reaches,
 // resolved from the config. Describing the sections alone would leave the agent
 // guessing, since which grants apply depends on where they were written.

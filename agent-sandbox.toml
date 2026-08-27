@@ -10,9 +10,10 @@
   # written where that sandbox can see it.
   #
   # Capabilities are named bundles (go/python -> runtime groups; docker/ssh ->
-  # credential reads + the matching agent read-block; mise -> tool state).
-  # Raw grants (allow/read/allow_file/read_file/allow_env) cover anything not
-  # bundled.
+  # credential reads + the matching agent read-block; mise -> tool state). A
+  # bundle can also carry the network domains its toolchain needs, which is why
+  # nothing here has to name the Go module proxy: "go" brings it. Raw grants
+  # (allow/read/allow_file/read_file/allow_env) cover anything not bundled.
   [sandbox.shared]
   capabilities = ["go", "python", "mise", "bashrc"]
 
@@ -42,9 +43,3 @@
     { pattern = "gh", message = "gh is disabled in this sandbox. Use the GitHub MCP server's tools instead." },
     { pattern = "gh *", message = "gh is disabled in this sandbox. Use the GitHub MCP server's tools instead." },
   ]
-
-  [sandbox.shell]
-  # Extra domains on top of nono's fixed "developer" network profile, which
-  # every brokered command runs under. The preset does not include the Go
-  # module proxy, so this project must add it.
-  allow_domains = ["proxy.golang.org", "sum.golang.org"]

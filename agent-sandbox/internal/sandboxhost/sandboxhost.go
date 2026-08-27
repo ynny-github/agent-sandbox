@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 
@@ -73,6 +74,9 @@ type sideOptions struct {
 	// workdir, when set, is granted read+write. Only the shell side sets it:
 	// the agent's own working directory comes from its nono base profile.
 	workdir string
+	// network, when set, is the profile's network section. Only the shell side
+	// sets one, so it is also the only side where a capability's domains land;
+	// see catalog.go's capability comment.
 	network *profileNetwork
 	// emitDeny renders the capabilities' Claude permission-deny rules. They
 	// constrain the agent's own file tools, so only the agent side wants them.
@@ -86,7 +90,7 @@ type sideOptions struct {
 //
 // All output lists are sorted and de-duplicated so the result is deterministic.
 func expand(sections []config.HostConfig, opts sideOptions) (*Resolved, error) {
-	var groups, read, bypass, allowFile, allowVars, allow, readFile, deny []string
+	var groups, read, bypass, allowFile, allowVars, allow, readFile, domains, deny []string
 
 	allowVars = append(allowVars, baselineEnv...)
 	allowVars = append(allowVars, opts.extraEnv...)
@@ -107,6 +111,7 @@ func expand(sections []config.HostConfig, opts sideOptions) (*Resolved, error) {
 			bypass = append(bypass, c.bypass...)
 			allowFile = append(allowFile, c.allowFile...)
 			allowVars = append(allowVars, c.allowVars...)
+			domains = append(domains, c.domains...)
 			deny = append(deny, c.deny...)
 		}
 
@@ -140,7 +145,7 @@ func expand(sections []config.HostConfig, opts sideOptions) (*Resolved, error) {
 				BypassProtection: sortDedup(bypass),
 			},
 			Environment: profileEnvironment{AllowVars: sortDedup(allowVars)},
-			Network:     opts.network,
+			Network:     withDomains(opts.network, domains),
 		},
 	}
 	if opts.emitDeny {
@@ -175,7 +180,7 @@ func Resolve(cfg *config.Config, agent string) (*Resolved, error) {
 // ResolveShell builds the profile for the shell sandbox a single brokered
 // command runs in: the working directory read+write, the shared
 // [sandbox.shared] base plus [sandbox.shell], and the fixed developer network
-// profile plus cfg.Sandbox.Shell.AllowDomains.
+// profile plus the extra domains ShellAllowDomains resolves.
 //
 // It shares expand with Resolve because the two profiles differ only in which
 // config sections feed them: a grant the shell sandbox must not have belongs
@@ -189,12 +194,32 @@ func ResolveShell(cfg *config.Config, workdir string) (*Resolved, error) {
 		sideOptions{
 			metaName: "agent-sandbox shell",
 			workdir:  workdir,
-			network: &profileNetwork{
-				NetworkProfile: shellNetworkProfile,
-				AllowDomain:    sortDedup(cfg.Sandbox.Shell.AllowDomains),
-			},
+			network:  shellNetwork(cfg),
 		},
 	)
+}
+
+// shellNetwork is the network section every shell profile starts from: the
+// fixed developer profile plus the domains written in [sandbox.shell]. expand
+// adds whatever the declared capabilities bring on top.
+func shellNetwork(cfg *config.Config) *profileNetwork {
+	return &profileNetwork{
+		NetworkProfile: shellNetworkProfile,
+		AllowDomain:    cfg.Sandbox.Shell.AllowDomains,
+	}
+}
+
+// withDomains returns n with domains merged into its allow list, leaving the
+// caller's struct untouched. A nil n stays nil: a side with no network section
+// has nowhere to put them, and inventing one would silently reconfigure the
+// network of a profile that means to inherit it.
+func withDomains(n *profileNetwork, domains []string) *profileNetwork {
+	if n == nil {
+		return nil
+	}
+	merged := *n
+	merged.AllowDomain = sortDedup(concat(n.AllowDomain, domains))
+	return &merged
 }
 
 // ShellGrants are the filesystem paths the shell sandbox can reach outside its
@@ -220,6 +245,22 @@ func ShellFilesystemGrants(cfg *config.Config) (ShellGrants, error) {
 		Write: sortDedup(exclude(concat(fs.Allow, fs.AllowFile), baselineAllowFile)),
 		Read:  sortDedup(concat(fs.Read, fs.ReadFile)),
 	}, nil
+}
+
+// ShellAllowDomains are the domains a brokered command may reach on top of the
+// fixed developer network profile: what [sandbox.shell] writes as
+// allow_domains, plus what the capabilities declared for that side bring with
+// them. Like ShellFilesystemGrants it exists so agent-facing documentation can
+// state the resolved answer instead of the config sections it came from.
+func ShellAllowDomains(cfg *config.Config) ([]string, error) {
+	r, err := expand(
+		[]config.HostConfig{cfg.Sandbox.Shared, cfg.Sandbox.Shell.HostConfig},
+		sideOptions{network: shellNetwork(cfg)},
+	)
+	if err != nil {
+		return nil, err
+	}
+	return slices.Clone(r.profile.Network.AllowDomain), nil
 }
 
 func concat(lists ...[]string) []string {

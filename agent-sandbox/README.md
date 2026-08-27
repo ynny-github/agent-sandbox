@@ -26,7 +26,8 @@ allow_commands = [                     # run on the host; everything else is san
 ]
 
 [sandbox.shell]
-allow_domains = ["proxy.golang.org"]   # extra domains on top of nono's "developer" network profile
+allow_domains = ["internal.example.com"] # extra domains for sandboxed commands, on top of
+                                         # nono's "developer" profile and the capabilities' own
 ```
 
 ## Usage
@@ -146,10 +147,20 @@ never silently gain one.
 
 All three sections take the same fields. `capabilities` are named bundles —
 `go`, `python`, `node`, `rust`, `docker`, `ssh`, `mise`, `bashrc` —
-each expanding to the directories, files, and env vars that capability needs.
-Raw grants (`allow`, `read`, `allow_file`, `read_file`, `allow_env`) cover
-anything not already covered by a capability. The common `PATH`/`HOME`/... env
-vars and `/dev/null` are always granted from a built-in baseline.
+each expanding to the directories, files, env vars, and network domains that
+capability needs. Raw grants (`allow`, `read`, `allow_file`, `read_file`,
+`allow_env`) cover anything not already covered by a capability. The common
+`PATH`/`HOME`/... env vars and `/dev/null` are always granted from a built-in
+baseline.
+
+A capability's domains are added to the shell sandbox's network, so each
+toolchain brings its own registry — `go` the module proxy, `python` PyPI,
+`node` the npm registry, `rust` crates.io, `docker` Docker Hub, `mise` its
+update and version hosts — without a config having to restate them.
+`sandbox.shell.allow_domains` is for what no capability covers. Domains apply
+to whichever side has a network to widen — that is the shell sandbox only,
+since the launched agent keeps the network of its nono base profile — so a
+capability declared under `[sandbox.agent]` contributes no domains.
 
 `docker` and `ssh` expose host credentials but are otherwise ordinary
 capabilities: they apply to whichever side declares them. Put them in
@@ -195,7 +206,7 @@ fixed and built-in.
 
 - Commands matching an allow pattern are executed on the **host** (after shell-safety validation).
 - Commands matching a drop pattern are **refused** — neither the host nor the sandbox runs them; the response carries exit code 1 and a stderr line. Each drop entry is a `{ pattern, message }` table; when `message` is set it is printed on refusal, otherwise the default `dropped: command matches drop pattern "<pattern>"` line is used.
-- All other commands are sent to the host-side command broker started by `agent-sandbox claude`, which runs each one under its own **`nono run`** invocation, scoped to the current working directory and nono's `developer` network profile plus `sandbox.shell.allow_domains`.
+- All other commands are sent to the host-side command broker started by `agent-sandbox claude`, which runs each one under its own **`nono run`** invocation, scoped to the current working directory and nono's `developer` network profile plus the extra domains (`sandbox.shell.allow_domains` and the declared capabilities' own).
 - Allow wins over drop: a command matching both an allow and a drop pattern runs on the host.
 - Output is always written to separate stdout/stderr files; the MCP response returns file paths and exit code only.
 

@@ -38,10 +38,13 @@ type SafeCommand struct {
 
 // explainView is the data handed to explain.tmpl.
 type explainView struct {
-	Hook         bool
-	Allow        []string
-	Drop         []config.DropRule
-	Safe         []SafeCommand
+	Hook  bool
+	Allow []string
+	Drop  []config.DropRule
+	Safe  []SafeCommand
+	// AllowDomains is the resolved extra-domain list, not the raw
+	// [sandbox.shell] allow_domains: a capability can carry domains too, and an
+	// agent reading this needs the total.
 	AllowDomains []string
 	// OutsideWrite / OutsideRead are the paths a sandboxed command reaches
 	// beyond its working directory, resolved from the config rather than
@@ -69,10 +72,14 @@ func Explain(cfg *config.Config, safe ...SafeCommand) string {
 		Safe:         safe,
 		AllowDomains: cfg.Sandbox.Shell.AllowDomains,
 	}
+	if domains, err := sandboxhost.ShellAllowDomains(cfg); err == nil {
+		view.AllowDomains = domains
+	}
 	// A resolve error means an unknown capability name, which stops
 	// `agent-sandbox claude` at launch — no session can reach this code with
-	// such a config. Should one ever get here, fall back to the prose above the
-	// list rather than printing a wrong (empty) list as if it were resolved.
+	// such a config. Should one ever get here, fall back to what the config
+	// says literally (above, for the domains) or to the prose around the list
+	// rather than printing a wrong (empty) list as if it were resolved.
 	if grants, err := sandboxhost.ShellFilesystemGrants(cfg); err == nil {
 		view.OutsideWrite = grants.Write
 		view.OutsideRead = grants.Read

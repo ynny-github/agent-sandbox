@@ -19,6 +19,10 @@ command_output_dir = "/tmp/mcp-output"
 # Each section takes the same host-access fields:
 #   capabilities = []   # named bundles: go, python, node, rust, docker, ssh,
 #                       #                mise, bashrc
+#                       # A bundle also carries the network domains its
+#                       # toolchain needs (go the module proxy, python PyPI,
+#                       # node the npm registry, ...) for the shell sandbox, so
+#                       # they never have to be restated in allow_domains below.
 #   allow        = []   # read+write host directories
 #   read         = []   # read-only host directories
 #   allow_file   = []   # single file, read+write
@@ -54,9 +58,9 @@ allow_env = [
   # "CI",
 ]
 # Sandboxed commands run under nono's "developer" network profile (LLM APIs,
-# package registries, GitHub, sigstore, documentation). List any extra domains
-# here. The preset does NOT include proxy.golang.org.
+# package registries, GitHub, sigstore, documentation), plus whatever the
+# capabilities declared for this side bring with them. List here only what
+# neither covers.
 allow_domains = [
-  # "proxy.golang.org",
-  # "sum.golang.org",
+  # "internal.example.com",
 ]

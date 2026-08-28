@@ -1,5 +1,5 @@
 [tools]
 go = "1.25"
-"go:github.com/ynny-github/agent-sandbox/agent-sandbox" = "v0.16.0"
+"go:github.com/ynny-github/agent-sandbox/agent-sandbox" = "v0.16.2"
 lefthook = "latest"
 

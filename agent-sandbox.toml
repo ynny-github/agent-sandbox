@@ -25,8 +25,15 @@
 
   # Command routing. allow_commands runs on the host; everything unmatched goes
   # to the shell sandbox.
+  #
+  # "mise use *" covers "mise use -g" too: allow is evaluated before drop and
+  # the patterns have no negation, so a "mise use" allow cannot carve out the
+  # global form. The mise capability grants ~/.config/mise read-only, so a
+  # global write is refused by the profile rather than by this list.
   allow_commands = [
-    "go *"
+    "go *",
+    "mise use *",
+    "mise install *"
   ]
 
   # Bare git is refused everywhere (host and sandbox) so that all git goes

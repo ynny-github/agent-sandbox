@@ -62,3 +62,57 @@ func TestRunExplain_MissingConfig(t *testing.T) {
 		t.Fatal("expected config error, got nil")
 	}
 }
+
+func runConfigCheckWith(t *testing.T, body string) (string, error) {
+	t.Helper()
+	orig := configPath
+	configPath = writeTempConfig(t, body)
+	t.Cleanup(func() { configPath = orig })
+
+	var buf bytes.Buffer
+	configCheckCmd.SetOut(&buf)
+	err := runConfigCheck(configCheckCmd, nil)
+	return buf.String(), err
+}
+
+func TestRunConfigCheck_ValidConfig(t *testing.T) {
+	out, err := runConfigCheckWith(t, `
+tool_mode = "hook"
+
+[sandbox.shared]
+capabilities = ["go"]
+
+[sandbox.agent]
+allow_commands = ["go *"]
+`)
+	if err != nil {
+		t.Fatalf("runConfigCheck: %v", err)
+	}
+	if !strings.Contains(out, "proxy.golang.org") {
+		t.Errorf("output does not summarise the resolved domains:\n%s", out)
+	}
+}
+
+func TestRunConfigCheck_BrokenToml(t *testing.T) {
+	if _, err := runConfigCheckWith(t, "tool_mode = \n"); err == nil {
+		t.Fatal("expected an error for unparseable TOML, got nil")
+	}
+}
+
+// An unknown capability name passes config.Load — capability names are only
+// resolved in sandboxhost — so without the resolve step it would surface at the
+// next launch instead of here.
+func TestRunConfigCheck_UnknownCapability(t *testing.T) {
+	_, err := runConfigCheckWith(t, `
+tool_mode = "hook"
+
+[sandbox.shared]
+capabilities = ["gooo"]
+`)
+	if err == nil {
+		t.Fatal("expected an error for an unknown capability, got nil")
+	}
+	if !strings.Contains(err.Error(), "gooo") {
+		t.Errorf("error does not name the offending capability: %v", err)
+	}
+}

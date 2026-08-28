@@ -38,10 +38,17 @@ type SafeCommand struct {
 
 // explainView is the data handed to explain.tmpl.
 type explainView struct {
-	Hook  bool
-	Allow []string
-	Drop  []config.DropRule
-	Safe  []SafeCommand
+	Hook bool
+	// ConfigPath is the config file actually loaded, not the default name: the
+	// agent is being told which file to edit, and --config can move it.
+	ConfigPath string
+	// Capabilities is the catalog's capability names, so the editing section
+	// lists what may actually be written rather than a prose sample that goes
+	// stale when a bundle is added.
+	Capabilities []string
+	Allow        []string
+	Drop         []config.DropRule
+	Safe         []SafeCommand
 	// AllowDomains is the resolved extra-domain list, not the raw
 	// [sandbox.shell] allow_domains: a capability can carry domains too, and an
 	// agent reading this needs the total.
@@ -62,11 +69,14 @@ type explainView struct {
 // Explain renders a Markdown description of the sandbox environment from cfg,
 // for the AI agent to read on demand via `agent-sandbox ai explain`. The prose
 // lives in explain.tmpl; this function only prepares the view data. The caller
-// passes the available `safe` wrappers (from the live command tree) so the
-// explain output points agents at them.
-func Explain(cfg *config.Config, safe ...SafeCommand) string {
+// passes the config path it loaded cfg from (so the editing section names the
+// file the agent must actually edit) and the available `safe` wrappers (from
+// the live command tree) so the explain output points agents at them.
+func Explain(cfg *config.Config, configPath string, safe ...SafeCommand) string {
 	view := explainView{
 		Hook:         cfg.ToolMode == "hook",
+		ConfigPath:   configPath,
+		Capabilities: sandboxhost.CapabilityNames(),
 		Allow:        cfg.Sandbox.Agent.AllowCommands,
 		Drop:         cfg.Sandbox.Agent.DropCommands,
 		Safe:         safe,

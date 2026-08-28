@@ -6,6 +6,7 @@ import (
 
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/agentconfig"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandboxhost"
 )
 
 func TestPointer_MentionsExplainCommand(t *testing.T) {
@@ -23,7 +24,7 @@ func TestExplain_HookMode(t *testing.T) {
 		{Pattern: "gh *", Message: "gh is disabled; use the GitHub MCP tools."},
 	}
 
-	got := agentconfig.Explain(cfg)
+	got := agentconfig.Explain(cfg, "agent-sandbox.toml")
 	for _, want := range []string{
 		"# agent-sandbox environment",
 		"Bash/Monitor tools",
@@ -46,7 +47,7 @@ func TestExplain_HookMode(t *testing.T) {
 
 func TestExplain_McpMode(t *testing.T) {
 	cfg := &config.Config{ToolMode: "mcp"}
-	got := agentconfig.Explain(cfg)
+	got := agentconfig.Explain(cfg, "agent-sandbox.toml")
 	for _, want := range []string{
 		"run_command",
 		"written to files",
@@ -62,7 +63,7 @@ func TestExplain_McpMode(t *testing.T) {
 
 func TestExplain_FilesystemSection(t *testing.T) {
 	cfg := &config.Config{ToolMode: "hook"}
-	got := agentconfig.Explain(cfg)
+	got := agentconfig.Explain(cfg, "agent-sandbox.toml")
 	for _, want := range []string{
 		"## Filesystem: the same paths everywhere",
 		"no bind mount",
@@ -78,7 +79,7 @@ func TestExplain_FilesystemSection(t *testing.T) {
 
 func TestExplain_SafeWrappers(t *testing.T) {
 	cfg := &config.Config{ToolMode: "hook"}
-	got := agentconfig.Explain(cfg,
+	got := agentconfig.Explain(cfg, "agent-sandbox.toml",
 		agentconfig.SafeCommand{Use: "git [args...]", Short: "Run git, refusing known-dangerous invocations"},
 		agentconfig.SafeCommand{Use: "docker-compose [args...]", Short: "Run docker compose only after safety validation"},
 	)
@@ -95,14 +96,14 @@ func TestExplain_SafeWrappers(t *testing.T) {
 
 func TestExplain_NoSafeWrappersSection_WhenNone(t *testing.T) {
 	cfg := &config.Config{ToolMode: "hook"}
-	if got := agentconfig.Explain(cfg); strings.Contains(got, "Safe command wrappers") {
+	if got := agentconfig.Explain(cfg, "agent-sandbox.toml"); strings.Contains(got, "Safe command wrappers") {
 		t.Errorf("Explain() should omit the safe wrappers section when none are passed:\n%s", got)
 	}
 }
 
 func TestExplain_NoExtraDomainsByDefault(t *testing.T) {
 	cfg := &config.Config{ToolMode: "mcp"}
-	got := agentconfig.Explain(cfg)
+	got := agentconfig.Explain(cfg, "agent-sandbox.toml")
 	if !strings.Contains(got, "No extra domains beyond the developer profile.") {
 		t.Errorf("Explain() should render no extra domains by default:\n%s", got)
 	}
@@ -111,7 +112,7 @@ func TestExplain_NoExtraDomainsByDefault(t *testing.T) {
 func TestExplain_AllowDomainsListed(t *testing.T) {
 	cfg := &config.Config{ToolMode: "mcp"}
 	cfg.Sandbox.Shell.AllowDomains = []string{"proxy.golang.org", "sum.golang.org"}
-	got := agentconfig.Explain(cfg)
+	got := agentconfig.Explain(cfg, "agent-sandbox.toml")
 	for _, want := range []string{"proxy.golang.org", "sum.golang.org"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("Explain() missing allow domain %q:\n%s", want, got)
@@ -127,7 +128,7 @@ func TestExplain_AllowDomainsListed(t *testing.T) {
 func TestExplain_CapabilityDomainsListed(t *testing.T) {
 	cfg := &config.Config{ToolMode: "mcp"}
 	cfg.Sandbox.Shared.Capabilities = []string{"go"}
-	got := agentconfig.Explain(cfg)
+	got := agentconfig.Explain(cfg, "agent-sandbox.toml")
 	if !strings.Contains(got, "proxy.golang.org") {
 		t.Errorf("Explain() missing the go capability's domains:\n%s", got)
 	}
@@ -145,7 +146,7 @@ func TestExplain_ResolvedOutsidePaths(t *testing.T) {
 	cfg.Sandbox.Shell.Allow = []string{"/srv/cache"}
 	cfg.Sandbox.Agent.Capabilities = []string{"ssh"}
 
-	got := agentconfig.Explain(cfg)
+	got := agentconfig.Explain(cfg, "agent-sandbox.toml")
 	for _, want := range []string{
 		"- `/srv/cache` (read+write)",
 		"- `~/.config/mise` (read-only)",
@@ -161,8 +162,64 @@ func TestExplain_ResolvedOutsidePaths(t *testing.T) {
 }
 
 func TestExplain_NoOutsidePaths(t *testing.T) {
-	got := agentconfig.Explain(&config.Config{ToolMode: "hook"})
+	got := agentconfig.Explain(&config.Config{ToolMode: "hook"}, "agent-sandbox.toml")
 	if !strings.Contains(got, "nothing outside the working directory") {
 		t.Errorf("Explain() should say so when no grant reaches outside the working directory:\n%s", got)
+	}
+}
+
+func TestExplain_ConfigEditingSection(t *testing.T) {
+	cfg := &config.Config{ToolMode: "hook"}
+	got := agentconfig.Explain(cfg, "/work/proj/agent-sandbox.toml")
+
+	for _, want := range []string{
+		"## Changing the config",
+		"/work/proj/agent-sandbox.toml",
+		"[sandbox.shared]",
+		"[sandbox.agent]",
+		"[sandbox.shell]",
+		"tool_mode",
+		"allow_commands",
+		"drop_commands",
+		"allow_domains",
+		"capabilities",
+		"agent-sandbox ai config-check",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Explain() config section missing %q\nfull output:\n%s", want, got)
+		}
+	}
+}
+
+func TestExplain_ListsCapabilityNames(t *testing.T) {
+	got := agentconfig.Explain(&config.Config{ToolMode: "hook"}, "agent-sandbox.toml")
+	for _, name := range sandboxhost.CapabilityNames() {
+		if !strings.Contains(got, "`"+name+"`") {
+			t.Errorf("Explain() does not list capability %q\nfull output:\n%s", name, got)
+		}
+	}
+}
+
+func TestExplain_SaysEditsApplyAtNextLaunch(t *testing.T) {
+	got := agentconfig.Explain(&config.Config{ToolMode: "hook"}, "agent-sandbox.toml")
+	for _, want := range []string{
+		"does not affect the current session",
+		"agent-sandbox claude",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Explain() missing %q about when edits take effect\nfull output:\n%s", want, got)
+		}
+	}
+}
+
+func TestExplain_MentionsUserScopeConfigMerge(t *testing.T) {
+	got := agentconfig.Explain(&config.Config{ToolMode: "hook"}, "agent-sandbox.toml")
+	for _, want := range []string{
+		"~/.config/agent-sandbox/config.toml",
+		"union",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Explain() missing %q about the user-scope config merge\nfull output:\n%s", want, got)
+		}
 	}
 }

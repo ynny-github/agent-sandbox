@@ -1,5 +1,7 @@
 package sandboxhost
 
+import "slices"
+
 // capability is a named bundle that expands into nono grants (groups, reads,
 // bypass exemptions, allow-files, env vars, network domains) plus the Claude
 // permission-deny rules for any credential path it exposes.
@@ -94,6 +96,19 @@ var catalog = map[string]capability{
 			"Read(/etc/bash.bashrc)",
 		},
 	},
+}
+
+// CapabilityNames returns the catalog's capability names, sorted. It exists so
+// the agent-facing documentation can list the names an operator (or the agent
+// editing the config) may actually write, rather than restating the catalog in
+// prose where it would drift the moment a bundle is added.
+func CapabilityNames() []string {
+	names := make([]string, 0, len(catalog))
+	for name := range catalog {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
 }
 
 // shellNetworkProfile is the nono network profile every brokered command runs

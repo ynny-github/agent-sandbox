@@ -485,3 +485,18 @@ func TestShellFilesystemGrants_UnknownCapability(t *testing.T) {
 		t.Fatal("ShellFilesystemGrants() error = nil, want an unknown-capability error")
 	}
 }
+
+func TestCapabilityNames_MatchesCatalog(t *testing.T) {
+	got := CapabilityNames()
+	if len(got) != len(catalog) {
+		t.Fatalf("CapabilityNames() returned %d names, catalog has %d: %v", len(got), len(catalog), got)
+	}
+	for _, name := range got {
+		if _, ok := catalog[name]; !ok {
+			t.Errorf("CapabilityNames() returned %q, which is not in the catalog", name)
+		}
+	}
+	if !slices.IsSorted(got) {
+		t.Errorf("CapabilityNames() is not sorted: %v", got)
+	}
+}

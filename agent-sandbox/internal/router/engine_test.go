@@ -413,3 +413,134 @@ func TestRun_HostRedirectStderr_RoutesToHost(t *testing.T) {
 		t.Errorf("stdout = %q, want it to contain hi", out.String())
 	}
 }
+
+// ─── newline as a command separator ────────────────────────────────────────
+
+// A newline between two commands must run them as two commands. It used to be
+// tokenized as ordinary whitespace, collapsing "echo AAA\necho BBB" into the
+// single argv [echo AAA echo BBB].
+func TestRun_NewlineSeparatedCommands_RunSeparately(t *testing.T) {
+	var out, errBuf bytes.Buffer
+	code, err := router.Run(context.Background(), router.Request{
+		Command:       "echo AAA\necho BBB",
+		AllowPatterns: []string{"echo *"},
+		Stdout:        &out,
+		Stderr:        &errBuf,
+	})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if code != 0 {
+		t.Errorf("exitCode = %d, want 0 (stderr: %q)", code, errBuf.String())
+	}
+	if got := out.String(); got != "AAA\nBBB\n" {
+		t.Errorf("stdout = %q, want %q", got, "AAA\nBBB\n")
+	}
+}
+
+// Every command on its own line is routed on its own. A drop rule matching the
+// second line must reject the whole request even though the first line is
+// host-allowed.
+func TestRun_NewlineSeparatedCommands_SecondLineIsRouted(t *testing.T) {
+	var out, errBuf bytes.Buffer
+	runner := &mockRunner{}
+	code, err := router.Run(context.Background(), router.Request{
+		Command:       "echo AAA\ngit --version",
+		AllowPatterns: []string{"echo *"},
+		DropRules:     []router.DropRule{{Pattern: "git *"}},
+		CommandRunner: runner,
+		Stdout:        &out,
+		Stderr:        &errBuf,
+	})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if code != 1 {
+		t.Errorf("exitCode = %d, want 1", code)
+	}
+	if out.String() != "" {
+		t.Errorf("stdout = %q, want empty: the drop must be detected before anything runs", out.String())
+	}
+	if !strings.Contains(errBuf.String(), `drop pattern "git *"`) {
+		t.Errorf("stderr = %q, want the git drop pattern", errBuf.String())
+	}
+}
+
+// A redirect anywhere on the line used to send the entire raw string — newlines
+// and all — to a shell, while the routing decision was taken from the first
+// word only. Everything after the newline then executed unrouted, bypassing the
+// drop rules. This is the regression test for that bypass.
+func TestRun_RedirectThenNewline_DoesNotBypassDrop(t *testing.T) {
+	var out, errBuf bytes.Buffer
+	runner := &mockRunner{}
+	code, err := router.Run(context.Background(), router.Request{
+		Command:       "echo AAA > /dev/null\ngit --version",
+		AllowPatterns: []string{"echo *"},
+		DropRules:     []router.DropRule{{Pattern: "git *"}},
+		CommandRunner: runner,
+		Stdout:        &out,
+		Stderr:        &errBuf,
+	})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if code != 1 {
+		t.Errorf("exitCode = %d, want 1", code)
+	}
+	if strings.Contains(out.String(), "git version") {
+		t.Errorf("stdout = %q, dropped command executed", out.String())
+	}
+	if !strings.Contains(errBuf.String(), `drop pattern "git *"`) {
+		t.Errorf("stderr = %q, want the git drop pattern", errBuf.String())
+	}
+}
+
+// A trailing newline is the common shape of an agent-written command. It must
+// not produce an empty trailing pipeline that fails as an empty command.
+func TestRun_TrailingNewline_Ignored(t *testing.T) {
+	var out, errBuf bytes.Buffer
+	code, err := router.Run(context.Background(), router.Request{
+		Command:       "echo AAA\n",
+		AllowPatterns: []string{"echo *"},
+		Stdout:        &out,
+		Stderr:        &errBuf,
+	})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if code != 0 {
+		t.Errorf("exitCode = %d, want 0 (stderr: %q)", code, errBuf.String())
+	}
+	if errBuf.String() != "" {
+		t.Errorf("stderr = %q, want empty", errBuf.String())
+	}
+	if got := out.String(); got != "AAA\n" {
+		t.Errorf("stdout = %q, want %q", got, "AAA\n")
+	}
+}
+
+// A heredoc body must reach the shell intact rather than being split on its
+// newlines, so the line falls back to running whole in the sandbox.
+func TestRun_Heredoc_FallsBackToWholeLine(t *testing.T) {
+	var out, errBuf bytes.Buffer
+	runner := &mockRunner{stdout: "RAN-WHOLE"}
+	code, err := router.Run(context.Background(), router.Request{
+		Command:       "cat <<'EOF'\nhi\nEOF",
+		AllowPatterns: []string{"cat *"},
+		CommandRunner: runner,
+		Stdout:        &out,
+		Stderr:        &errBuf,
+	})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if code != 0 {
+		t.Errorf("exitCode = %d, want 0 (stderr: %q)", code, errBuf.String())
+	}
+	if !runner.called {
+		t.Fatal("heredoc must fall back to running the whole line in the sandbox")
+	}
+	if !strings.Contains(strings.Join(runner.capturedArgv, " "), "<<'EOF'") {
+		t.Errorf("argv = %q, want the heredoc passed through intact", runner.capturedArgv)
+	}
+}

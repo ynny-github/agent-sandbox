@@ -21,8 +21,10 @@ func isDoubleEscapable(r rune) bool {
 }
 
 // Line is a parsed command line: a sequence of pipelines joined by sequential
-// operators. When Fallback is true the line contains a construct we do not
-// split (command substitution or background &) and must run whole.
+// operators. Pipelines are separated by && || ; or a newline; a newline is
+// reported as ";". When Fallback is true the line contains a construct we do
+// not split (command substitution, background &, or a heredoc) and must run
+// whole.
 type Line struct {
 	Raw       string
 	Pipelines []PipelineNode
@@ -56,8 +58,12 @@ func ParseLine(raw string) (Line, error) {
 		return line, nil
 	}
 
-	// Split into pipelines on top-level && || ; then each into segments on |.
-	plRaws, seps := splitTop(raw, []string{"&&", "||", ";"})
+	// Split into pipelines on top-level && || ; newline, then each into segments
+	// on |. A newline is a command terminator in shell grammar, so it must split
+	// here; left to tokenize it would read as ordinary whitespace and silently
+	// turn the next command into arguments of the previous one.
+	plRaws, seps := splitTop(raw, []string{"&&", "||", ";", "\n"})
+	plRaws, seps = dropBlankParts(plRaws, seps)
 	line.Seps = seps
 	for _, plRaw := range plRaws {
 		segRaws, _ := splitTop(plRaw, []string{"|"})
@@ -76,7 +82,8 @@ func ParseLine(raw string) (Line, error) {
 }
 
 // scanQuotes walks raw, returns ErrUnterminatedQuote on an unclosed quote, and
-// sets line.Fallback if it finds an unquoted "$(", backtick, or a lone "&".
+// sets line.Fallback if it finds an unquoted "$(", backtick, "<<", or a lone
+// "&".
 func scanQuotes(raw string, line *Line) error {
 	runes := []rune(raw)
 	quote := quoteNone
@@ -107,6 +114,14 @@ func scanQuotes(raw string, line *Line) error {
 			i++ // skip escaped char
 		case '`':
 			line.Fallback = true
+		case '<':
+			// "<<" opens a heredoc whose body is data: its newlines are not
+			// command terminators and its contents must not be routed. Splitting
+			// would tear the body apart, so the line runs whole.
+			if i+1 < len(runes) && runes[i+1] == '<' {
+				line.Fallback = true
+				i++
+			}
 		case '$':
 			if i+1 < len(runes) && runes[i+1] == '(' {
 				line.Fallback = true
@@ -132,6 +147,44 @@ func scanQuotes(raw string, line *Line) error {
 		return ErrUnterminatedQuote
 	}
 	return nil
+}
+
+// dropBlankParts removes whitespace-only pipelines produced by the split and
+// rewrites the separator list to stay aligned with what is left. Blank parts
+// are routine rather than exceptional: a trailing newline, a blank line between
+// commands, and a newline after "&&" all produce one.
+//
+// The separator kept across a run of blanks is the *first* of the run, so
+// "a &&\nb" stays a conditional rather than degrading into "a ; b". A newline
+// separator is normalized to ";" so callers only ever see the three operators
+// they already handle.
+//
+// When every part is blank the raw line is kept as the single part, leaving the
+// empty-command rejection to the executor instead of silently succeeding.
+func dropBlankParts(parts, seps []string) ([]string, []string) {
+	var keptParts, keptSeps []string
+	var pending string
+	havePending := false
+	for i, part := range parts {
+		if i > 0 && !havePending {
+			pending, havePending = seps[i-1], true
+		}
+		if strings.TrimSpace(part) == "" {
+			continue
+		}
+		if len(keptParts) > 0 {
+			if pending == "\n" {
+				pending = ";"
+			}
+			keptSeps = append(keptSeps, pending)
+		}
+		keptParts = append(keptParts, part)
+		havePending = false
+	}
+	if len(keptParts) == 0 {
+		return parts[:1], nil
+	}
+	return keptParts, keptSeps
 }
 
 // splitTop splits raw at top-level (unquoted) occurrences of any separator in

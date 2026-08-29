@@ -65,7 +65,7 @@ func Run(ctx context.Context, req Request) (int, error) {
 		return 1, nil
 	}
 
-	// Fallback: $(), backtick, or lone & — must run whole line in a shell.
+	// Fallback: $(), backtick, heredoc, or lone & — must run whole line in a shell.
 	// Per-segment routing cannot reach the embedded command, so the whole line
 	// runs in the sandbox.
 	if line.Fallback {

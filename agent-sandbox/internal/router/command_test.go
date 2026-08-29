@@ -41,6 +41,22 @@ func TestParseLine(t *testing.T) {
 		{"redirectFdToStderr", "echo hi >&2", [][]string{{"echo hi >&2"}}, nil, [][]bool{{true}}, false},
 		{"redirectAmpToFile", "echo hi &>out", [][]string{{"echo hi &>out"}}, nil, [][]bool{{true}}, false},
 		{"mixedSeqPipe", "a | b && c", [][]string{{"a ", " b "}, {" c"}}, []string{"&&"}, [][]bool{{false, false}, {false}}, false},
+		// An unquoted newline separates commands exactly like ";". Before this
+		// was handled it fell through to tokenize as ordinary whitespace, so the
+		// second command silently became arguments of the first.
+		{"newlineSeq", "a\nb", [][]string{{"a"}, {"b"}}, []string{";"}, [][]bool{{false}, {false}}, false},
+		{"newlineSeqWithArgs", "echo a\necho b", [][]string{{"echo a"}, {"echo b"}}, []string{";"}, [][]bool{{false}, {false}}, false},
+		// A newline with nothing after it is not a separator: the empty tail is
+		// dropped rather than becoming an empty pipeline.
+		{"trailingNewline", "a\n", [][]string{{"a"}}, nil, [][]bool{{false}}, false},
+		{"leadingNewline", "\na", [][]string{{"a"}}, nil, [][]bool{{false}}, false},
+		{"blankLineBetween", "a\n\nb", [][]string{{"a"}, {"b"}}, []string{";"}, [][]bool{{false}, {false}}, false},
+		// A newline inside quotes is data, not a separator.
+		{"quotedNewline", "echo 'a\nb'", [][]string{{"echo 'a\nb'"}}, nil, [][]bool{{false}}, false},
+		// A heredoc body is data too and its newlines must not be split on, so
+		// the whole line falls back to running in a single shell.
+		{"heredoc", "cat <<'EOF'\nhi\nEOF", nil, nil, nil, true},
+		{"heredocDash", "cat <<-EOF\nhi\nEOF", nil, nil, nil, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

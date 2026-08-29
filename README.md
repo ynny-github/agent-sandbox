@@ -43,7 +43,6 @@ to, resolved from the config that will actually be used at launch.
 - [Environment variables (`--env`)](#environment-variables---env)
 - [GitHub MCP](#github-mcp)
 - [Safe wrappers](#safe-wrappers)
-- [Migrating from an older config](#migrating-from-an-older-config)
 - [Development](#development)
 - [License](#license)
 
@@ -400,46 +399,6 @@ refused when:
 Named volumes and `tmpfs` mounts are allowed. Every other subcommand (`up`,
 `build`, `down`, `ps`, `logs`, …) passes through. The rules are fixed and
 built-in.
-
-## Migrating from an older config
-
-The configuration was reorganized; old keys are no longer accepted and produce a
-load error naming the new location.
-
-| Old | New |
-|---|---|
-| `server.output_dir` | `mcp.command_output_dir` |
-| `sandbox.build_context` | removed — commands run under nono, not Docker |
-| `sandbox.dockerfile` | removed — commands run under nono, not Docker |
-| `sandbox.image` | removed — commands run under nono, not Docker |
-| `sandbox.external_network` | removed — commands run under nono, not Docker |
-| `sandbox.container` (whole section) | removed — commands run under nono, not Docker |
-| `sandbox.network.allow_external` | removed — use `sandbox.shell.allow_domains` |
-| `sandbox.allow_cidrs` | removed — network access is now `sandbox.shell.allow_domains` |
-| `sandbox.allow_hosts` | removed — network access is now `sandbox.shell.allow_domains` |
-| `sandbox.network.allow_cidrs` | removed — replaced by `sandbox.shell.allow_domains` |
-| `sandbox.network.allow_hosts` | removed — replaced by `sandbox.shell.allow_domains` |
-| `[allow_patterns] patterns` | `sandbox.agent.allow_commands` |
-| `[drop_patterns] patterns` | `sandbox.agent.drop_commands` |
-| `[deny_patterns] patterns` | removed — move destructive entries into `sandbox.agent.drop_commands` |
-| `[container] env_passthrough` | `allow_env` in `[sandbox.shell]` |
-| `sandbox.container.env_passthrough` | `allow_env` in `[sandbox.shell]` |
-| `[nono] profile` | removed — configure the profile in `[sandbox.shared]` / `[sandbox.agent]` |
-| `sandbox.network` (whole section) | `sandbox.shell.allow_domains` |
-| `sandbox.network.allow_domains` | `sandbox.shell.allow_domains` |
-| `sandbox.command.env_passthrough` | `allow_env` in `[sandbox.shell]` |
-| `docker` / `ssh` in `[sandbox.host]` | move to `[sandbox.agent]` — the shared base reaches the shell sandbox too |
-| `sandbox.host` | `sandbox.shared` |
-| `sandbox.agent.host` | `sandbox.agent` (keys move up one level) |
-| `sandbox.command.host` | `sandbox.shell` |
-| `sandbox.command.network.allow_domains` | `sandbox.shell.allow_domains` |
-| `sandbox.command.allow` / `.drop` | `sandbox.agent.allow_commands` / `.drop_commands` |
-| `taskgate` capability | removed — grant `~/.local/state/taskgate` with a raw `read` if still needed |
-| `agent-sandbox sandbox up/down/prune` | removed — `agent-sandbox claude` manages the broker automatically |
-
-The `deny` routing axis is gone. Patterns that previously forced a host-allowed
-command into the sandbox have two options now: leave them out of `allow` (so
-they default to the sandbox), or add them to `drop` to refuse them entirely.
 
 ## Development
 

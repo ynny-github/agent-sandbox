@@ -43,7 +43,6 @@ AI コーディングエージェント (Claude Code) をサンドボックス�
 - [環境変数 (`--env`)](#環境変数---env)
 - [GitHub MCP](#github-mcp)
 - [safe ラッパー](#safe-ラッパー)
-- [旧設定からの移行](#旧設定からの移行)
 - [開発](#開発)
 - [ライセンス](#ライセンス)
 
@@ -401,47 +400,6 @@ agent-sandbox safe docker-compose up -d
 名前付きボリュームと `tmpfs` マウントは許可されます。それ以外のサブコマンド
 (`up`, `build`, `down`, `ps`, `logs` など) は素通しです。判定ルールは固定の
 組み込みです。
-
-## 旧設定からの移行
-
-設定は再編されました。古いキーは受け付けられず、新しい場所を示すロードエラーに
-なります。
-
-| 旧 | 新 |
-|---|---|
-| `server.output_dir` | `mcp.command_output_dir` |
-| `sandbox.build_context` | 廃止 — コマンドは Docker ではなく nono の下で動く |
-| `sandbox.dockerfile` | 廃止 — コマンドは Docker ではなく nono の下で動く |
-| `sandbox.image` | 廃止 — コマンドは Docker ではなく nono の下で動く |
-| `sandbox.external_network` | 廃止 — コマンドは Docker ではなく nono の下で動く |
-| `sandbox.container` (セクションごと) | 廃止 — コマンドは Docker ではなく nono の下で動く |
-| `sandbox.network.allow_external` | 廃止 — `sandbox.shell.allow_domains` を使う |
-| `sandbox.allow_cidrs` | 廃止 — ネットワーク許可は `sandbox.shell.allow_domains` へ |
-| `sandbox.allow_hosts` | 廃止 — ネットワーク許可は `sandbox.shell.allow_domains` へ |
-| `sandbox.network.allow_cidrs` | 廃止 — `sandbox.shell.allow_domains` に置き換え |
-| `sandbox.network.allow_hosts` | 廃止 — `sandbox.shell.allow_domains` に置き換え |
-| `[allow_patterns] patterns` | `sandbox.agent.allow_commands` |
-| `[drop_patterns] patterns` | `sandbox.agent.drop_commands` |
-| `[deny_patterns] patterns` | 廃止 — 破壊的なエントリは `sandbox.agent.drop_commands` へ移す |
-| `[container] env_passthrough` | `[sandbox.shell]` の `allow_env` |
-| `sandbox.container.env_passthrough` | `[sandbox.shell]` の `allow_env` |
-| `[nono] profile` | 廃止 — プロファイルは `[sandbox.shared]` / `[sandbox.agent]` で設定 |
-| `sandbox.network` (セクションごと) | `sandbox.shell.allow_domains` |
-| `sandbox.network.allow_domains` | `sandbox.shell.allow_domains` |
-| `sandbox.command.env_passthrough` | `[sandbox.shell]` の `allow_env` |
-| `[sandbox.host]` の `docker` / `ssh` | `[sandbox.agent]` へ移す — 共通ベースはシェルサンドボックスにも届くため |
-| `sandbox.host` | `sandbox.shared` |
-| `sandbox.agent.host` | `sandbox.agent` (キーが 1 階層上がる) |
-| `sandbox.command.host` | `sandbox.shell` |
-| `sandbox.command.network.allow_domains` | `sandbox.shell.allow_domains` |
-| `sandbox.command.allow` / `.drop` | `sandbox.agent.allow_commands` / `.drop_commands` |
-| `taskgate` capability | 廃止 — 必要なら `~/.local/state/taskgate` を生の `read` で許可する |
-| `agent-sandbox sandbox up/down/prune` | 廃止 — `agent-sandbox claude` がブローカーを自動管理する |
-
-`deny` というルーティング軸はなくなりました。以前ホスト許可されたコマンドを
-サンドボックスへ押し戻すために使っていたパターンには、2 つの選択肢があります:
-`allow` から外す (既定でサンドボックス行きになる) か、完全に拒否したいなら `drop`
-に加えるかです。
 
 ## 開発
 

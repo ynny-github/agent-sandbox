@@ -25,12 +25,12 @@ func TestE2E(t *testing.T) {
 }
 
 var _ = BeforeSuite(func() {
-	// The module lives at the repo root; the main package is under
-	// agent-sandbox/. This test package sits at tests/e2e, so the source dir is
-	// two levels up plus agent-sandbox.
+	// The module and the main package both live at the repo root; only the
+	// implementation sits under agent-sandbox/. This test package is at
+	// tests/e2e, so the source dir is two levels up.
 	wd, err := os.Getwd()
 	Expect(err).NotTo(HaveOccurred())
-	sourceDir, err := filepath.Abs(filepath.Join(wd, "..", "..", "agent-sandbox"))
+	sourceDir, err := filepath.Abs(filepath.Join(wd, "..", ".."))
 	Expect(err).NotTo(HaveOccurred())
 
 	tmpDir, err := os.MkdirTemp("", "agent-sandbox-e2e")

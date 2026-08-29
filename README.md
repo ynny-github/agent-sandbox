@@ -57,7 +57,7 @@ Run `agent-sandbox doctor` to verify.
 ## Install
 
 ```bash
-go install github.com/ynny-github/agent-sandbox/agent-sandbox@latest
+go install github.com/ynny-github/agent-sandbox@latest
 ```
 
 Or with [mise](https://mise.jdx.dev/):
@@ -65,7 +65,7 @@ Or with [mise](https://mise.jdx.dev/):
 ```toml
 # .mise.toml
 [tools]
-"go:github.com/ynny-github/agent-sandbox/agent-sandbox" = "latest"
+"go:github.com/ynny-github/agent-sandbox" = "latest"
 ```
 
 ## Quick start

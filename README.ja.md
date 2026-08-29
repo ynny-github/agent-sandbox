@@ -57,7 +57,7 @@ AI コーディングエージェント (Claude Code) をサンドボックス�
 ## インストール
 
 ```bash
-go install github.com/ynny-github/agent-sandbox/agent-sandbox@latest
+go install github.com/ynny-github/agent-sandbox@latest
 ```
 
 [mise](https://mise.jdx.dev/) を使う場合:
@@ -65,7 +65,7 @@ go install github.com/ynny-github/agent-sandbox/agent-sandbox@latest
 ```toml
 # .mise.toml
 [tools]
-"go:github.com/ynny-github/agent-sandbox/agent-sandbox" = "latest"
+"go:github.com/ynny-github/agent-sandbox" = "latest"
 ```
 
 ## クイックスタート

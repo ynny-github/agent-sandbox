@@ -20,5 +20,5 @@ description = "Build agent-sandbox into bin/ so this project runs the working tr
 # revision, and git needs configuration the shell sandbox does not grant — the
 # task would only work when run outside it. A dev build gains nothing from the
 # stamp, so the dependency is not worth carrying.
-run = "go build -buildvcs=false -o bin/agent-sandbox ./agent-sandbox"
+run = "go build -buildvcs=false -o bin/agent-sandbox ."
 

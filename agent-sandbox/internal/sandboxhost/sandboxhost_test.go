@@ -46,7 +46,7 @@ func TestResolve_Parity(t *testing.T) {
 	want := map[string]any{
 		"extends": "claude",
 		"meta":    map[string]any{"name": "custom claude"},
-		"groups":  map[string]any{"include": []any{"go_runtime", "python_runtime"}},
+		"groups":  map[string]any{"include": []any{"go_runtime", "nix_runtime", "python_runtime"}},
 		"filesystem": map[string]any{
 			"allow": []any{
 				"$XDG_CACHE_HOME/go-build", "$XDG_CACHE_HOME/pip",
@@ -89,8 +89,13 @@ func TestResolve_BaselineOnlyWhenEmpty(t *testing.T) {
 	if !reflect.DeepEqual(fs["allow_file"], []any{"/dev/null"}) {
 		t.Errorf("baseline allow_file = %v", fs["allow_file"])
 	}
-	if m["extends"] != "claude" || m["groups"] != nil {
-		t.Errorf("expected extends=claude and no groups; got %#v", m)
+	if m["extends"] != "claude" {
+		t.Errorf("expected extends=claude; got %#v", m)
+	}
+	// nix_runtime is baseline, so "no capabilities" is not "no groups".
+	groups := toStrings(m["groups"].(map[string]any)["include"])
+	if !slices.Equal(groups, []string{"nix_runtime"}) {
+		t.Errorf("baseline groups = %v, want [nix_runtime]", groups)
 	}
 }
 
@@ -106,8 +111,8 @@ func TestResolve_RuntimeGroups(t *testing.T) {
 		Capabilities: []string{"node", "rust"},
 	}, "claude"))
 	groups := m["groups"].(map[string]any)["include"].([]any)
-	if !reflect.DeepEqual(groups, []any{"node_runtime", "rust_runtime"}) {
-		t.Errorf("groups = %v, want [node_runtime rust_runtime]", groups)
+	if !reflect.DeepEqual(groups, []any{"nix_runtime", "node_runtime", "rust_runtime"}) {
+		t.Errorf("groups = %v, want [nix_runtime node_runtime rust_runtime]", groups)
 	}
 }
 
@@ -369,6 +374,29 @@ func withOS(t *testing.T, goos string) {
 	prev := hostOS
 	hostOS = goos
 	t.Cleanup(func() { hostOS = prev })
+}
+
+// nix_runtime is baseline rather than a capability. On a NixOS host every
+// executable lives under /nix/store, reached through the /run/current-system/sw
+// symlink farm, and nono's base profile grants that tree read but not execute —
+// so without it no brokered command starts at all, and the failure is a silent
+// exit 127. That is not something an operator should have to discover and patch
+// per project. On a machine without Nix the group's paths simply do not exist,
+// the same way python_runtime names a ~/.pyenv most hosts lack.
+func TestBaselineGroups_ReachBothProfiles(t *testing.T) {
+	agent := profileMap(t, resolve(t, config.HostConfig{}, "claude"))
+	if got := toStrings(agent["groups"].(map[string]any)["include"]); !slices.Contains(got, "nix_runtime") {
+		t.Errorf("agent groups = %v, want to contain nix_runtime", got)
+	}
+
+	r, err := ResolveShell(&config.Config{}, "/work/project")
+	if err != nil {
+		t.Fatalf("ResolveShell() error = %v", err)
+	}
+	shell := profileMap(t, r)
+	if got := toStrings(shell["groups"].(map[string]any)["include"]); !slices.Contains(got, "nix_runtime") {
+		t.Errorf("shell groups = %v, want to contain nix_runtime", got)
+	}
 }
 
 func hostCfg(h config.HostConfig) *config.Config {

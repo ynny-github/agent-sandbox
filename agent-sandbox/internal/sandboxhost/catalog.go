@@ -261,6 +261,22 @@ var agentBases = map[string]agentBase{
 var baselineEnv = []string{"PATH", "HOME", "TERM", "LANG", "LC_ALL", "USER"}
 var baselineAllowFile = []string{"/dev/null"}
 
+// baselineGroups are nono groups every profile includes, capability list empty
+// or not.
+//
+// nix_runtime is here rather than in the catalog because on a NixOS host it is
+// not a toolchain, it is the precondition for running anything: every
+// executable lives under /nix/store, reached through the /run/current-system/sw
+// symlink farm, and there is no /bin/ls to fall back on. nono's base profile
+// grants that tree read but not execute, so without this a brokered command
+// cannot start at all — nono resolves the binary, execve is refused, and the
+// command exits 127 with no output to explain itself. That is not a failure an
+// operator should have to diagnose and patch per project.
+//
+// On a host without Nix the group's paths simply do not exist, the same way
+// python_runtime names a ~/.pyenv most machines lack.
+var baselineGroups = []string{"nix_runtime"}
+
 // agentOnlyEnv is granted only to the launched agent's own profile (Resolve),
 // never to the per-command shell profile (ResolveShell). See baselineEnv's
 // comment for why "AGENT_SANDBOX_BROKER_SOCKET" belongs here instead of

@@ -100,6 +100,7 @@ type sideOptions struct {
 func expand(sections []config.HostConfig, opts sideOptions) (*Resolved, error) {
 	var groups, read, bypass, allowFile, allowVars, allow, readFile, domains, denyPath, deny []string
 
+	groups = append(groups, baselineGroups...)
 	allowVars = append(allowVars, baselineEnv...)
 	allowVars = append(allowVars, opts.extraEnv...)
 	allowFile = append(allowFile, baselineAllowFile...)

@@ -222,7 +222,12 @@ All three take the same six host-access fields:
 | `allow_env` | Environment variable names |
 
 `PATH`, `HOME`, `TERM`, `LANG`, `LC_ALL`, `USER` and `/dev/null` are always
-granted from a built-in baseline.
+granted from a built-in baseline, as is nono's `nix_runtime` group. That group
+is baseline rather than a capability because on a NixOS host it is not a
+toolchain but the precondition for running anything: every executable lives
+under `/nix/store`, nono's base profile grants that tree read but not execute,
+and a sandboxed command therefore exits 127 with no output to explain itself.
+On a host without Nix its paths simply do not exist.
 
 `NONO_*` is rejected in every `allow_env` list — those variables reconfigure the
 sandbox itself.

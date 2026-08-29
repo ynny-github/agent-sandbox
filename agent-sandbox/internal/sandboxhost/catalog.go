@@ -1,9 +1,23 @@
 package sandboxhost
 
 import (
+	"os"
 	"runtime"
 	"slices"
 )
+
+// hostHome is the home directory a deny path's leading "~" expands against. A
+// variable rather than a direct lookup only so tests can pin it; nothing
+// outside this package sets it. Empty when the home directory cannot be
+// resolved, which expand reports rather than emitting a rule that would quietly
+// match nothing.
+var hostHome = func() string {
+	h, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return h
+}()
 
 // hostOS is the platform the catalog resolves perOSAllow against. It is a
 // variable rather than a direct runtime.GOOS read only so tests can assert both
@@ -52,9 +66,18 @@ type capability struct {
 	// the section a capability is written in cannot express the difference when
 	// the grant comes from a group.
 	denyPath []string
-	// deny is a Claude permission rule. It constrains the agent's own file
-	// tools and nothing else — not a brokered command, not a subprocess.
-	deny []string
+	// denyRead and denyEdit are paths Claude's own file tools are refused. They
+	// constrain nothing else — not a brokered command, not a subprocess.
+	//
+	// Paths, not finished rule strings, because the rule syntax has a trap:
+	// Claude Code reads the path as a gitignore pattern where a single leading
+	// slash anchors at the *settings source*, not the filesystem root. A rule
+	// written "Read(/etc/bashrc)" therefore matches nothing at all, silently.
+	// Only "//" is absolute. Rendering the prefix in one place means no bundle
+	// can get it wrong, and "~" expands here rather than being left for a
+	// matcher that may or may not do it.
+	denyRead []string
+	denyEdit []string
 }
 
 // catalog is the fixed, built-in set of capabilities. Unknown names are errors.
@@ -127,10 +150,7 @@ var catalog = map[string]capability{
 		// `cargo publish` still works — but Claude's own Read/Edit are blocked,
 		// the way docker's and ssh's are.
 		denyPath: []string{"~/.cargo/credentials.toml", "~/.cargo/credentials"},
-		deny: []string{
-			"Read(~/.cargo/credentials.toml)",
-			"Read(~/.cargo/credentials)",
-		},
+		denyRead: []string{"~/.cargo/credentials.toml", "~/.cargo/credentials"},
 		// index.crates.io is cargo's sparse index (the default protocol);
 		// static.crates.io serves the .crate files.
 		domains: []string{"crates.io", "index.crates.io", "static.crates.io"},
@@ -185,16 +205,14 @@ var catalog = map[string]capability{
 			"production.cloudflare.docker.com",
 			"registry-1.docker.io",
 		},
-		deny: []string{"Read(~/.docker/**)"},
+		denyRead: []string{"~/.docker/**"},
 	},
 	"ssh": {
 		read:      []string{"~/.ssh"},
 		bypass:    []string{"~/.ssh"},
 		allowFile: []string{"~/.ssh/known_hosts"},
-		deny: []string{
-			"Read(~/.ssh/**)",
-			"Edit(~/.ssh/known_hosts)",
-		},
+		denyRead: []string{"~/.ssh/**"},
+		denyEdit: []string{"~/.ssh/known_hosts"},
 	},
 	"mise": {
 		read:      []string{"~/.local/share/mise", "~/.config/mise"},
@@ -209,10 +227,10 @@ var catalog = map[string]capability{
 	"bashrc": {
 		readFile: []string{"~/.bashrc", "/etc/bashrc", "/etc/bash.bashrc"},
 		bypass:   []string{"~/.bashrc"},
-		deny: []string{
-			"Read(~/.bashrc)",
-			"Read(/etc/bashrc)",
-			"Read(/etc/bash.bashrc)",
+		denyRead: []string{
+			"~/.bashrc",
+			"/etc/bashrc",
+			"/etc/bash.bashrc",
 		},
 	},
 }

@@ -124,7 +124,15 @@ func expand(sections []config.HostConfig, opts sideOptions) (*Resolved, error) {
 			allowFile = append(allowFile, c.allowFile...)
 			allowVars = append(allowVars, c.allowVars...)
 			domains = append(domains, c.domains...)
-			deny = append(deny, c.deny...)
+			for tool, paths := range map[string][]string{"Read": c.denyRead, "Edit": c.denyEdit} {
+				for _, p := range paths {
+					rule, rerr := denyRule(tool, p)
+					if rerr != nil {
+						return nil, fmt.Errorf("sandboxhost: capability %q: %w", name, rerr)
+					}
+					deny = append(deny, rule)
+				}
+			}
 		}
 
 		// Raw grants (no bypass). Guard protected paths on the read/allow lists.
@@ -168,6 +176,28 @@ func expand(sections []config.HostConfig, opts sideOptions) (*Resolved, error) {
 		r.profile.Groups = &profileGroups{Include: g}
 	}
 	return r, nil
+}
+
+// denyRule renders one Claude Code permission-deny rule for a catalog path.
+//
+// The "//" prefix is what makes the pattern absolute. Claude Code reads the
+// path as a gitignore pattern in which a single leading slash anchors at the
+// settings source, so "Read(/etc/bashrc)" resolves under the working directory
+// and matches nothing — silently, which is the worst way for a deny rule to
+// fail. "~" is expanded here for the same reason: a rule is only worth emitting
+// if it names the file the tool will actually be asked for.
+func denyRule(tool, path string) (string, error) {
+	switch {
+	case strings.HasPrefix(path, "~/"):
+		if hostHome == "" {
+			return "", fmt.Errorf("cannot expand %q: home directory is unknown", path)
+		}
+		path = hostHome + path[1:]
+	case strings.HasPrefix(path, "/"):
+	default:
+		return "", fmt.Errorf("deny path %q must start with ~/ or /", path)
+	}
+	return tool + "(/" + path + ")", nil
 }
 
 // denyPathFor returns the nono filesystem denials for a side, or nil when that

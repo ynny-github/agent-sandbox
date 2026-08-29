@@ -68,11 +68,17 @@ func TestResolve_Parity(t *testing.T) {
 	}
 }
 
+// Claude Code reads a permission rule's path as gitignore-style, where a single
+// leading slash anchors at the settings source rather than the filesystem root
+// — so "Read(/etc/bashrc)" silently matches nothing, and only the "//" prefix
+// is absolute. The catalog names paths and the rendering adds the prefix, so no
+// bundle can get that wrong on its own.
 func TestResolve_DenyRulesFromCapabilities(t *testing.T) {
+	withHome(t, "/home/test")
 	r := resolve(t, config.HostConfig{Capabilities: []string{"ssh", "docker"}}, "claude")
 	want := []string{
-		"Edit(~/.ssh/known_hosts)",
-		"Read(~/.docker/**)", "Read(~/.ssh/**)",
+		"Edit(//home/test/.ssh/known_hosts)",
+		"Read(//home/test/.docker/**)", "Read(//home/test/.ssh/**)",
 	}
 	if !reflect.DeepEqual(r.DenyRules, want) {
 		t.Errorf("DenyRules = %v\nwant %v", r.DenyRules, want)
@@ -148,6 +154,7 @@ func TestResolve_RawGrantsMergeNoBypass(t *testing.T) {
 }
 
 func TestResolve_BashrcCapability(t *testing.T) {
+	withHome(t, "/home/test")
 	r := resolve(t, config.HostConfig{Capabilities: []string{"bashrc"}}, "claude")
 
 	fs := profileMap(t, r)["filesystem"].(map[string]any)
@@ -159,7 +166,7 @@ func TestResolve_BashrcCapability(t *testing.T) {
 	}
 
 	want := []string{
-		"Read(/etc/bash.bashrc)", "Read(/etc/bashrc)", "Read(~/.bashrc)",
+		"Read(//etc/bash.bashrc)", "Read(//etc/bashrc)", "Read(//home/test/.bashrc)",
 	}
 	if !reflect.DeepEqual(r.DenyRules, want) {
 		t.Errorf("DenyRules = %v\nwant %v", r.DenyRules, want)
@@ -335,8 +342,12 @@ func TestResolve_RustKeepsCargoCredentialsForTheAgent(t *testing.T) {
 // ssh block theirs. This is the agent side's only protection: it constrains
 // Read/Edit, not a command.
 func TestResolve_RustDeniesCargoCredentialsToClaudeTools(t *testing.T) {
+	withHome(t, "/home/test")
 	r := resolve(t, config.HostConfig{Capabilities: []string{"rust"}}, "claude")
-	want := []string{"Read(~/.cargo/credentials)", "Read(~/.cargo/credentials.toml)"}
+	want := []string{
+		"Read(//home/test/.cargo/credentials)",
+		"Read(//home/test/.cargo/credentials.toml)",
+	}
 	if !slices.Equal(r.DenyRules, want) {
 		t.Errorf("DenyRules = %v, want %v", r.DenyRules, want)
 	}
@@ -365,6 +376,15 @@ func TestResolveShell_RustDeniesCargoCredentials(t *testing.T) {
 	if len(r.DenyRules) != 0 {
 		t.Errorf("DenyRules = %v, want none on the shell profile", r.DenyRules)
 	}
+}
+
+// withHome pins the home directory deny paths expand against, so the expected
+// rules can be written out rather than rebuilt from the same call the code uses.
+func withHome(t *testing.T, home string) {
+	t.Helper()
+	prev := hostHome
+	hostHome = home
+	t.Cleanup(func() { hostHome = prev })
 }
 
 // withOS pins the platform the catalog resolves against, so a test can assert

@@ -179,8 +179,8 @@ func TestResolve_BashrcCapability(t *testing.T) {
 func TestResolve_CapabilityGrantsReadWriteDirectory(t *testing.T) {
 	m := profileMap(t, resolve(t, config.HostConfig{Capabilities: []string{"dart"}}, "claude"))
 	fs := m["filesystem"].(map[string]any)
-	if !reflect.DeepEqual(fs["allow"], []any{"~/.dart", "~/.pub-cache"}) {
-		t.Errorf("allow = %v, want [~/.dart ~/.pub-cache]", fs["allow"])
+	if !reflect.DeepEqual(fs["allow"], []any{"~/.dart", "~/.dart-tool", "~/.pub-cache"}) {
+		t.Errorf("allow = %v, want [~/.dart ~/.dart-tool ~/.pub-cache]", fs["allow"])
 	}
 	env := toStrings(m["environment"].(map[string]any)["allow_vars"])
 	for _, want := range []string{"PUB_CACHE", "PUB_HOSTED_URL"} {
@@ -190,20 +190,25 @@ func TestResolve_CapabilityGrantsReadWriteDirectory(t *testing.T) {
 	}
 }
 
-// The dart capability stops short of ~/.dart-tool, which is where pub writes
-// pub-tokens.json — the credentials for private hosted repositories. Public
-// dependency resolution never needs it, so it belongs with docker and ssh
-// among the grants a config has to ask for deliberately, not in the bundle
-// every Dart project declares.
-func TestResolve_DartWithholdsPubTokens(t *testing.T) {
-	m := profileMap(t, resolve(t, config.HostConfig{Capabilities: []string{"dart"}}, "claude"))
-	fs := m["filesystem"].(map[string]any)
-	for _, list := range []string{"allow", "read", "allow_file", "read_file"} {
-		for _, p := range toStrings(fs[list]) {
-			if strings.HasPrefix(p, "~/.dart-tool") {
-				t.Errorf("%s grants %q; pub credentials must not ride along with the bundle", list, p)
-			}
-		}
+// ~/.dart-tool holds pub-tokens.json, the credentials for private hosted
+// repositories, and it is also where dartdev's analytics writes its config on
+// startup — so withholding it does not protect the token, it stops dart from
+// running at all:
+//
+//	PathAccessException: Creation failed, path = '/home/yn/.dart-tool'
+//
+// The directory is granted and the token is denied to Claude's own file tools,
+// the arrangement rust ended up with for the same reason: a profile-level
+// carve-out inside a granted directory is not enforceable on Linux.
+func TestResolve_DartGrantsDartToolAndDeniesTheTokenToClaude(t *testing.T) {
+	withHome(t, "/home/test")
+	r := resolve(t, config.HostConfig{Capabilities: []string{"dart"}}, "claude")
+	if got := toStrings(profileMap(t, r)["filesystem"].(map[string]any)["allow"]); !slices.Contains(got, "~/.dart-tool") {
+		t.Errorf("allow = %v, want to contain ~/.dart-tool", got)
+	}
+	want := []string{"Read(//home/test/.dart-tool/pub-tokens.json)"}
+	if !slices.Equal(r.DenyRules, want) {
+		t.Errorf("DenyRules = %v, want %v", r.DenyRules, want)
 	}
 }
 

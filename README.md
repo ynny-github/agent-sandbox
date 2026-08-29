@@ -255,7 +255,7 @@ and — for credential bundles — the matching Claude permission denies.
 | `python` | Python runtime group, plus the uv and pip caches and `~/.local/share/uv/python` (read+write) | `pypi.org`, `files.pythonhosted.org` |
 | `node` | Node runtime group, plus `~/.npm` and the pnpm store (read+write) | `registry.npmjs.org` |
 | `rust` | Rust runtime group, plus `~/.cargo/registry` and `~/.cargo/git` (read+write); `~/.cargo/credentials*` hidden from Claude's file tools | `crates.io`, `index.crates.io`, `static.crates.io` |
-| `dart` | `~/.pub-cache`, `~/.dart` (read+write), `PUB_CACHE` / `PUB_HOSTED_URL` env | `pub.dev`, `storage.googleapis.com` |
+| `dart` | `~/.pub-cache`, `~/.dart`, `~/.dart-tool` (read+write), `PUB_CACHE` / `PUB_HOSTED_URL` env; `~/.dart-tool/pub-tokens.json` hidden from Claude's file tools | `pub.dev`, `storage.googleapis.com` |
 | `flutter` | `~/.config/flutter`, `~/.local/share/mise/http-tarballs` (read+write), `FLUTTER_ROOT` / `FLUTTER_STORAGE_BASE_URL` env | `storage.googleapis.com` |
 | `docker` | `~/.docker`, `~/.orbstack` (read-only) | `auth.docker.io`, `index.docker.io`, `registry-1.docker.io`, `production.cloudflare.docker.com` |
 | `ssh` | `~/.ssh` (read-only), `~/.ssh/known_hosts` (read+write) | — |
@@ -304,8 +304,16 @@ which is why it rides on `flutter` rather than on `mise`, so only the projects
 that need it open it. A git checkout of the SDK is not covered at all: no fixed
 path is right for everyone, so wherever it lives needs a raw `allow`.
 
-`dart` stops short of `~/.dart-tool`, where pub keeps the credentials for
-private hosted repositories.
+`dart` grants `~/.dart-tool` even though pub keeps its private-repository
+credentials there, because dartdev's analytics writes to it on startup and dart
+does not run without it. The token is denied to Claude's own file tools instead
+— the same arrangement `rust` uses, for the same reason: a carve-out inside a
+granted directory is not enforceable.
+
+`flutter doctor` does not work in the sandbox. It lists `$HOME` looking for
+Android and browser toolchains, and granting that would let any sandboxed
+command enumerate the home directory. `flutter --version`, `pub get` and builds
+are unaffected.
 
 > **`docker` and `ssh` expose host credentials.** They are otherwise ordinary
 > capabilities — they apply to whichever side declares them. Put them in

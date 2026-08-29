@@ -254,7 +254,7 @@ exec では通さないため、これが無いとサンドボックス内のコ
 | `python` | Python ランタイムグループ、および uv / pip のキャッシュと `~/.local/share/uv/python` (読み書き) | `pypi.org`, `files.pythonhosted.org` |
 | `node` | Node ランタイムグループ、および `~/.npm` と pnpm ストア (読み書き) | `registry.npmjs.org` |
 | `rust` | Rust ランタイムグループ、および `~/.cargo/registry`, `~/.cargo/git` (読み書き)。`~/.cargo/credentials*` は Claude のファイルツールから隠す | `crates.io`, `index.crates.io`, `static.crates.io` |
-| `dart` | `~/.pub-cache`, `~/.dart` (読み書き)、`PUB_CACHE` / `PUB_HOSTED_URL` 環境変数 | `pub.dev`, `storage.googleapis.com` |
+| `dart` | `~/.pub-cache`, `~/.dart`, `~/.dart-tool` (読み書き)、`PUB_CACHE` / `PUB_HOSTED_URL` 環境変数。`~/.dart-tool/pub-tokens.json` は Claude のファイルツールから隠す | `pub.dev`, `storage.googleapis.com` |
 | `flutter` | `~/.config/flutter`, `~/.local/share/mise/http-tarballs` (読み書き)、`FLUTTER_ROOT` / `FLUTTER_STORAGE_BASE_URL` 環境変数 | `storage.googleapis.com` |
 | `docker` | `~/.docker`, `~/.orbstack` (読み取り専用) | `auth.docker.io`, `index.docker.io`, `registry-1.docker.io`, `production.cloudflare.docker.com` |
 | `ssh` | `~/.ssh` (読み取り専用)、`~/.ssh/known_hosts` (読み書き) | — |
@@ -301,8 +301,15 @@ deny ルールのパスは絶対形です。`Read(/etc/bashrc)` ではなく `Re
 カバーされません。万人に正しい固定パスが存在しないので、設置場所を生の `allow` で
 渡してください。
 
-`dart` は `~/.dart-tool` を含みません。private な hosted リポジトリの認証情報が
-置かれる場所だからです。
+`dart` は private リポジトリの認証情報が置かれる `~/.dart-tool` も付与します。
+dartdev の analytics が起動時にここへ書き込むため、これが無いと dart 自体が動かない
+からです。トークンは代わりに Claude 自身のファイルツールから遮断します。`rust` と同じ
+形で、理由も同じです — 付与されたディレクトリ内の切り出しは強制できません。
+
+`flutter doctor` はサンドボックスでは動きません。Android やブラウザのツールチェーンを
+探すために `$HOME` を列挙するためで、それを許すとサンドボックス内のコマンドがホーム
+ディレクトリを列挙できることになります。`flutter --version` や `pub get`、ビルドには
+影響しません。
 
 > **`docker` と `ssh` はホストの認証情報を露出します。** とはいえ扱いは他の
 > capability と同じで、宣言した側にだけ適用されます。サンドボックス内のコマンドが

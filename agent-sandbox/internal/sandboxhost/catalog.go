@@ -149,14 +149,23 @@ var catalog = map[string]capability{
 	// pub-related stays in one place instead of being restated here and drifting.
 	//
 	// Neither has a nono group behind it, so both spell out their writable
-	// state. Deliberately absent: ~/.dart-tool, where pub keeps
-	// pub-tokens.json — the credentials for private hosted repositories. Public
-	// dependency resolution never touches it, so it belongs with docker and ssh
-	// among the grants a config asks for on purpose.
+	// state.
 	"dart": {
 		// ~/.pub-cache holds the downloaded packages and the binaries of
 		// globally activated ones; ~/.dart is dartdev's own settings file.
-		allow:     []string{"~/.pub-cache", "~/.dart"},
+		//
+		// ~/.dart-tool also holds pub-tokens.json, the credentials for private
+		// hosted repositories, and was left out at first for that reason. It
+		// cannot be: dartdev's analytics writes its config there on startup, so
+		// without it dart does not run at all —
+		//
+		//	PathAccessException: Creation failed, path = '~/.dart-tool'
+		//
+		// The token is denied to Claude's own file tools instead. A carve-out
+		// inside a granted directory is not available: Landlock has no
+		// deny-overlap on Linux, and nono refuses to start rather than pretend.
+		allow:     []string{"~/.pub-cache", "~/.dart", "~/.dart-tool"},
+		denyRead:  []string{"~/.dart-tool/pub-tokens.json"},
 		allowVars: []string{"PUB_CACHE", "PUB_HOSTED_URL"},
 		// pub.dev resolves a package; the archives are served from Google Cloud
 		// Storage, so the index alone cannot install.

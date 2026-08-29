@@ -238,7 +238,7 @@ command_output_dir = "/tmp/mcp-output"  # mcp モードでは必須。hook モ�
 
 | capability | 許可する対象 | シェルサンドボックスに追加されるドメイン |
 |---|---|---|
-| `go` | Go ランタイムグループ | `proxy.golang.org`, `sum.golang.org` |
+| `go` | Go ランタイムグループ、および `~/.cache/go-build`, `~/go/pkg/mod` (読み書き) | `proxy.golang.org`, `sum.golang.org` |
 | `python` | Python ランタイムグループ | `pypi.org`, `files.pythonhosted.org` |
 | `node` | Node ランタイムグループ | `registry.npmjs.org` |
 | `rust` | Rust ランタイムグループ | `crates.io`, `index.crates.io`, `static.crates.io` |
@@ -251,6 +251,12 @@ command_output_dir = "/tmp/mcp-output"  # mcp モードでは必須。hook モ�
 
 各ツールチェーンが自分のレジストリを持ち込むため、Go モジュールプロキシや PyPI を
 設定側で書き直す必要はありません。
+
+nono のランタイムグループは読み取り専用なので、通常のビルドでツールチェーンが書き込む
+場所は capability 側が自分で宣言します。`go` が2つのキャッシュを持つのはこのためで、
+これが無いと `go build` は `GOCACHE` で失敗します。書き込みは `~/go/pkg/mod` まで
+です。`go install` はホストの PATH 上に実行ファイルを置く操作なので、生の `allow`
+のままにしてあります。
 
 `flutter` は Dart の**差分**であって上位集合ではありません。Flutter プロジェクトは
 `["dart", "flutter"]` の両方を宣言します。flutter は初回実行で自分の `bin/cache` を

@@ -40,7 +40,16 @@ var catalog = map[string]capability{
 	// Listing a domain the preset already grants is harmless — the two are
 	// unioned.
 	"go": {
-		groups:  []string{"go_runtime"},
+		groups: []string{"go_runtime"},
+		// go_runtime hands out ~/go read-only and does not mention the build
+		// cache at all, so the group alone cannot compile: the go command fails
+		// on GOCACHE before it reaches a package. Both caches are writes the
+		// toolchain makes on an ordinary build, so they belong to the bundle.
+		//
+		// The write stops at the module cache. ~/go/bin is where `go install`
+		// puts an executable on the host's PATH; that is a deliberate act, not
+		// something a project should get for declaring "go".
+		allow:   []string{"~/.cache/go-build", "~/go/pkg/mod"},
 		domains: []string{"proxy.golang.org", "sum.golang.org"},
 	},
 	"python": {

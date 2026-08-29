@@ -238,7 +238,7 @@ and — for credential bundles — the matching Claude permission denies.
 
 | Capability | Grants | Domains added to the shell sandbox |
 |---|---|---|
-| `go` | Go runtime group | `proxy.golang.org`, `sum.golang.org` |
+| `go` | Go runtime group, plus `~/.cache/go-build` and `~/go/pkg/mod` (read+write) | `proxy.golang.org`, `sum.golang.org` |
 | `python` | Python runtime group | `pypi.org`, `files.pythonhosted.org` |
 | `node` | Node runtime group | `registry.npmjs.org` |
 | `rust` | Rust runtime group | `crates.io`, `index.crates.io`, `static.crates.io` |
@@ -251,6 +251,11 @@ and — for credential bundles — the matching Claude permission denies.
 
 Each toolchain brings its own registry, so a config never has to restate the Go
 module proxy or PyPI.
+
+The nono runtime groups are read-only, so where a toolchain writes on an
+ordinary build the bundle says so itself — `go` adds its two caches, because
+`go build` fails on `GOCACHE` otherwise. It stops at `~/go/pkg/mod`: `go
+install` writes an executable onto the host's PATH, which stays a raw `allow`.
 
 `flutter` is the Dart *delta*, not a superset: a Flutter project declares
 `["dart", "flutter"]`. It has to make the SDK writable, because flutter

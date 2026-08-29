@@ -47,6 +47,7 @@ func TestResolve_Parity(t *testing.T) {
 		"meta":    map[string]any{"name": "custom claude"},
 		"groups":  map[string]any{"include": []any{"go_runtime", "python_runtime"}},
 		"filesystem": map[string]any{
+			"allow": []any{"~/.cache/go-build", "~/go/pkg/mod"},
 			"read": []any{
 				"~/.config/mise", "~/.docker", "~/.local/share/mise",
 				"~/.orbstack", "~/.ssh",
@@ -235,6 +236,35 @@ func TestResolve_MiseAloneStaysReadOnly(t *testing.T) {
 	}
 	if got := toStrings(fs["read"]); !slices.Contains(got, "~/.local/share/mise") {
 		t.Errorf("read = %v, want the mise tree read-only", got)
+	}
+}
+
+// nono's go_runtime group hands out ~/go read-only and does not mention the
+// build cache at all, so the bundle on its own cannot compile anything: the go
+// command fails with permission denied on GOCACHE before it reaches a package.
+// The two caches it writes to are part of what "go" means, not something every
+// config has to rediscover.
+func TestResolve_GoGrantsWritableCaches(t *testing.T) {
+	m := profileMap(t, resolve(t, config.HostConfig{Capabilities: []string{"go"}}, "claude"))
+	fs := m["filesystem"].(map[string]any)
+	if !reflect.DeepEqual(fs["allow"], []any{"~/.cache/go-build", "~/go/pkg/mod"}) {
+		t.Errorf("allow = %v, want [~/.cache/go-build ~/go/pkg/mod]", fs["allow"])
+	}
+	if got := toStrings(fs["read"]); len(got) != 0 {
+		t.Errorf("read = %v, want ~/go to keep coming from go_runtime", got)
+	}
+}
+
+// The write stops at the module cache. ~/go/bin is where `go install` puts an
+// executable on the host's PATH, which is a deliberate act rather than
+// something a project gets by declaring the bundle.
+func TestResolve_GoWithholdsBinDir(t *testing.T) {
+	m := profileMap(t, resolve(t, config.HostConfig{Capabilities: []string{"go"}}, "claude"))
+	got := toStrings(m["filesystem"].(map[string]any)["allow"])
+	for _, unwanted := range []string{"~/go", "~/go/bin"} {
+		if slices.Contains(got, unwanted) {
+			t.Errorf("allow = %v, want %s to stay read-only", got, unwanted)
+		}
 	}
 }
 

@@ -39,16 +39,6 @@
   # need toolchains, not keys.
   capabilities = ["docker", "ssh"]
 
-  # Writes no capability covers. The go capability's runtime group does not
-  # bring the build cache, so `go build` / `go test` fail with permission denied
-  # on ~/.cache/go-build; ~/go carries GOPATH and the module cache.
-  #
-  # Here rather than in the shared base because `go *` is host-allowed below,
-  # which runs it under this profile. The router decides per pipeline segment,
-  # so `go test | tail` still runs go on the host — the shell sandbox never
-  # needs these.
-  allow = ["~/.cache/go-build", "~/go"]
-
   # Command routing. allow_commands runs on the host; everything unmatched goes
   # to the shell sandbox.
   #

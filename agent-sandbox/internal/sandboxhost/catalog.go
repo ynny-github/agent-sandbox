@@ -1,6 +1,19 @@
 package sandboxhost
 
-import "slices"
+import (
+	"runtime"
+	"slices"
+)
+
+// hostOS is the platform the catalog resolves perOSAllow against. It is a
+// variable rather than a direct runtime.GOOS read only so tests can assert both
+// branches from one machine; nothing outside this package sets it.
+//
+// Resolving here — instead of emitting nono's `when` predicates — is safe
+// because the profile is always generated on the host that will run under it.
+// `when` exists for hand-written portable profiles and would only add a second
+// dialect to a file agent-sandbox writes fresh at every launch.
+var hostOS = runtime.GOOS
 
 // capability is a named bundle that expands into nono grants (groups, reads,
 // bypass exemptions, allow-files, env vars, network domains) plus the Claude
@@ -17,14 +30,24 @@ type capability struct {
 	// allow is read+write, for a bundle that has no nono group to lean on. The
 	// runtime bundles get their writable caches from *_runtime groups; nono has
 	// no group for dart or flutter, so those say it here instead.
-	allow     []string
-	read      []string
-	readFile  []string
-	bypass    []string
-	allowFile []string
-	allowVars []string
-	domains   []string
-	deny      []string
+	allow []string
+	// perOSAllow is read+write for one platform only, keyed by GOOS. A cache
+	// whose location differs between darwin and linux belongs here rather than
+	// in allow, where granting both would name a directory that does not exist
+	// on the machine generating the profile.
+	perOSAllow map[string][]string
+	read       []string
+	readFile   []string
+	bypass     []string
+	allowFile  []string
+	allowVars  []string
+	domains    []string
+	// denyPath is refused in the nono profile itself, so it holds inside a
+	// sandboxed command. It is the only way a bundle can narrow a group: groups
+	// can be excluded whole but not by path. Distinct from deny below, which is
+	// a Claude permission rule and constrains nothing but the agent's own tools.
+	denyPath []string
+	deny     []string
 }
 
 // catalog is the fixed, built-in set of capabilities. Unknown names are errors.
@@ -39,31 +62,60 @@ var catalog = map[string]capability{
 	// under us must not silently take a toolchain's package fetches with it.
 	// Listing a domain the preset already grants is harmless — the two are
 	// unioned.
+	// Every nono runtime group is read-only, so on its own none of these four
+	// can build anything: the toolchain fails on its own cache before it reaches
+	// a package. Each bundle therefore adds the directories its tool writes to
+	// during an ordinary build, and leaves the read surface — which layouts of
+	// which version managers exist — to the group, where it is curated for us.
+	//
+	// None of them grants the directory that puts an executable on the host's
+	// PATH (~/go/bin, ~/.cargo/bin, uv's tools dir). Installing a binary the
+	// host will later run is a deliberate act; it stays a raw allow.
 	"go": {
 		groups: []string{"go_runtime"},
-		// go_runtime hands out ~/go read-only and does not mention the build
-		// cache at all, so the group alone cannot compile: the go command fails
-		// on GOCACHE before it reaches a package. Both caches are writes the
-		// toolchain makes on an ordinary build, so they belong to the bundle.
-		//
-		// The write stops at the module cache. ~/go/bin is where `go install`
-		// puts an executable on the host's PATH; that is a deliberate act, not
-		// something a project should get for declaring "go".
-		allow:   []string{"~/.cache/go-build", "~/go/pkg/mod"},
+		allow:  []string{"~/go/pkg/mod"},
+		// GOCACHE comes from os.UserCacheDir.
+		perOSAllow: map[string][]string{
+			"linux":  {"$XDG_CACHE_HOME/go-build"},
+			"darwin": {"$HOME/Library/Caches/go-build"},
+		},
 		domains: []string{"proxy.golang.org", "sum.golang.org"},
 	},
 	"python": {
 		groups: []string{"python_runtime"},
+		// uv keeps its cache under XDG on both platforms and its managed
+		// interpreters under ~/.local/share/uv; without the latter a project
+		// whose Python is not installed yet cannot be provisioned.
+		allow: []string{"$XDG_CACHE_HOME/uv", "~/.local/share/uv/python"},
+		// pip, unlike uv, follows the platform cache directory.
+		perOSAllow: map[string][]string{
+			"linux":  {"$XDG_CACHE_HOME/pip"},
+			"darwin": {"$HOME/Library/Caches/pip"},
+		},
 		// pypi.org resolves the package; files.pythonhosted.org serves the
 		// sdists and wheels themselves. The index alone cannot install.
 		domains: []string{"pypi.org", "files.pythonhosted.org"},
 	},
 	"node": {
-		groups:  []string{"node_runtime"},
+		groups: []string{"node_runtime"},
+		// ~/.npm is npm's cache on both platforms; pnpm's store follows XDG on
+		// linux and lives under ~/Library on darwin. Both are read-only in the
+		// group already, which is what makes an install fail rather than warn.
+		allow: []string{"~/.npm", "~/.local/share/pnpm"},
+		perOSAllow: map[string][]string{
+			"darwin": {"~/Library/pnpm"},
+		},
 		domains: []string{"registry.npmjs.org"},
 	},
 	"rust": {
 		groups: []string{"rust_runtime"},
+		// The two caches cargo writes on a build; ~/.cargo itself stays
+		// read-only so ~/.cargo/bin does not become writable with them.
+		allow: []string{"~/.cargo/registry", "~/.cargo/git"},
+		// rust_runtime grants all of ~/.cargo, which is where cargo keeps the
+		// crates.io publish token. The bundle cannot narrow a group, so it
+		// refuses the file outright.
+		denyPath: []string{"~/.cargo/credentials.toml", "~/.cargo/credentials"},
 		// index.crates.io is cargo's sparse index (the default protocol);
 		// static.crates.io serves the .crate files.
 		domains: []string{"crates.io", "index.crates.io", "static.crates.io"},

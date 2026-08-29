@@ -38,6 +38,7 @@ func profileMap(t *testing.T, r *Resolved) map[string]any {
 // sandbox sections and asserts the generated profile, modulo the one
 // intentional delta (no gh).
 func TestResolve_Parity(t *testing.T) {
+	withOS(t, "linux")
 	r := resolve(t, config.HostConfig{
 		Capabilities: []string{"go", "python", "docker", "ssh", "mise"},
 	}, "claude")
@@ -47,7 +48,10 @@ func TestResolve_Parity(t *testing.T) {
 		"meta":    map[string]any{"name": "custom claude"},
 		"groups":  map[string]any{"include": []any{"go_runtime", "python_runtime"}},
 		"filesystem": map[string]any{
-			"allow": []any{"~/.cache/go-build", "~/go/pkg/mod"},
+			"allow": []any{
+				"$XDG_CACHE_HOME/go-build", "$XDG_CACHE_HOME/pip",
+				"$XDG_CACHE_HOME/uv", "~/.local/share/uv/python", "~/go/pkg/mod",
+			},
 			"read": []any{
 				"~/.config/mise", "~/.docker", "~/.local/share/mise",
 				"~/.orbstack", "~/.ssh",
@@ -239,33 +243,97 @@ func TestResolve_MiseAloneStaysReadOnly(t *testing.T) {
 	}
 }
 
-// nono's go_runtime group hands out ~/go read-only and does not mention the
-// build cache at all, so the bundle on its own cannot compile anything: the go
-// command fails with permission denied on GOCACHE before it reaches a package.
-// The two caches it writes to are part of what "go" means, not something every
-// config has to rediscover.
-func TestResolve_GoGrantsWritableCaches(t *testing.T) {
-	m := profileMap(t, resolve(t, config.HostConfig{Capabilities: []string{"go"}}, "claude"))
-	fs := m["filesystem"].(map[string]any)
-	if !reflect.DeepEqual(fs["allow"], []any{"~/.cache/go-build", "~/go/pkg/mod"}) {
-		t.Errorf("allow = %v, want [~/.cache/go-build ~/go/pkg/mod]", fs["allow"])
+// Every nono runtime group is read-only, so a bundle that leans on one still
+// cannot build: the go command fails on GOCACHE before it reaches a package,
+// and uv, npm and cargo fail the same way on theirs. Where a toolchain writes
+// during an ordinary build is part of what the bundle means.
+func TestResolve_RuntimeCapabilitiesGrantWritableCaches(t *testing.T) {
+	withOS(t, "linux")
+	for _, tc := range []struct {
+		capability string
+		want       []string
+	}{
+		{"go", []string{"$XDG_CACHE_HOME/go-build", "~/go/pkg/mod"}},
+		{"python", []string{"$XDG_CACHE_HOME/pip", "$XDG_CACHE_HOME/uv", "~/.local/share/uv/python"}},
+		{"node", []string{"~/.local/share/pnpm", "~/.npm"}},
+		{"rust", []string{"~/.cargo/git", "~/.cargo/registry"}},
+	} {
+		t.Run(tc.capability, func(t *testing.T) {
+			m := profileMap(t, resolve(t, config.HostConfig{Capabilities: []string{tc.capability}}, "claude"))
+			if got := toStrings(m["filesystem"].(map[string]any)["allow"]); !slices.Equal(got, tc.want) {
+				t.Errorf("allow = %v, want %v", got, tc.want)
+			}
+		})
 	}
-	if got := toStrings(fs["read"]); len(got) != 0 {
+}
+
+// The read surface still comes from the group — the bundle adds writes, it does
+// not restate what nono already curates.
+func TestResolve_RuntimeCapabilitiesLeaveReadToTheGroup(t *testing.T) {
+	m := profileMap(t, resolve(t, config.HostConfig{Capabilities: []string{"go"}}, "claude"))
+	if got := toStrings(m["filesystem"].(map[string]any)["read"]); len(got) != 0 {
 		t.Errorf("read = %v, want ~/go to keep coming from go_runtime", got)
 	}
 }
 
-// The write stops at the module cache. ~/go/bin is where `go install` puts an
-// executable on the host's PATH, which is a deliberate act rather than
-// something a project gets by declaring the bundle.
-func TestResolve_GoWithholdsBinDir(t *testing.T) {
+// A cache whose location differs by platform is resolved when the profile is
+// generated, because that always happens on the machine that will run under it.
+// Go picks GOCACHE from os.UserCacheDir, which is ~/Library/Caches on darwin
+// and $XDG_CACHE_HOME on linux.
+func TestResolve_PlatformScopedGrants(t *testing.T) {
+	withOS(t, "darwin")
 	m := profileMap(t, resolve(t, config.HostConfig{Capabilities: []string{"go"}}, "claude"))
 	got := toStrings(m["filesystem"].(map[string]any)["allow"])
-	for _, unwanted := range []string{"~/go", "~/go/bin"} {
-		if slices.Contains(got, unwanted) {
-			t.Errorf("allow = %v, want %s to stay read-only", got, unwanted)
-		}
+	if !slices.Contains(got, "$HOME/Library/Caches/go-build") {
+		t.Errorf("allow = %v, want the darwin build cache", got)
 	}
+	if slices.Contains(got, "$XDG_CACHE_HOME/go-build") {
+		t.Errorf("allow = %v, want the linux build cache left out on darwin", got)
+	}
+}
+
+// The write stops short of the directories that put an executable on the host's
+// PATH — `go install`, `cargo install`, `uv tool install`. Those stay a
+// deliberate raw allow rather than something a project gets for declaring the
+// bundle.
+func TestResolve_RuntimeCapabilitiesWithholdInstallTargets(t *testing.T) {
+	withOS(t, "linux")
+	for capability, unwanted := range map[string][]string{
+		"go":     {"~/go", "~/go/bin"},
+		"rust":   {"~/.cargo", "~/.cargo/bin", "~/.rustup"},
+		"python": {"~/.local/share/uv/tools", "~/.local/bin"},
+	} {
+		t.Run(capability, func(t *testing.T) {
+			m := profileMap(t, resolve(t, config.HostConfig{Capabilities: []string{capability}}, "claude"))
+			got := toStrings(m["filesystem"].(map[string]any)["allow"])
+			for _, p := range unwanted {
+				if slices.Contains(got, p) {
+					t.Errorf("allow = %v, want %s withheld", got, p)
+				}
+			}
+		})
+	}
+}
+
+// rust_runtime grants all of ~/.cargo, which is where cargo keeps the crates.io
+// publish token. The bundle cannot narrow a group, so it denies the file in the
+// nono profile itself — a Claude permission rule would only constrain the
+// agent's own file tools, not `cat` inside a sandboxed command.
+func TestResolve_RustDeniesCargoCredentials(t *testing.T) {
+	m := profileMap(t, resolve(t, config.HostConfig{Capabilities: []string{"rust"}}, "claude"))
+	got := toStrings(m["filesystem"].(map[string]any)["deny"])
+	if !slices.Equal(got, []string{"~/.cargo/credentials", "~/.cargo/credentials.toml"}) {
+		t.Errorf("deny = %v", got)
+	}
+}
+
+// withOS pins the platform the catalog resolves against, so a test can assert
+// both branches of a grant that differs by OS from whichever machine runs it.
+func withOS(t *testing.T, goos string) {
+	t.Helper()
+	prev := hostOS
+	hostOS = goos
+	t.Cleanup(func() { hostOS = prev })
 }
 
 func hostCfg(h config.HostConfig) *config.Config {

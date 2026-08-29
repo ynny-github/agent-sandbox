@@ -238,10 +238,10 @@ command_output_dir = "/tmp/mcp-output"  # mcp モードでは必須。hook モ�
 
 | capability | 許可する対象 | シェルサンドボックスに追加されるドメイン |
 |---|---|---|
-| `go` | Go ランタイムグループ、および `~/.cache/go-build`, `~/go/pkg/mod` (読み書き) | `proxy.golang.org`, `sum.golang.org` |
-| `python` | Python ランタイムグループ | `pypi.org`, `files.pythonhosted.org` |
-| `node` | Node ランタイムグループ | `registry.npmjs.org` |
-| `rust` | Rust ランタイムグループ | `crates.io`, `index.crates.io`, `static.crates.io` |
+| `go` | Go ランタイムグループ、および `GOCACHE`, `~/go/pkg/mod` (読み書き) | `proxy.golang.org`, `sum.golang.org` |
+| `python` | Python ランタイムグループ、および uv / pip のキャッシュと `~/.local/share/uv/python` (読み書き) | `pypi.org`, `files.pythonhosted.org` |
+| `node` | Node ランタイムグループ、および `~/.npm` と pnpm ストア (読み書き) | `registry.npmjs.org` |
+| `rust` | Rust ランタイムグループ、および `~/.cargo/registry`, `~/.cargo/git` (読み書き)。`~/.cargo/credentials*` は deny | `crates.io`, `index.crates.io`, `static.crates.io` |
 | `dart` | `~/.pub-cache`, `~/.dart` (読み書き)、`PUB_CACHE` / `PUB_HOSTED_URL` 環境変数 | `pub.dev`, `storage.googleapis.com` |
 | `flutter` | `~/.config/flutter`, `~/.local/share/mise/http-tarballs` (読み書き)、`~/.flutter`, `~/.flutter_tool_state`、`FLUTTER_ROOT` / `FLUTTER_STORAGE_BASE_URL` 環境変数 | `storage.googleapis.com` |
 | `docker` | `~/.docker`, `~/.orbstack` (読み取り専用) | `auth.docker.io`, `index.docker.io`, `registry-1.docker.io`, `production.cloudflare.docker.com` |
@@ -252,11 +252,22 @@ command_output_dir = "/tmp/mcp-output"  # mcp モードでは必須。hook モ�
 各ツールチェーンが自分のレジストリを持ち込むため、Go モジュールプロキシや PyPI を
 設定側で書き直す必要はありません。
 
-nono のランタイムグループは読み取り専用なので、通常のビルドでツールチェーンが書き込む
-場所は capability 側が自分で宣言します。`go` が2つのキャッシュを持つのはこのためで、
-これが無いと `go build` は `GOCACHE` で失敗します。書き込みは `~/go/pkg/mod` まで
-です。`go install` はホストの PATH 上に実行ファイルを置く操作なので、生の `allow`
-のままにしてあります。
+nono のランタイムグループは4つとも読み取り専用です。そのため単体ではどれもビルドが
+できません — ツールチェーンがパッケージに到達する前に自分のキャッシュで失敗します。
+そこで各バンドルは「通常のビルドで自分のツールが書き込む場所」を自分で宣言し、読み取り
+の広さ（どのバージョンマネージャのどのレイアウトが存在するか）はグループに任せています。
+プラットフォームで場所が変わるキャッシュは、プロファイル生成時に解決します。生成は常に
+「それが動くマシン」で行われるためです。
+
+どのバンドルも、ホストの PATH 上に実行ファイルを置くディレクトリは許可しません
+（`~/go/bin`, `~/.cargo/bin`, uv の tools ディレクトリ）。`go install` の類は生の
+`allow` で明示する操作のままです。
+
+バンドルはグループが渡すパスを拒否することもできます。グループを絞る手段はこれだけです。
+`rust` が `~/.cargo/credentials.toml` を deny しているのは、`rust_runtime` が
+publish トークンを含む `~/.cargo` を丸ごと渡すためです。この deny は nono プロファイル
+側にあるのでサンドボックス内のコマンドにも効きます — `docker` / `ssh` の deny ルールが
+Claude の権限ルールにすぎず、エージェント自身のファイルツールしか縛らないのとは別物です。
 
 `flutter` は Dart の**差分**であって上位集合ではありません。Flutter プロジェクトは
 `["dart", "flutter"]` の両方を宣言します。flutter は初回実行で自分の `bin/cache` を

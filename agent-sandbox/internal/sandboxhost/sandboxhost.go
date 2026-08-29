@@ -54,6 +54,7 @@ type profileFilesystem struct {
 	Read             []string `json:"read,omitempty"`
 	AllowFile        []string `json:"allow_file,omitempty"`
 	ReadFile         []string `json:"read_file,omitempty"`
+	Deny             []string `json:"deny,omitempty"`
 	BypassProtection []string `json:"bypass_protection,omitempty"`
 }
 
@@ -90,7 +91,7 @@ type sideOptions struct {
 //
 // All output lists are sorted and de-duplicated so the result is deterministic.
 func expand(sections []config.HostConfig, opts sideOptions) (*Resolved, error) {
-	var groups, read, bypass, allowFile, allowVars, allow, readFile, domains, deny []string
+	var groups, read, bypass, allowFile, allowVars, allow, readFile, domains, denyPath, deny []string
 
 	allowVars = append(allowVars, baselineEnv...)
 	allowVars = append(allowVars, opts.extraEnv...)
@@ -107,6 +108,8 @@ func expand(sections []config.HostConfig, opts sideOptions) (*Resolved, error) {
 			}
 			groups = append(groups, c.groups...)
 			allow = append(allow, c.allow...)
+			allow = append(allow, c.perOSAllow[hostOS]...)
+			denyPath = append(denyPath, c.denyPath...)
 			read = append(read, c.read...)
 			readFile = append(readFile, c.readFile...)
 			bypass = append(bypass, c.bypass...)
@@ -143,6 +146,7 @@ func expand(sections []config.HostConfig, opts sideOptions) (*Resolved, error) {
 				Read:             sortDedup(read),
 				AllowFile:        sortDedup(allowFile),
 				ReadFile:         sortDedup(readFile),
+				Deny:             sortDedup(denyPath),
 				BypassProtection: sortDedup(bypass),
 			},
 			Environment: profileEnvironment{AllowVars: sortDedup(allowVars)},

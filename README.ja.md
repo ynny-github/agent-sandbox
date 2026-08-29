@@ -246,7 +246,7 @@ exec では通さないため、これが無いとサンドボックス内のコ
 | `go` | Go ランタイムグループ、および `GOCACHE`, `~/go/pkg/mod` (読み書き) | `proxy.golang.org`, `sum.golang.org` |
 | `python` | Python ランタイムグループ、および uv / pip のキャッシュと `~/.local/share/uv/python` (読み書き) | `pypi.org`, `files.pythonhosted.org` |
 | `node` | Node ランタイムグループ、および `~/.npm` と pnpm ストア (読み書き) | `registry.npmjs.org` |
-| `rust` | Rust ランタイムグループ、および `~/.cargo/registry`, `~/.cargo/git` (読み書き)。`~/.cargo/credentials*` はサンドボックス内コマンドに対して拒否 | `crates.io`, `index.crates.io`, `static.crates.io` |
+| `rust` | Rust ランタイムグループ、および `~/.cargo/registry`, `~/.cargo/git` (読み書き)。`~/.cargo/credentials*` は Claude のファイルツールから隠す | `crates.io`, `index.crates.io`, `static.crates.io` |
 | `dart` | `~/.pub-cache`, `~/.dart` (読み書き)、`PUB_CACHE` / `PUB_HOSTED_URL` 環境変数 | `pub.dev`, `storage.googleapis.com` |
 | `flutter` | `~/.config/flutter`, `~/.local/share/mise/http-tarballs` (読み書き)、`~/.flutter`, `~/.flutter_tool_state`、`FLUTTER_ROOT` / `FLUTTER_STORAGE_BASE_URL` 環境変数 | `storage.googleapis.com` |
 | `docker` | `~/.docker`, `~/.orbstack` (読み取り専用) | `auth.docker.io`, `index.docker.io`, `registry-1.docker.io`, `production.cloudflare.docker.com` |
@@ -268,19 +268,22 @@ nono のランタイムグループは4つとも読み取り専用です。そ�
 （`~/go/bin`, `~/.cargo/bin`, uv の tools ディレクトリ）。`go install` の類は生の
 `allow` で明示する操作のままです。
 
-バンドルはグループが渡すパスを拒否することもできます。グループを絞る手段はこれだけです
-（`groups.exclude` はグループ単位でしか引けません）。`rust` がこれを必要とするのは、
-`rust_runtime` が crates.io の publish トークンを含む `~/.cargo` を丸ごと渡すためです。
-拒否は側で分けています:
+グループは絞れません。`groups.exclude` はグループ単位でしか引けず、付与された親の下に
+プロファイル側の deny を置くのは無意味どころか有害です。Linux の Landlock には
+deny-overlap が無いため、nono は「強制できないポリシー」として**起動そのものを拒否**します。
+`rust` はこれに突き当たります（`rust_runtime` が crates.io の publish トークンを含む
+`~/.cargo` を丸ごと渡すため）。使えるのは、切り出しを必要としない2つのレバーだけです:
 
-- **サンドボックス内のコマンド**には `~/.cargo/credentials*` を nono プロファイル側で
-  拒否します。ブローカー経由のコマンドが publish トークンを持つ理由はありません。ビルドに
-  必要な registry / git キャッシュはそのままです。
-- **起動されたエージェント**はファイルを保持します。ホスト allow の `cargo publish` は
-  引き続き動きます。保持しないのは Claude 自身のアクセスで、`Read(~/.cargo/credentials*)`
-  を `docker` / `ssh` と同じ形で deny します。
+- **Claude 自身のファイルツール**に対して `Read(//…/.cargo/credentials*)` を deny します。
+  `docker` / `ssh` と同じ形です。これはツール呼び出ししか縛らないので、サンドボックス内の
+  `cat` は依然としてファイルを読めます。
+- **どのセクションで capability を宣言するか**が、ブローカー経由のコマンドが到達できるか
+  を決めます。トークンが問題になるなら `rust` を `[sandbox.agent]` に置いてください。
 
-この2つは別の機構です。nono 側はプロセスを縛り、Claude 側はツール呼び出ししか縛りません。
+deny ルールのパスは絶対形です。`Read(/etc/bashrc)` ではなく `Read(//etc/bashrc)` と
+書きます。Claude Code はパスを gitignore パターンとして読み、スラッシュ1本は設定ソース
+起点に解決されるため、1本の形は黙って何にも一致しません。catalog はパスだけを持ち、
+プレフィックスの付与は1箇所で行うので、バンドル側が綴り間違える余地はありません。
 
 `flutter` は Dart の**差分**であって上位集合ではありません。Flutter プロジェクトは
 `["dart", "flutter"]` の両方を宣言します。flutter は初回実行で自分の `bin/cache` を

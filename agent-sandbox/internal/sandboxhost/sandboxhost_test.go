@@ -327,14 +327,34 @@ func TestResolve_RuntimeCapabilitiesWithholdInstallTargets(t *testing.T) {
 	}
 }
 
-// rust_runtime grants all of ~/.cargo, which is where cargo keeps the crates.io
-// publish token, and a bundle cannot narrow a group. The agent keeps the file:
-// `cargo publish` is a thing an operator runs, and a host-allowed cargo runs
-// under this profile.
-func TestResolve_RustKeepsCargoCredentialsForTheAgent(t *testing.T) {
-	m := profileMap(t, resolve(t, config.HostConfig{Capabilities: []string{"rust"}}, "claude"))
-	if got := m["filesystem"].(map[string]any)["deny"]; got != nil {
-		t.Errorf("agent filesystem.deny = %v, want none", got)
+// A capability must never put a denial inside a directory its own group grants.
+// Landlock has no deny-overlap on Linux, so nono refuses to start at all:
+//
+//	Sandbox initialization failed: Landlock deny-overlap is not enforceable
+//	deny '~/.cargo/credentials' overlaps allowed parent '~/.cargo'
+//	  (source: group:rust_runtime)
+//
+// That is every brokered command failing, not a narrower grant. Narrowing a
+// group by path is simply not available; the profile-level lever is which
+// section declares the capability, and nothing finer.
+func TestResolve_NoProfileLevelDenials(t *testing.T) {
+	for _, name := range CapabilityNames() {
+		t.Run(name, func(t *testing.T) {
+			agent := profileMap(t, resolve(t, config.HostConfig{Capabilities: []string{name}}, "claude"))
+			if got := agent["filesystem"].(map[string]any)["deny"]; got != nil {
+				t.Errorf("agent filesystem.deny = %v, want none", got)
+			}
+
+			cfg := &config.Config{}
+			cfg.Sandbox.Shared.Capabilities = []string{name}
+			r, err := ResolveShell(cfg, "/work/project")
+			if err != nil {
+				t.Fatalf("ResolveShell() error = %v", err)
+			}
+			if got := profileMap(t, r)["filesystem"].(map[string]any)["deny"]; got != nil {
+				t.Errorf("shell filesystem.deny = %v, want none", got)
+			}
+		})
 	}
 }
 
@@ -353,10 +373,11 @@ func TestResolve_RustDeniesCargoCredentialsToClaudeTools(t *testing.T) {
 	}
 }
 
-// A brokered command has no reason to hold a publish token, so the shell
-// profile refuses the file outright. Only the sandbox can enforce that — the
-// Claude rules above do not reach a command.
-func TestResolveShell_RustDeniesCargoCredentials(t *testing.T) {
+// A brokered command declared with "rust" can read the publish token, because
+// rust_runtime grants ~/.cargo whole and nothing can carve the file back out.
+// Keeping it away from commands means declaring the capability under
+// [sandbox.agent], the same lever docker and ssh use.
+func TestResolveShell_RustGrantsCargoWithoutCarveOut(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Sandbox.Shared.Capabilities = []string{"rust"}
 
@@ -365,13 +386,8 @@ func TestResolveShell_RustDeniesCargoCredentials(t *testing.T) {
 		t.Fatalf("ResolveShell() error = %v", err)
 	}
 	m := profileMap(t, r)
-	got := toStrings(m["filesystem"].(map[string]any)["deny"])
-	if !slices.Equal(got, []string{"~/.cargo/credentials", "~/.cargo/credentials.toml"}) {
-		t.Errorf("shell filesystem.deny = %v", got)
-	}
-	// The caches it needs to build are untouched by the denial.
 	if allow := toStrings(m["filesystem"].(map[string]any)["allow"]); !slices.Contains(allow, "~/.cargo/registry") {
-		t.Errorf("allow = %v, want the registry cache still granted", allow)
+		t.Errorf("allow = %v, want the registry cache granted", allow)
 	}
 	if len(r.DenyRules) != 0 {
 		t.Errorf("DenyRules = %v, want none on the shell profile", r.DenyRules)

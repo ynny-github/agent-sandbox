@@ -54,7 +54,6 @@ type profileFilesystem struct {
 	Read             []string `json:"read,omitempty"`
 	AllowFile        []string `json:"allow_file,omitempty"`
 	ReadFile         []string `json:"read_file,omitempty"`
-	Deny             []string `json:"deny,omitempty"`
 	BypassProtection []string `json:"bypass_protection,omitempty"`
 }
 
@@ -82,13 +81,6 @@ type sideOptions struct {
 	// emitDeny renders the capabilities' Claude permission-deny rules. They
 	// constrain the agent's own file tools, so only the agent side wants them.
 	emitDeny bool
-	// emitDenyPath renders the capabilities' nono filesystem denials. Unlike
-	// the two fields above, this side-split is a policy call rather than a
-	// structural one: both profiles have a filesystem section to put it in. It
-	// is the shell side's only way to refuse a credential a group hands out,
-	// while the agent — which is where an operator's `cargo publish` runs —
-	// keeps the file.
-	emitDenyPath bool
 }
 
 // expand turns host sections into one nono profile. Sections are unioned in
@@ -98,7 +90,7 @@ type sideOptions struct {
 //
 // All output lists are sorted and de-duplicated so the result is deterministic.
 func expand(sections []config.HostConfig, opts sideOptions) (*Resolved, error) {
-	var groups, read, bypass, allowFile, allowVars, allow, readFile, domains, denyPath, deny []string
+	var groups, read, bypass, allowFile, allowVars, allow, readFile, domains, deny []string
 
 	groups = append(groups, baselineGroups...)
 	allowVars = append(allowVars, baselineEnv...)
@@ -117,7 +109,6 @@ func expand(sections []config.HostConfig, opts sideOptions) (*Resolved, error) {
 			groups = append(groups, c.groups...)
 			allow = append(allow, c.allow...)
 			allow = append(allow, c.perOSAllow[hostOS]...)
-			denyPath = append(denyPath, c.denyPath...)
 			read = append(read, c.read...)
 			readFile = append(readFile, c.readFile...)
 			bypass = append(bypass, c.bypass...)
@@ -162,7 +153,6 @@ func expand(sections []config.HostConfig, opts sideOptions) (*Resolved, error) {
 				Read:             sortDedup(read),
 				AllowFile:        sortDedup(allowFile),
 				ReadFile:         sortDedup(readFile),
-				Deny:             denyPathFor(opts, denyPath),
 				BypassProtection: sortDedup(bypass),
 			},
 			Environment: profileEnvironment{AllowVars: sortDedup(allowVars)},
@@ -200,16 +190,6 @@ func denyRule(tool, path string) (string, error) {
 	return tool + "(/" + path + ")", nil
 }
 
-// denyPathFor returns the nono filesystem denials for a side, or nil when that
-// side does not take them. Kept as a function so the gate reads as one thing
-// next to the other list fields, which are all unconditional.
-func denyPathFor(opts sideOptions, denyPath []string) []string {
-	if !opts.emitDenyPath {
-		return nil
-	}
-	return sortDedup(denyPath)
-}
-
 // Resolve builds the profile for the launched agent: the shared
 // [sandbox.shared] base plus [sandbox.agent], on the given agent's nono base
 // profile. agentOnlyEnv (the broker socket path) is granted here and never in
@@ -245,10 +225,9 @@ func ResolveShell(cfg *config.Config, workdir string) (*Resolved, error) {
 	return expand(
 		[]config.HostConfig{cfg.Sandbox.Shared, cfg.Sandbox.Shell.HostConfig},
 		sideOptions{
-			metaName:     "agent-sandbox shell",
-			workdir:      workdir,
-			network:      shellNetwork(cfg),
-			emitDenyPath: true,
+			metaName: "agent-sandbox shell",
+			workdir:  workdir,
+			network:  shellNetwork(cfg),
 		},
 	)
 }

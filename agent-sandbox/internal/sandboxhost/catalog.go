@@ -56,16 +56,6 @@ type capability struct {
 	allowFile  []string
 	allowVars  []string
 	domains    []string
-	// denyPath is refused in the nono profile itself, so it holds against a
-	// command rather than only against a tool call. It is the only way a bundle
-	// can narrow a group — groups exclude whole, never by path.
-	//
-	// It reaches the shell profile only. That is a policy split, not the
-	// structural one deny and domains have: a credential a brokered command
-	// never needs is still one the launched agent may (`cargo publish`), and
-	// the section a capability is written in cannot express the difference when
-	// the grant comes from a group.
-	denyPath []string
 	// denyRead and denyEdit are paths Claude's own file tools are refused. They
 	// constrain nothing else — not a brokered command, not a subprocess.
 	//
@@ -143,13 +133,12 @@ var catalog = map[string]capability{
 		// read-only so ~/.cargo/bin does not become writable with them.
 		allow: []string{"~/.cargo/registry", "~/.cargo/git"},
 		// rust_runtime grants all of ~/.cargo, which is where cargo keeps the
-		// crates.io publish token, and the bundle cannot narrow a group.
-		//
-		// The shell profile refuses the file: a brokered command has no reason
-		// to hold a publish token. The agent keeps it, so a host-allowed
-		// `cargo publish` still works — but Claude's own Read/Edit are blocked,
-		// the way docker's and ssh's are.
-		denyPath: []string{"~/.cargo/credentials.toml", "~/.cargo/credentials"},
+		// crates.io publish token. Only Claude's own file tools are blocked
+		// from it: a profile-level denial is not available, because Landlock
+		// has no deny-overlap on Linux and nono refuses to start when a deny
+		// sits under a granted parent. Keeping the token away from brokered
+		// commands means declaring "rust" under [sandbox.agent], the lever
+		// docker and ssh already use.
 		denyRead: []string{"~/.cargo/credentials.toml", "~/.cargo/credentials"},
 		// index.crates.io is cargo's sparse index (the default protocol);
 		// static.crates.io serves the .crate files.

@@ -13,7 +13,11 @@ import "slices"
 // does not configure). Both are still declared per capability rather than per
 // side, so a bundle stays one entry no matter which section names it.
 type capability struct {
-	groups    []string
+	groups []string
+	// allow is read+write, for a bundle that has no nono group to lean on. The
+	// runtime bundles get their writable caches from *_runtime groups; nono has
+	// no group for dart or flutter, so those say it here instead.
+	allow     []string
 	read      []string
 	readFile  []string
 	bypass    []string
@@ -55,6 +59,39 @@ var catalog = map[string]capability{
 		// static.crates.io serves the .crate files.
 		domains: []string{"crates.io", "index.crates.io", "static.crates.io"},
 	},
+	// dart and flutter are two bundles rather than one because flutter is a
+	// Dart tool: a Flutter project declares ["dart", "flutter"], and everything
+	// pub-related stays in one place instead of being restated here and drifting.
+	//
+	// Neither has a nono group behind it, so both spell out their writable
+	// state. Deliberately absent: ~/.dart-tool, where pub keeps
+	// pub-tokens.json — the credentials for private hosted repositories. Public
+	// dependency resolution never touches it, so it belongs with docker and ssh
+	// among the grants a config asks for on purpose.
+	"dart": {
+		// ~/.pub-cache holds the downloaded packages and the binaries of
+		// globally activated ones; ~/.dart is dartdev's own settings file.
+		allow:     []string{"~/.pub-cache", "~/.dart"},
+		allowVars: []string{"PUB_CACHE", "PUB_HOSTED_URL"},
+		// pub.dev resolves a package; the archives are served from Google Cloud
+		// Storage, so the index alone cannot install.
+		domains: []string{"pub.dev", "storage.googleapis.com"},
+	},
+	"flutter": {
+		// ~/.config/flutter is the tool's current state directory; the two
+		// files are the pre-XDG locations it still reads and rewrites.
+		allow:     []string{"~/.config/flutter"},
+		allowFile: []string{"~/.flutter", "~/.flutter_tool_state"},
+		allowVars: []string{"FLUTTER_ROOT", "FLUTTER_STORAGE_BASE_URL"},
+		// Engine artifacts and the bundled Dart SDK come from the same Google
+		// Cloud Storage bucket the pub archives do.
+		domains: []string{"storage.googleapis.com"},
+		// Not granted here: the SDK checkout itself. flutter writes into its own
+		// bin/cache, so wherever the SDK lives must be writable — under mise
+		// that is the http-tarballs tree the mise capability grants, and for a
+		// git checkout it is a raw allow in the config, because no fixed path
+		// is right for everyone.
+	},
 	"docker": {
 		read:   []string{"~/.docker", "~/.orbstack"},
 		bypass: []string{"~/.docker"},
@@ -78,7 +115,15 @@ var catalog = map[string]capability{
 		},
 	},
 	"mise": {
-		read:      []string{"~/.local/share/mise", "~/.config/mise"},
+		read: []string{"~/.local/share/mise", "~/.config/mise"},
+		// mise unpacks a tool under http-tarballs and points
+		// installs/<tool>/<version> at it by symlink. Landlock resolves that
+		// symlink, so a toolchain that writes inside its own install root needs
+		// this tree writable rather than the read-only view above — flutter
+		// populating bin/cache on first run is the case that forced it. The
+		// rest of the mise tree stays read-only, so `mise install` from a
+		// sandboxed command is still refused by the profile.
+		allow:     []string{"~/.local/share/mise/http-tarballs"},
 		allowVars: []string{"MISE*", "__MISE*"},
 		// mise's own hosts: self-update and the version listings. Where it
 		// fetches a tool *from* is per-tool (GitHub releases, nodejs.org,

@@ -242,13 +242,23 @@ command_output_dir = "/tmp/mcp-output"  # mcp モードでは必須。hook モ�
 | `python` | Python ランタイムグループ | `pypi.org`, `files.pythonhosted.org` |
 | `node` | Node ランタイムグループ | `registry.npmjs.org` |
 | `rust` | Rust ランタイムグループ | `crates.io`, `index.crates.io`, `static.crates.io` |
+| `dart` | `~/.pub-cache`, `~/.dart` (読み書き)、`PUB_CACHE` / `PUB_HOSTED_URL` 環境変数 | `pub.dev`, `storage.googleapis.com` |
+| `flutter` | `~/.config/flutter` (読み書き)、`~/.flutter`, `~/.flutter_tool_state`、`FLUTTER_ROOT` / `FLUTTER_STORAGE_BASE_URL` 環境変数 | `storage.googleapis.com` |
 | `docker` | `~/.docker`, `~/.orbstack` (読み取り専用) | `auth.docker.io`, `index.docker.io`, `registry-1.docker.io`, `production.cloudflare.docker.com` |
 | `ssh` | `~/.ssh` (読み取り専用)、`~/.ssh/known_hosts` (読み書き) | — |
-| `mise` | `~/.local/share/mise`, `~/.config/mise` (読み取り専用)、`MISE*` 環境変数 | `mise.jdx.dev`, `mise-versions.jdx.dev` |
+| `mise` | `~/.local/share/mise`, `~/.config/mise` (読み取り専用)、`~/.local/share/mise/http-tarballs` (読み書き)、`MISE*` 環境変数 | `mise.jdx.dev`, `mise-versions.jdx.dev` |
 | `bashrc` | `~/.bashrc`, `/etc/bashrc`, `/etc/bash.bashrc` (読み取り専用) | — |
 
 各ツールチェーンが自分のレジストリを持ち込むため、Go モジュールプロキシや PyPI を
 設定側で書き直す必要はありません。
+
+`flutter` は Dart の**差分**であって上位集合ではありません。Flutter プロジェクトは
+`["dart", "flutter"]` の両方を宣言します。どちらも SDK のチェックアウト自体は許可
+しません — flutter は自分の `bin/cache` に書き込むため SDK は書き込み可能である必要
+があり、かつ万人に正しい固定パスが存在しないためです。`mise` 管理なら上の書き込み可能
+なターボール領域が既にカバーしており、git チェックアウトなら設置場所を生の `allow`
+で渡します。`dart` も `~/.dart-tool` は含みません。private な hosted リポジトリの
+認証情報が置かれる場所だからです。
 
 > **`docker` と `ssh` はホストの認証情報を露出します。** とはいえ扱いは他の
 > capability と同じで、宣言した側にだけ適用されます。サンドボックス内のコマンドが

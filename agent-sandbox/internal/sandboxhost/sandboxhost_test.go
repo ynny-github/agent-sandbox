@@ -47,6 +47,7 @@ func TestResolve_Parity(t *testing.T) {
 		"meta":    map[string]any{"name": "custom claude"},
 		"groups":  map[string]any{"include": []any{"go_runtime", "python_runtime"}},
 		"filesystem": map[string]any{
+			"allow": []any{"~/.local/share/mise/http-tarballs"},
 			"read": []any{
 				"~/.config/mise", "~/.docker", "~/.local/share/mise",
 				"~/.orbstack", "~/.ssh",
@@ -153,6 +154,77 @@ func TestResolve_BashrcCapability(t *testing.T) {
 	}
 	if !reflect.DeepEqual(r.DenyRules, want) {
 		t.Errorf("DenyRules = %v\nwant %v", r.DenyRules, want)
+	}
+}
+
+// A capability can grant a read+write directory of its own. The runtime
+// bundles lean on nono's *_runtime groups for that, but nono has no group for
+// dart or flutter, so those bundles have to say it in the catalog.
+func TestResolve_CapabilityGrantsReadWriteDirectory(t *testing.T) {
+	m := profileMap(t, resolve(t, config.HostConfig{Capabilities: []string{"dart"}}, "claude"))
+	fs := m["filesystem"].(map[string]any)
+	if !reflect.DeepEqual(fs["allow"], []any{"~/.dart", "~/.pub-cache"}) {
+		t.Errorf("allow = %v, want [~/.dart ~/.pub-cache]", fs["allow"])
+	}
+	env := toStrings(m["environment"].(map[string]any)["allow_vars"])
+	for _, want := range []string{"PUB_CACHE", "PUB_HOSTED_URL"} {
+		if !slices.Contains(env, want) {
+			t.Errorf("allow_vars = %v, want to contain %s", env, want)
+		}
+	}
+}
+
+// The dart capability stops short of ~/.dart-tool, which is where pub writes
+// pub-tokens.json — the credentials for private hosted repositories. Public
+// dependency resolution never needs it, so it belongs with docker and ssh
+// among the grants a config has to ask for deliberately, not in the bundle
+// every Dart project declares.
+func TestResolve_DartWithholdsPubTokens(t *testing.T) {
+	m := profileMap(t, resolve(t, config.HostConfig{Capabilities: []string{"dart"}}, "claude"))
+	fs := m["filesystem"].(map[string]any)
+	for _, list := range []string{"allow", "read", "allow_file", "read_file"} {
+		for _, p := range toStrings(fs[list]) {
+			if strings.HasPrefix(p, "~/.dart-tool") {
+				t.Errorf("%s grants %q; pub credentials must not ride along with the bundle", list, p)
+			}
+		}
+	}
+}
+
+// flutter carries only the Flutter-specific delta: a project declares
+// ["dart", "flutter"] because the tool is a Dart tool, and duplicating the pub
+// grants here would be two places to drift.
+func TestResolve_FlutterCapability(t *testing.T) {
+	m := profileMap(t, resolve(t, config.HostConfig{Capabilities: []string{"flutter"}}, "claude"))
+	fs := m["filesystem"].(map[string]any)
+	if !reflect.DeepEqual(fs["allow"], []any{"~/.config/flutter"}) {
+		t.Errorf("allow = %v, want [~/.config/flutter]", fs["allow"])
+	}
+	if !reflect.DeepEqual(fs["allow_file"], []any{"/dev/null", "~/.flutter", "~/.flutter_tool_state"}) {
+		t.Errorf("allow_file = %v", fs["allow_file"])
+	}
+	if got := toStrings(fs["allow"]); slices.Contains(got, "~/.pub-cache") {
+		t.Errorf("allow = %v, want the pub cache to come from the dart capability", got)
+	}
+	env := toStrings(m["environment"].(map[string]any)["allow_vars"])
+	if !slices.Contains(env, "FLUTTER_ROOT") {
+		t.Errorf("allow_vars = %v, want to contain FLUTTER_ROOT", env)
+	}
+}
+
+// mise unpacks a tool under http-tarballs and points installs/<tool>/<version>
+// at it by symlink. Landlock resolves that symlink, so a toolchain that writes
+// inside its own install root — flutter populating bin/cache is the case that
+// forced this — needs the tarball tree writable, not the read-only view the
+// rest of the capability grants.
+func TestResolve_MiseGrantsToolPayloadsWritable(t *testing.T) {
+	m := profileMap(t, resolve(t, config.HostConfig{Capabilities: []string{"mise"}}, "claude"))
+	fs := m["filesystem"].(map[string]any)
+	if got := toStrings(fs["allow"]); !slices.Contains(got, "~/.local/share/mise/http-tarballs") {
+		t.Errorf("allow = %v, want to contain ~/.local/share/mise/http-tarballs", got)
+	}
+	if got := toStrings(fs["read"]); !slices.Contains(got, "~/.local/share/mise") {
+		t.Errorf("read = %v, want the rest of the mise tree to stay read-only", got)
 	}
 }
 
@@ -373,6 +445,11 @@ func TestResolveShell_CatalogDomains(t *testing.T) {
 			"production.cloudflare.docker.com", "registry-1.docker.io",
 		}},
 		{"mise", []string{"mise-versions.jdx.dev", "mise.jdx.dev"}},
+		// pub.dev resolves the package; the archives themselves are served
+		// from Google Cloud Storage, which is also where flutter fetches its
+		// engine artifacts and the Dart SDK it bundles.
+		{"dart", []string{"pub.dev", "storage.googleapis.com"}},
+		{"flutter", []string{"storage.googleapis.com"}},
 		{"ssh", nil},
 		{"bashrc", nil},
 	} {
@@ -457,7 +534,9 @@ func TestShellFilesystemGrants(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ShellFilesystemGrants() error = %v", err)
 	}
-	wantWrite := []string{"/srv/cache"}
+	// The mise capability's writable tarball tree shows up here too: a
+	// capability's read+write grant is as much part of the answer as a raw one.
+	wantWrite := []string{"/srv/cache", "~/.local/share/mise/http-tarballs"}
 	wantRead := []string{"/etc/hosts", "/srv/shared", "~/.config/mise", "~/.local/share/mise"}
 	if !slices.Equal(got.Write, wantWrite) {
 		t.Errorf("Write = %v, want %v", got.Write, wantWrite)

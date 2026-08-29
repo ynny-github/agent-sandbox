@@ -106,6 +106,7 @@ func expand(sections []config.HostConfig, opts sideOptions) (*Resolved, error) {
 				return nil, fmt.Errorf("sandboxhost: unknown capability %q (valid: %s)", name, validCapabilities())
 			}
 			groups = append(groups, c.groups...)
+			allow = append(allow, c.allow...)
 			read = append(read, c.read...)
 			readFile = append(readFile, c.readFile...)
 			bypass = append(bypass, c.bypass...)

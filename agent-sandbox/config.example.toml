@@ -17,8 +17,8 @@ command_output_dir = "/tmp/mcp-output"
 # [sandbox.agent] — there is nothing to subtract afterwards.
 #
 # Each section takes the same host-access fields:
-#   capabilities = []   # named bundles: go, python, node, rust, docker, ssh,
-#                       #                mise, bashrc
+#   capabilities = []   # named bundles: go, python, node, rust, dart, flutter,
+#                       #                docker, ssh, mise, bashrc
 #                       # A bundle also carries the network domains its
 #                       # toolchain needs (go the module proxy, python PyPI,
 #                       # node the npm registry, ...) for the shell sandbox, so

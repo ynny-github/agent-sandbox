@@ -80,17 +80,23 @@ var catalog = map[string]capability{
 	"flutter": {
 		// ~/.config/flutter is the tool's current state directory; the two
 		// files are the pre-XDG locations it still reads and rewrites.
-		allow:     []string{"~/.config/flutter"},
+		//
+		// The tarball tree is where mise unpacks a tool before pointing
+		// installs/<tool>/<version> at it by symlink. Landlock resolves that
+		// symlink, so a mise-managed SDK is only usable if it is writable —
+		// flutter populates its own bin/cache on first run. It rides here
+		// rather than on the mise capability because it is a write grant over
+		// every mise-installed binary, agent-sandbox's own included: only the
+		// projects that need it should open it, and `mise` alone must keep
+		// handing out a read-only tree.
+		allow:     []string{"~/.config/flutter", "~/.local/share/mise/http-tarballs"},
 		allowFile: []string{"~/.flutter", "~/.flutter_tool_state"},
 		allowVars: []string{"FLUTTER_ROOT", "FLUTTER_STORAGE_BASE_URL"},
 		// Engine artifacts and the bundled Dart SDK come from the same Google
 		// Cloud Storage bucket the pub archives do.
 		domains: []string{"storage.googleapis.com"},
-		// Not granted here: the SDK checkout itself. flutter writes into its own
-		// bin/cache, so wherever the SDK lives must be writable — under mise
-		// that is the http-tarballs tree the mise capability grants, and for a
-		// git checkout it is a raw allow in the config, because no fixed path
-		// is right for everyone.
+		// A git checkout of the SDK is not covered: no fixed path is right for
+		// everyone, so wherever it lives is a raw allow in the config.
 	},
 	"docker": {
 		read:   []string{"~/.docker", "~/.orbstack"},
@@ -115,15 +121,7 @@ var catalog = map[string]capability{
 		},
 	},
 	"mise": {
-		read: []string{"~/.local/share/mise", "~/.config/mise"},
-		// mise unpacks a tool under http-tarballs and points
-		// installs/<tool>/<version> at it by symlink. Landlock resolves that
-		// symlink, so a toolchain that writes inside its own install root needs
-		// this tree writable rather than the read-only view above — flutter
-		// populating bin/cache on first run is the case that forced it. The
-		// rest of the mise tree stays read-only, so `mise install` from a
-		// sandboxed command is still refused by the profile.
-		allow:     []string{"~/.local/share/mise/http-tarballs"},
+		read:      []string{"~/.local/share/mise", "~/.config/mise"},
 		allowVars: []string{"MISE*", "__MISE*"},
 		// mise's own hosts: self-update and the version listings. Where it
 		// fetches a tool *from* is per-tool (GitHub releases, nodejs.org,

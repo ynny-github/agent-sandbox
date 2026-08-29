@@ -47,7 +47,6 @@ func TestResolve_Parity(t *testing.T) {
 		"meta":    map[string]any{"name": "custom claude"},
 		"groups":  map[string]any{"include": []any{"go_runtime", "python_runtime"}},
 		"filesystem": map[string]any{
-			"allow": []any{"~/.local/share/mise/http-tarballs"},
 			"read": []any{
 				"~/.config/mise", "~/.docker", "~/.local/share/mise",
 				"~/.orbstack", "~/.ssh",
@@ -197,8 +196,8 @@ func TestResolve_DartWithholdsPubTokens(t *testing.T) {
 func TestResolve_FlutterCapability(t *testing.T) {
 	m := profileMap(t, resolve(t, config.HostConfig{Capabilities: []string{"flutter"}}, "claude"))
 	fs := m["filesystem"].(map[string]any)
-	if !reflect.DeepEqual(fs["allow"], []any{"~/.config/flutter"}) {
-		t.Errorf("allow = %v, want [~/.config/flutter]", fs["allow"])
+	if !reflect.DeepEqual(fs["allow"], []any{"~/.config/flutter", "~/.local/share/mise/http-tarballs"}) {
+		t.Errorf("allow = %v", fs["allow"])
 	}
 	if !reflect.DeepEqual(fs["allow_file"], []any{"/dev/null", "~/.flutter", "~/.flutter_tool_state"}) {
 		t.Errorf("allow_file = %v", fs["allow_file"])
@@ -213,18 +212,29 @@ func TestResolve_FlutterCapability(t *testing.T) {
 }
 
 // mise unpacks a tool under http-tarballs and points installs/<tool>/<version>
-// at it by symlink. Landlock resolves that symlink, so a toolchain that writes
-// inside its own install root — flutter populating bin/cache is the case that
-// forced this — needs the tarball tree writable, not the read-only view the
-// rest of the capability grants.
-func TestResolve_MiseGrantsToolPayloadsWritable(t *testing.T) {
+// at it by symlink. Landlock resolves that symlink, so a mise-managed Flutter
+// SDK is only writable — which flutter requires, it populates its own bin/cache
+// — if that tree is granted.
+//
+// It rides on flutter rather than on mise because it is a write grant over
+// every mise-installed binary, agent-sandbox's own included. Only the projects
+// that need it should open it, and mise on its own must keep handing out a
+// read-only tree.
+func TestResolve_FlutterGrantsMiseToolPayloadsWritable(t *testing.T) {
+	m := profileMap(t, resolve(t, config.HostConfig{Capabilities: []string{"flutter"}}, "claude"))
+	if got := toStrings(m["filesystem"].(map[string]any)["allow"]); !slices.Contains(got, "~/.local/share/mise/http-tarballs") {
+		t.Errorf("flutter allow = %v, want to contain ~/.local/share/mise/http-tarballs", got)
+	}
+}
+
+func TestResolve_MiseAloneStaysReadOnly(t *testing.T) {
 	m := profileMap(t, resolve(t, config.HostConfig{Capabilities: []string{"mise"}}, "claude"))
 	fs := m["filesystem"].(map[string]any)
-	if got := toStrings(fs["allow"]); !slices.Contains(got, "~/.local/share/mise/http-tarballs") {
-		t.Errorf("allow = %v, want to contain ~/.local/share/mise/http-tarballs", got)
+	if got := toStrings(fs["allow"]); len(got) != 0 {
+		t.Errorf("mise allow = %v, want no writable grant", got)
 	}
 	if got := toStrings(fs["read"]); !slices.Contains(got, "~/.local/share/mise") {
-		t.Errorf("read = %v, want the rest of the mise tree to stay read-only", got)
+		t.Errorf("read = %v, want the mise tree read-only", got)
 	}
 }
 
@@ -534,9 +544,7 @@ func TestShellFilesystemGrants(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ShellFilesystemGrants() error = %v", err)
 	}
-	// The mise capability's writable tarball tree shows up here too: a
-	// capability's read+write grant is as much part of the answer as a raw one.
-	wantWrite := []string{"/srv/cache", "~/.local/share/mise/http-tarballs"}
+	wantWrite := []string{"/srv/cache"}
 	wantRead := []string{"/etc/hosts", "/srv/shared", "~/.config/mise", "~/.local/share/mise"}
 	if !slices.Equal(got.Write, wantWrite) {
 		t.Errorf("Write = %v, want %v", got.Write, wantWrite)

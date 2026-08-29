@@ -243,21 +243,25 @@ and — for credential bundles — the matching Claude permission denies.
 | `node` | Node runtime group | `registry.npmjs.org` |
 | `rust` | Rust runtime group | `crates.io`, `index.crates.io`, `static.crates.io` |
 | `dart` | `~/.pub-cache`, `~/.dart` (read+write), `PUB_CACHE` / `PUB_HOSTED_URL` env | `pub.dev`, `storage.googleapis.com` |
-| `flutter` | `~/.config/flutter` (read+write), `~/.flutter`, `~/.flutter_tool_state`, `FLUTTER_ROOT` / `FLUTTER_STORAGE_BASE_URL` env | `storage.googleapis.com` |
+| `flutter` | `~/.config/flutter`, `~/.local/share/mise/http-tarballs` (read+write), `~/.flutter`, `~/.flutter_tool_state`, `FLUTTER_ROOT` / `FLUTTER_STORAGE_BASE_URL` env | `storage.googleapis.com` |
 | `docker` | `~/.docker`, `~/.orbstack` (read-only) | `auth.docker.io`, `index.docker.io`, `registry-1.docker.io`, `production.cloudflare.docker.com` |
 | `ssh` | `~/.ssh` (read-only), `~/.ssh/known_hosts` (read+write) | — |
-| `mise` | `~/.local/share/mise`, `~/.config/mise` (read-only), `~/.local/share/mise/http-tarballs` (read+write), `MISE*` env | `mise.jdx.dev`, `mise-versions.jdx.dev` |
+| `mise` | `~/.local/share/mise`, `~/.config/mise` (read-only), `MISE*` env | `mise.jdx.dev`, `mise-versions.jdx.dev` |
 | `bashrc` | `~/.bashrc`, `/etc/bashrc`, `/etc/bash.bashrc` (read-only) | — |
 
 Each toolchain brings its own registry, so a config never has to restate the Go
 module proxy or PyPI.
 
 `flutter` is the Dart *delta*, not a superset: a Flutter project declares
-`["dart", "flutter"]`. Neither grants the SDK checkout, because flutter writes
-into its own `bin/cache` and no single path is right for everyone — under `mise`
-the writable tarball tree above already covers it; a git checkout needs a raw
-`allow` for wherever it lives. `dart` also stops short of `~/.dart-tool`, where
-pub keeps the credentials for private hosted repositories.
+`["dart", "flutter"]`. It has to make the SDK writable, because flutter
+populates its own `bin/cache` on first run. Under `mise` that means the tarball
+tree it unpacks tools into — a write grant over *every* mise-installed binary,
+which is why it rides on `flutter` rather than on `mise`, so only the projects
+that need it open it. A git checkout of the SDK is not covered at all: no fixed
+path is right for everyone, so wherever it lives needs a raw `allow`.
+
+`dart` stops short of `~/.dart-tool`, where pub keeps the credentials for
+private hosted repositories.
 
 > **`docker` and `ssh` expose host credentials.** They are otherwise ordinary
 > capabilities — they apply to whichever side declares them. Put them in

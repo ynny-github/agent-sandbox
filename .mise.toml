@@ -1,5 +1,20 @@
 [tools]
 go = "1.25"
-"go:github.com/ynny-github/agent-sandbox/agent-sandbox" = "v0.16.2"
 lefthook = "latest"
+
+# agent-sandbox is deliberately not pinned as a tool: this repo *is*
+# agent-sandbox, and a released build would shadow the working tree — which is
+# what made every local change need a binary at an absolute path to test.
+#
+# bin/ goes on PATH instead, so `agent-sandbox` inside this project means the
+# working tree and nothing else. Nothing rebuilds it for you: run `mise run
+# build` after changing the source. A stale bin/agent-sandbox is the failure
+# mode to watch for, and deleting it leaves no fallback, since dropping the pin
+# is what buys the guarantee that no released copy can win the PATH race.
+[env]
+_.path = ["{{config_root}}/bin"]
+
+[tasks.build]
+description = "Build agent-sandbox into bin/ so this project runs the working tree"
+run = "go build -o bin/agent-sandbox ./agent-sandbox"
 

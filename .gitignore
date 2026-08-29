@@ -1,6 +1,9 @@
 # common
 tmp/
 
+# the working-tree agent-sandbox build this project puts on PATH (mise run build)
+/bin/
+
 # python
 .venv/
 .pytest_cache/

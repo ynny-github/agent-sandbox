@@ -46,7 +46,7 @@ func TestResolve_Parity(t *testing.T) {
 	want := map[string]any{
 		"extends": "claude",
 		"meta":    map[string]any{"name": "custom claude"},
-		"groups":  map[string]any{"include": []any{"go_runtime", "nix_runtime", "python_runtime"}},
+		"groups":  map[string]any{"include": []any{"git_config", "go_runtime", "nix_runtime", "python_runtime"}},
 		"filesystem": map[string]any{
 			"allow": []any{
 				"$XDG_CACHE_HOME/go-build", "$XDG_CACHE_HOME/pip",
@@ -98,10 +98,10 @@ func TestResolve_BaselineOnlyWhenEmpty(t *testing.T) {
 	if m["extends"] != "claude" {
 		t.Errorf("expected extends=claude; got %#v", m)
 	}
-	// nix_runtime is baseline, so "no capabilities" is not "no groups".
+	// The baseline groups mean "no capabilities" is not "no groups".
 	groups := toStrings(m["groups"].(map[string]any)["include"])
-	if !slices.Equal(groups, []string{"nix_runtime"}) {
-		t.Errorf("baseline groups = %v, want [nix_runtime]", groups)
+	if !slices.Equal(groups, []string{"git_config", "nix_runtime"}) {
+		t.Errorf("baseline groups = %v, want [git_config nix_runtime]", groups)
 	}
 }
 
@@ -117,8 +117,8 @@ func TestResolve_RuntimeGroups(t *testing.T) {
 		Capabilities: []string{"node", "rust"},
 	}, "claude"))
 	groups := m["groups"].(map[string]any)["include"].([]any)
-	if !reflect.DeepEqual(groups, []any{"nix_runtime", "node_runtime", "rust_runtime"}) {
-		t.Errorf("groups = %v, want [nix_runtime node_runtime rust_runtime]", groups)
+	if !reflect.DeepEqual(groups, []any{"git_config", "nix_runtime", "node_runtime", "rust_runtime"}) {
+		t.Errorf("groups = %v, want [git_config nix_runtime node_runtime rust_runtime]", groups)
 	}
 }
 
@@ -210,22 +210,6 @@ func TestResolve_DartWithholdsPubTokens(t *testing.T) {
 // flutter carries only the Flutter-specific delta: a project declares
 // ["dart", "flutter"] because the tool is a Dart tool, and duplicating the pub
 // grants here would be two places to drift.
-// flutter's launcher shells out to git on every invocation to work out the SDK
-// revision, so without git's configuration it exits 128 before doing anything:
-//
-//	warning: unable to access '/home/yn/.gitconfig': Permission denied
-//	fatal: unknown error occurred while reading the configuration files
-//
-// The group rides on flutter rather than the baseline because flutter cannot
-// run at all without it, while a Go build only wants git for an optional
-// version stamp it can be told to skip.
-func TestResolve_FlutterBringsGitConfig(t *testing.T) {
-	m := profileMap(t, resolve(t, config.HostConfig{Capabilities: []string{"flutter"}}, "claude"))
-	if got := toStrings(m["groups"].(map[string]any)["include"]); !slices.Contains(got, "git_config") {
-		t.Errorf("groups = %v, want to contain git_config", got)
-	}
-}
-
 func TestResolve_FlutterCapability(t *testing.T) {
 	m := profileMap(t, resolve(t, config.HostConfig{Capabilities: []string{"flutter"}}, "claude"))
 	fs := m["filesystem"].(map[string]any)
@@ -435,19 +419,27 @@ func withOS(t *testing.T, goos string) {
 // exit 127. That is not something an operator should have to discover and patch
 // per project. On a machine without Nix the group's paths simply do not exist,
 // the same way python_runtime names a ~/.pyenv most hosts lack.
+// git_config is the other baseline group. Toolchains shell out to git without
+// saying so — flutter's launcher reads the SDK revision that way and exits 128
+// without it, go build stamps a version, npm and cargo resolve git
+// dependencies — so requiring each bundle to remember it would mean finding out
+// the same way each time. The group is configuration only; ~/.git-credentials
+// is not in it, so nothing here hands out a credential.
 func TestBaselineGroups_ReachBothProfiles(t *testing.T) {
 	agent := profileMap(t, resolve(t, config.HostConfig{}, "claude"))
-	if got := toStrings(agent["groups"].(map[string]any)["include"]); !slices.Contains(got, "nix_runtime") {
-		t.Errorf("agent groups = %v, want to contain nix_runtime", got)
-	}
-
-	r, err := ResolveShell(&config.Config{}, "/work/project")
+	shellResolved, err := ResolveShell(&config.Config{}, "/work/project")
 	if err != nil {
 		t.Fatalf("ResolveShell() error = %v", err)
 	}
-	shell := profileMap(t, r)
-	if got := toStrings(shell["groups"].(map[string]any)["include"]); !slices.Contains(got, "nix_runtime") {
-		t.Errorf("shell groups = %v, want to contain nix_runtime", got)
+	shell := profileMap(t, shellResolved)
+
+	for _, want := range []string{"nix_runtime", "git_config"} {
+		if got := toStrings(agent["groups"].(map[string]any)["include"]); !slices.Contains(got, want) {
+			t.Errorf("agent groups = %v, want to contain %s", got, want)
+		}
+		if got := toStrings(shell["groups"].(map[string]any)["include"]); !slices.Contains(got, want) {
+			t.Errorf("shell groups = %v, want to contain %s", got, want)
+		}
 	}
 }
 

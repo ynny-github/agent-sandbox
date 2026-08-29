@@ -222,12 +222,20 @@ All three take the same six host-access fields:
 | `allow_env` | Environment variable names |
 
 `PATH`, `HOME`, `TERM`, `LANG`, `LC_ALL`, `USER` and `/dev/null` are always
-granted from a built-in baseline, as is nono's `nix_runtime` group. That group
-is baseline rather than a capability because on a NixOS host it is not a
-toolchain but the precondition for running anything: every executable lives
-under `/nix/store`, nono's base profile grants that tree read but not execute,
-and a sandboxed command therefore exits 127 with no output to explain itself.
-On a host without Nix its paths simply do not exist.
+granted from a built-in baseline, as are nono's `nix_runtime` and `git_config`
+groups.
+
+`nix_runtime` is baseline rather than a capability because on a NixOS host it is
+not a toolchain but the precondition for running anything: every executable
+lives under `/nix/store`, nono's base profile grants that tree read but not
+execute, and a sandboxed command therefore exits 127 with no output to explain
+itself. On a host without Nix its paths simply do not exist.
+
+`git_config` is baseline because toolchains shell out to git without saying so —
+flutter's launcher reads the SDK revision that way and exits 128 without it, `go
+build` stamps a version, npm and cargo resolve git dependencies. The group is
+configuration only; `~/.git-credentials` is not in it, so it hands out no
+credential.
 
 `NONO_*` is rejected in every `allow_env` list — those variables reconfigure the
 sandbox itself.
@@ -248,7 +256,7 @@ and — for credential bundles — the matching Claude permission denies.
 | `node` | Node runtime group, plus `~/.npm` and the pnpm store (read+write) | `registry.npmjs.org` |
 | `rust` | Rust runtime group, plus `~/.cargo/registry` and `~/.cargo/git` (read+write); `~/.cargo/credentials*` hidden from Claude's file tools | `crates.io`, `index.crates.io`, `static.crates.io` |
 | `dart` | `~/.pub-cache`, `~/.dart` (read+write), `PUB_CACHE` / `PUB_HOSTED_URL` env | `pub.dev`, `storage.googleapis.com` |
-| `flutter` | git config group, `~/.config/flutter`, `~/.local/share/mise/http-tarballs` (read+write), `~/.flutter`, `~/.flutter_tool_state`, `FLUTTER_ROOT` / `FLUTTER_STORAGE_BASE_URL` env | `storage.googleapis.com` |
+| `flutter` | `~/.config/flutter`, `~/.local/share/mise/http-tarballs` (read+write), `~/.flutter`, `~/.flutter_tool_state`, `FLUTTER_ROOT` / `FLUTTER_STORAGE_BASE_URL` env | `storage.googleapis.com` |
 | `docker` | `~/.docker`, `~/.orbstack` (read-only) | `auth.docker.io`, `index.docker.io`, `registry-1.docker.io`, `production.cloudflare.docker.com` |
 | `ssh` | `~/.ssh` (read-only), `~/.ssh/known_hosts` (read+write) | — |
 | `mise` | `~/.local/share/mise`, `~/.config/mise` (read-only), `MISE*` env | `mise.jdx.dev`, `mise-versions.jdx.dev` |

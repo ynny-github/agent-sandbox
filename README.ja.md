@@ -222,12 +222,19 @@ command_output_dir = "/tmp/mcp-output"  # mcp モードでは必須。hook モ�
 | `allow_env` | 環境変数名 |
 
 `PATH` / `HOME` / `TERM` / `LANG` / `LC_ALL` / `USER` と `/dev/null` は、
-組み込みのベースラインとして常に許可されます。nono の `nix_runtime` グループも
-同様です。これを capability ではなくベースラインに置いているのは、NixOS ホストでは
+組み込みのベースラインとして常に許可されます。nono の `nix_runtime` と `git_config`
+グループも同様です。
+
+`nix_runtime` を capability ではなくベースラインに置いているのは、NixOS ホストでは
 これがツールチェーンではなく**何かを実行するための前提条件**だからです。全実行ファイルの
 実体が `/nix/store` にあり、nono のベースプロファイルはそのツリーを read では通すが
 exec では通さないため、これが無いとサンドボックス内のコマンドは理由の出ない exit 127
 で終わります。Nix の無いホストでは、グループが挙げるパスが単に存在しないだけです。
+
+`git_config` がベースラインなのは、ツールチェーンが黙って git を呼ぶからです。flutter の
+ランチャは SDK のリビジョンをこの方法で読み、これが無いと exit 128 で死にます。`go build`
+はバージョンをスタンプし、npm と cargo は git 依存を解決します。グループの中身は設定
+ファイルのみで、`~/.git-credentials` は含まれないため認証情報は渡しません。
 
 `NONO_*` はどの `allow_env` でも拒否されます — サンドボックス自体を再設定できて
 しまう変数だからです。
@@ -248,7 +255,7 @@ exec では通さないため、これが無いとサンドボックス内のコ
 | `node` | Node ランタイムグループ、および `~/.npm` と pnpm ストア (読み書き) | `registry.npmjs.org` |
 | `rust` | Rust ランタイムグループ、および `~/.cargo/registry`, `~/.cargo/git` (読み書き)。`~/.cargo/credentials*` は Claude のファイルツールから隠す | `crates.io`, `index.crates.io`, `static.crates.io` |
 | `dart` | `~/.pub-cache`, `~/.dart` (読み書き)、`PUB_CACHE` / `PUB_HOSTED_URL` 環境変数 | `pub.dev`, `storage.googleapis.com` |
-| `flutter` | git 設定グループ、`~/.config/flutter`, `~/.local/share/mise/http-tarballs` (読み書き)、`~/.flutter`, `~/.flutter_tool_state`、`FLUTTER_ROOT` / `FLUTTER_STORAGE_BASE_URL` 環境変数 | `storage.googleapis.com` |
+| `flutter` | `~/.config/flutter`, `~/.local/share/mise/http-tarballs` (読み書き)、`~/.flutter`, `~/.flutter_tool_state`、`FLUTTER_ROOT` / `FLUTTER_STORAGE_BASE_URL` 環境変数 | `storage.googleapis.com` |
 | `docker` | `~/.docker`, `~/.orbstack` (読み取り専用) | `auth.docker.io`, `index.docker.io`, `registry-1.docker.io`, `production.cloudflare.docker.com` |
 | `ssh` | `~/.ssh` (読み取り専用)、`~/.ssh/known_hosts` (読み書き) | — |
 | `mise` | `~/.local/share/mise`, `~/.config/mise` (読み取り専用)、`MISE*` 環境変数 | `mise.jdx.dev`, `mise-versions.jdx.dev` |

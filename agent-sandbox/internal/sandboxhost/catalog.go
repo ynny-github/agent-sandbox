@@ -163,12 +163,6 @@ var catalog = map[string]capability{
 		domains: []string{"pub.dev", "storage.googleapis.com"},
 	},
 	"flutter": {
-		// The flutter launcher shells out to git on every invocation to work
-		// out the SDK revision, so without git's configuration it exits 128
-		// before doing anything at all. That makes git_config part of what
-		// running flutter means, unlike a Go build, which only wants git for a
-		// version stamp it can be told to skip.
-		groups: []string{"git_config"},
 		// ~/.config/flutter is the tool's current state directory; the two
 		// files are the pre-XDG locations it still reads and rewrites.
 		//
@@ -288,7 +282,15 @@ var baselineAllowFile = []string{"/dev/null"}
 //
 // On a host without Nix the group's paths simply do not exist, the same way
 // python_runtime names a ~/.pyenv most machines lack.
-var baselineGroups = []string{"nix_runtime"}
+//
+// git_config is here because toolchains shell out to git without saying so.
+// flutter's launcher reads the SDK revision that way and exits 128 without it;
+// go build stamps a version; npm and cargo resolve git dependencies. Leaving it
+// to each bundle would mean discovering the same failure once per toolchain,
+// and the failure is opaque — git's own error, from a program the caller never
+// mentioned. The group is configuration only: ~/.git-credentials is not in it,
+// so this hands out no credential.
+var baselineGroups = []string{"nix_runtime", "git_config"}
 
 // agentOnlyEnv is granted only to the launched agent's own profile (Resolve),
 // never to the per-command shell profile (ResolveShell). See baselineEnv's

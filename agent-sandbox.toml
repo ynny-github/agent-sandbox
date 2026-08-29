@@ -17,11 +17,37 @@
   [sandbox.shared]
   capabilities = ["go", "python", "mise", "bashrc"]
 
+  # NixOS host. Every executable lives under /nix/store and is reached through
+  # the /run/current-system/sw symlink farm; there is no /bin/ls or /usr/bin/ls
+  # to fall back on. nono's base profile lets both sandboxes *read* that tree
+  # but not execute from it, so without these entries no brokered command can
+  # start: nono resolves the binary, execve is refused, and the command exits
+  # 127 with no output at all. A `read` grant carries the execute right — the
+  # mise-installed Go toolchain already runs from one.
+  read = ["/nix/store", "/run/current-system/sw"]
+
+  # nono's system_write_linux group covers /tmp write-only, but a toolchain that
+  # builds there reads back what it wrote: Go's $WORK tree fails with
+  # "open /tmp: permission denied" on write-only. Shared because both sides
+  # build — `go *` runs host-allowed under the agent profile, everything else
+  # under the shell one.
+  allow = ["/tmp"]
+
   [sandbox.agent]
   # docker and ssh expose host credentials. Declaring them here — and not in
   # the shared base — is what keeps them away from brokered commands: commands
   # need toolchains, not keys.
   capabilities = ["docker", "ssh"]
+
+  # Writes no capability covers. The go capability's runtime group does not
+  # bring the build cache, so `go build` / `go test` fail with permission denied
+  # on ~/.cache/go-build; ~/go carries GOPATH and the module cache.
+  #
+  # Here rather than in the shared base because `go *` is host-allowed below,
+  # which runs it under this profile. The router decides per pipeline segment,
+  # so `go test | tail` still runs go on the host — the shell sandbox never
+  # needs these.
+  allow = ["~/.cache/go-build", "~/go"]
 
   # Command routing. allow_commands runs on the host; everything unmatched goes
   # to the shell sandbox.

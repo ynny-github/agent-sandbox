@@ -216,8 +216,15 @@ func TestResolve_FlutterCapability(t *testing.T) {
 	if !reflect.DeepEqual(fs["allow"], []any{"~/.config/flutter", "~/.local/share/mise/http-tarballs"}) {
 		t.Errorf("allow = %v", fs["allow"])
 	}
-	if !reflect.DeepEqual(fs["allow_file"], []any{"/dev/null", "~/.flutter", "~/.flutter_tool_state"}) {
-		t.Errorf("allow_file = %v", fs["allow_file"])
+	// The pre-XDG ~/.flutter and ~/.flutter_tool_state are deliberately absent.
+	// They are bare files in $HOME, and allow_file grants their contents, not
+	// the right to unlink or recreate them — every one of those needs write on
+	// the parent directory, which here is $HOME. flutter deletes and rewrites
+	// its state file, so granting the file is worse than not granting it: the
+	// file's mere existence is what makes flutter prefer the legacy path over
+	// ~/.config/flutter, where it is a directory and all three work.
+	if !reflect.DeepEqual(fs["allow_file"], []any{"/dev/null"}) {
+		t.Errorf("allow_file = %v, want the baseline only", fs["allow_file"])
 	}
 	if got := toStrings(fs["allow"]); slices.Contains(got, "~/.pub-cache") {
 		t.Errorf("allow = %v, want the pub cache to come from the dart capability", got)

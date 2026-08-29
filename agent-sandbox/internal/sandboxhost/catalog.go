@@ -163,8 +163,17 @@ var catalog = map[string]capability{
 		domains: []string{"pub.dev", "storage.googleapis.com"},
 	},
 	"flutter": {
-		// ~/.config/flutter is the tool's current state directory; the two
-		// files are the pre-XDG locations it still reads and rewrites.
+		// ~/.config/flutter is the tool's state directory, and a directory is
+		// the only shape that works. The pre-XDG ~/.flutter and
+		// ~/.flutter_tool_state are bare files in $HOME: allow_file would grant
+		// their contents but not the right to unlink or recreate them, because
+		// each of those needs write on the parent — $HOME. flutter deletes and
+		// rewrites its state file, so it fails on exactly that:
+		//
+		//	Error: Flutter failed to delete file at "~/.flutter_tool_state"
+		//
+		// Granting them is worse than leaving them out, since their existence
+		// is what makes flutter choose the legacy path over ~/.config/flutter.
 		//
 		// The tarball tree is where mise unpacks a tool before pointing
 		// installs/<tool>/<version> at it by symlink. Landlock resolves that
@@ -175,7 +184,6 @@ var catalog = map[string]capability{
 		// projects that need it should open it, and `mise` alone must keep
 		// handing out a read-only tree.
 		allow:     []string{"~/.config/flutter", "~/.local/share/mise/http-tarballs"},
-		allowFile: []string{"~/.flutter", "~/.flutter_tool_state"},
 		allowVars: []string{"FLUTTER_ROOT", "FLUTTER_STORAGE_BASE_URL"},
 		// Engine artifacts and the bundled Dart SDK come from the same Google
 		// Cloud Storage bucket the pub archives do.

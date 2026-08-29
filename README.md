@@ -248,7 +248,7 @@ and — for credential bundles — the matching Claude permission denies.
 | `node` | Node runtime group, plus `~/.npm` and the pnpm store (read+write) | `registry.npmjs.org` |
 | `rust` | Rust runtime group, plus `~/.cargo/registry` and `~/.cargo/git` (read+write); `~/.cargo/credentials*` hidden from Claude's file tools | `crates.io`, `index.crates.io`, `static.crates.io` |
 | `dart` | `~/.pub-cache`, `~/.dart` (read+write), `PUB_CACHE` / `PUB_HOSTED_URL` env | `pub.dev`, `storage.googleapis.com` |
-| `flutter` | `~/.config/flutter`, `~/.local/share/mise/http-tarballs` (read+write), `~/.flutter`, `~/.flutter_tool_state`, `FLUTTER_ROOT` / `FLUTTER_STORAGE_BASE_URL` env | `storage.googleapis.com` |
+| `flutter` | git config group, `~/.config/flutter`, `~/.local/share/mise/http-tarballs` (read+write), `~/.flutter`, `~/.flutter_tool_state`, `FLUTTER_ROOT` / `FLUTTER_STORAGE_BASE_URL` env | `storage.googleapis.com` |
 | `docker` | `~/.docker`, `~/.orbstack` (read-only) | `auth.docker.io`, `index.docker.io`, `registry-1.docker.io`, `production.cloudflare.docker.com` |
 | `ssh` | `~/.ssh` (read-only), `~/.ssh/known_hosts` (read+write) | — |
 | `mise` | `~/.local/share/mise`, `~/.config/mise` (read-only), `MISE*` env | `mise.jdx.dev`, `mise-versions.jdx.dev` |

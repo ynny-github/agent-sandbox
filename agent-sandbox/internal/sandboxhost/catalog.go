@@ -163,6 +163,12 @@ var catalog = map[string]capability{
 		domains: []string{"pub.dev", "storage.googleapis.com"},
 	},
 	"flutter": {
+		// The flutter launcher shells out to git on every invocation to work
+		// out the SDK revision, so without git's configuration it exits 128
+		// before doing anything at all. That makes git_config part of what
+		// running flutter means, unlike a Go build, which only wants git for a
+		// version stamp it can be told to skip.
+		groups: []string{"git_config"},
 		// ~/.config/flutter is the tool's current state directory; the two
 		// files are the pre-XDG locations it still reads and rewrites.
 		//

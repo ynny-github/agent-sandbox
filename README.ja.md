@@ -248,7 +248,7 @@ exec では通さないため、これが無いとサンドボックス内のコ
 | `node` | Node ランタイムグループ、および `~/.npm` と pnpm ストア (読み書き) | `registry.npmjs.org` |
 | `rust` | Rust ランタイムグループ、および `~/.cargo/registry`, `~/.cargo/git` (読み書き)。`~/.cargo/credentials*` は Claude のファイルツールから隠す | `crates.io`, `index.crates.io`, `static.crates.io` |
 | `dart` | `~/.pub-cache`, `~/.dart` (読み書き)、`PUB_CACHE` / `PUB_HOSTED_URL` 環境変数 | `pub.dev`, `storage.googleapis.com` |
-| `flutter` | `~/.config/flutter`, `~/.local/share/mise/http-tarballs` (読み書き)、`~/.flutter`, `~/.flutter_tool_state`、`FLUTTER_ROOT` / `FLUTTER_STORAGE_BASE_URL` 環境変数 | `storage.googleapis.com` |
+| `flutter` | git 設定グループ、`~/.config/flutter`, `~/.local/share/mise/http-tarballs` (読み書き)、`~/.flutter`, `~/.flutter_tool_state`、`FLUTTER_ROOT` / `FLUTTER_STORAGE_BASE_URL` 環境変数 | `storage.googleapis.com` |
 | `docker` | `~/.docker`, `~/.orbstack` (読み取り専用) | `auth.docker.io`, `index.docker.io`, `registry-1.docker.io`, `production.cloudflare.docker.com` |
 | `ssh` | `~/.ssh` (読み取り専用)、`~/.ssh/known_hosts` (読み書き) | — |
 | `mise` | `~/.local/share/mise`, `~/.config/mise` (読み取り専用)、`MISE*` 環境変数 | `mise.jdx.dev`, `mise-versions.jdx.dev` |

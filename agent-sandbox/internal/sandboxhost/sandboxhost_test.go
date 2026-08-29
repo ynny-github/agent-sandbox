@@ -210,6 +210,22 @@ func TestResolve_DartWithholdsPubTokens(t *testing.T) {
 // flutter carries only the Flutter-specific delta: a project declares
 // ["dart", "flutter"] because the tool is a Dart tool, and duplicating the pub
 // grants here would be two places to drift.
+// flutter's launcher shells out to git on every invocation to work out the SDK
+// revision, so without git's configuration it exits 128 before doing anything:
+//
+//	warning: unable to access '/home/yn/.gitconfig': Permission denied
+//	fatal: unknown error occurred while reading the configuration files
+//
+// The group rides on flutter rather than the baseline because flutter cannot
+// run at all without it, while a Go build only wants git for an optional
+// version stamp it can be told to skip.
+func TestResolve_FlutterBringsGitConfig(t *testing.T) {
+	m := profileMap(t, resolve(t, config.HostConfig{Capabilities: []string{"flutter"}}, "claude"))
+	if got := toStrings(m["groups"].(map[string]any)["include"]); !slices.Contains(got, "git_config") {
+		t.Errorf("groups = %v, want to contain git_config", got)
+	}
+}
+
 func TestResolve_FlutterCapability(t *testing.T) {
 	m := profileMap(t, resolve(t, config.HostConfig{Capabilities: []string{"flutter"}}, "claude"))
 	fs := m["filesystem"].(map[string]any)

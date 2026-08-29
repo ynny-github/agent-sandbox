@@ -316,14 +316,49 @@ func TestResolve_RuntimeCapabilitiesWithholdInstallTargets(t *testing.T) {
 }
 
 // rust_runtime grants all of ~/.cargo, which is where cargo keeps the crates.io
-// publish token. The bundle cannot narrow a group, so it denies the file in the
-// nono profile itself — a Claude permission rule would only constrain the
-// agent's own file tools, not `cat` inside a sandboxed command.
-func TestResolve_RustDeniesCargoCredentials(t *testing.T) {
+// publish token, and a bundle cannot narrow a group. The agent keeps the file:
+// `cargo publish` is a thing an operator runs, and a host-allowed cargo runs
+// under this profile.
+func TestResolve_RustKeepsCargoCredentialsForTheAgent(t *testing.T) {
 	m := profileMap(t, resolve(t, config.HostConfig{Capabilities: []string{"rust"}}, "claude"))
+	if got := m["filesystem"].(map[string]any)["deny"]; got != nil {
+		t.Errorf("agent filesystem.deny = %v, want none", got)
+	}
+}
+
+// Claude's own file tools are blocked from it regardless, the way docker and
+// ssh block theirs. This is the agent side's only protection: it constrains
+// Read/Edit, not a command.
+func TestResolve_RustDeniesCargoCredentialsToClaudeTools(t *testing.T) {
+	r := resolve(t, config.HostConfig{Capabilities: []string{"rust"}}, "claude")
+	want := []string{"Read(~/.cargo/credentials)", "Read(~/.cargo/credentials.toml)"}
+	if !slices.Equal(r.DenyRules, want) {
+		t.Errorf("DenyRules = %v, want %v", r.DenyRules, want)
+	}
+}
+
+// A brokered command has no reason to hold a publish token, so the shell
+// profile refuses the file outright. Only the sandbox can enforce that — the
+// Claude rules above do not reach a command.
+func TestResolveShell_RustDeniesCargoCredentials(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Sandbox.Shared.Capabilities = []string{"rust"}
+
+	r, err := ResolveShell(cfg, "/work/project")
+	if err != nil {
+		t.Fatalf("ResolveShell() error = %v", err)
+	}
+	m := profileMap(t, r)
 	got := toStrings(m["filesystem"].(map[string]any)["deny"])
 	if !slices.Equal(got, []string{"~/.cargo/credentials", "~/.cargo/credentials.toml"}) {
-		t.Errorf("deny = %v", got)
+		t.Errorf("shell filesystem.deny = %v", got)
+	}
+	// The caches it needs to build are untouched by the denial.
+	if allow := toStrings(m["filesystem"].(map[string]any)["allow"]); !slices.Contains(allow, "~/.cargo/registry") {
+		t.Errorf("allow = %v, want the registry cache still granted", allow)
+	}
+	if len(r.DenyRules) != 0 {
+		t.Errorf("DenyRules = %v, want none on the shell profile", r.DenyRules)
 	}
 }
 

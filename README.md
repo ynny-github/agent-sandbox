@@ -241,7 +241,7 @@ and — for credential bundles — the matching Claude permission denies.
 | `go` | Go runtime group, plus `GOCACHE` and `~/go/pkg/mod` (read+write) | `proxy.golang.org`, `sum.golang.org` |
 | `python` | Python runtime group, plus the uv and pip caches and `~/.local/share/uv/python` (read+write) | `pypi.org`, `files.pythonhosted.org` |
 | `node` | Node runtime group, plus `~/.npm` and the pnpm store (read+write) | `registry.npmjs.org` |
-| `rust` | Rust runtime group, plus `~/.cargo/registry` and `~/.cargo/git` (read+write); `~/.cargo/credentials*` denied | `crates.io`, `index.crates.io`, `static.crates.io` |
+| `rust` | Rust runtime group, plus `~/.cargo/registry` and `~/.cargo/git` (read+write); `~/.cargo/credentials*` refused to sandboxed commands | `crates.io`, `index.crates.io`, `static.crates.io` |
 | `dart` | `~/.pub-cache`, `~/.dart` (read+write), `PUB_CACHE` / `PUB_HOSTED_URL` env | `pub.dev`, `storage.googleapis.com` |
 | `flutter` | `~/.config/flutter`, `~/.local/share/mise/http-tarballs` (read+write), `~/.flutter`, `~/.flutter_tool_state`, `FLUTTER_ROOT` / `FLUTTER_STORAGE_BASE_URL` env | `storage.googleapis.com` |
 | `docker` | `~/.docker`, `~/.orbstack` (read-only) | `auth.docker.io`, `index.docker.io`, `registry-1.docker.io`, `production.cloudflare.docker.com` |
@@ -265,11 +265,19 @@ None of them grants the directory that puts an executable on the host's PATH —
 stay a deliberate raw `allow`.
 
 A bundle can also refuse a path its group hands out, which is the only way to
-narrow one: `rust` denies `~/.cargo/credentials.toml` because `rust_runtime`
-grants all of `~/.cargo`, publish token included. That denial is in the nono
-profile, so it holds inside a sandboxed command — unlike the `docker` and `ssh`
-deny rules, which are Claude permission rules and constrain only the agent's
-own file tools.
+narrow one — groups exclude whole, never by path. `rust` needs it because
+`rust_runtime` grants all of `~/.cargo`, crates.io publish token included, and
+it splits the refusal by side:
+
+- **Sandboxed commands** are refused `~/.cargo/credentials*` in the nono profile
+  itself. A brokered command has no reason to hold a publish token, and the
+  registry and git caches it does need are untouched.
+- **The launched agent** keeps the file, so a host-allowed `cargo publish` still
+  works. What it does not keep is Claude's own access: `Read(~/.cargo/credentials*)`
+  is denied the way `docker` and `ssh` deny theirs.
+
+The two denials are different mechanisms. The nono one binds a process; the
+Claude one binds a tool call and nothing else.
 
 `flutter` is the Dart *delta*, not a superset: a Flutter project declares
 `["dart", "flutter"]`. It has to make the SDK writable, because flutter

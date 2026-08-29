@@ -42,12 +42,19 @@ type capability struct {
 	allowFile  []string
 	allowVars  []string
 	domains    []string
-	// denyPath is refused in the nono profile itself, so it holds inside a
-	// sandboxed command. It is the only way a bundle can narrow a group: groups
-	// can be excluded whole but not by path. Distinct from deny below, which is
-	// a Claude permission rule and constrains nothing but the agent's own tools.
+	// denyPath is refused in the nono profile itself, so it holds against a
+	// command rather than only against a tool call. It is the only way a bundle
+	// can narrow a group — groups exclude whole, never by path.
+	//
+	// It reaches the shell profile only. That is a policy split, not the
+	// structural one deny and domains have: a credential a brokered command
+	// never needs is still one the launched agent may (`cargo publish`), and
+	// the section a capability is written in cannot express the difference when
+	// the grant comes from a group.
 	denyPath []string
-	deny     []string
+	// deny is a Claude permission rule. It constrains the agent's own file
+	// tools and nothing else — not a brokered command, not a subprocess.
+	deny []string
 }
 
 // catalog is the fixed, built-in set of capabilities. Unknown names are errors.
@@ -113,9 +120,17 @@ var catalog = map[string]capability{
 		// read-only so ~/.cargo/bin does not become writable with them.
 		allow: []string{"~/.cargo/registry", "~/.cargo/git"},
 		// rust_runtime grants all of ~/.cargo, which is where cargo keeps the
-		// crates.io publish token. The bundle cannot narrow a group, so it
-		// refuses the file outright.
+		// crates.io publish token, and the bundle cannot narrow a group.
+		//
+		// The shell profile refuses the file: a brokered command has no reason
+		// to hold a publish token. The agent keeps it, so a host-allowed
+		// `cargo publish` still works — but Claude's own Read/Edit are blocked,
+		// the way docker's and ssh's are.
 		denyPath: []string{"~/.cargo/credentials.toml", "~/.cargo/credentials"},
+		deny: []string{
+			"Read(~/.cargo/credentials.toml)",
+			"Read(~/.cargo/credentials)",
+		},
 		// index.crates.io is cargo's sparse index (the default protocol);
 		// static.crates.io serves the .crate files.
 		domains: []string{"crates.io", "index.crates.io", "static.crates.io"},

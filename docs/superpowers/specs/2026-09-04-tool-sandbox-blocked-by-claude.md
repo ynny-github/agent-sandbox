@@ -106,6 +106,11 @@ Tool Sandbox and Claude Code cannot share a session today.
 That closes every arrangement in which Claude Code is sandboxed by nono *and*
 its commands are governed by `command_policies`.
 
+The direction that came out of this is in
+[2026-09-04-broker-with-command-policies.md](2026-09-04-broker-with-command-policies.md):
+keep the broker and give *its* profile the command policies, since the session it
+starts has no Claude Code in it.
+
 It also explains why `internal/broker` exists. The broker runs outside the
 agent's sandbox and starts a fresh `nono` per command, which is the only
 remaining way to put a command under a policy nono can enforce while the agent

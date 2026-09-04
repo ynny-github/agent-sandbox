@@ -344,21 +344,15 @@ propagated to a command reached through its shim, so the reader never finishes.
 Two policy commands running concurrently without a pipe (`a & b & wait`) both
 complete, so this is not serialization — it is the pipe.
 
-**The broker refuses this case rather than hanging.** A hang is the worst
-outcome available: no output, no exit status, and a tool call that sits until
-something else times out. An explicit refusal costs the agent one retry and
-tells it what to do instead.
+What to do about it is an open decision; see below. One enabling fact, whichever
+way it goes: the broker can identify the case exactly, without keeping a list of
+which commands are policy-controlled. nono prepends its shim directory to
+`PATH`, so `exec.LookPath` resolves a policy command under that directory and a
+floor command to its real binary. "Resolved under the shim directory, and stdin
+is a pipeline pipe rather than the broker's own stdin or a file" is the whole
+test.
 
-The check needs no list of which commands are policy-controlled. nono prepends
-its shim directory to `PATH`, so `exec.LookPath` resolves a policy command to a
-path under that directory and a floor command to its real binary. In the exec
-handler: if the resolved path is under the shim directory *and* stdin is a
-pipeline pipe rather than the broker's own stdin or a file, refuse with a
-message naming the workaround — write the upstream output to a file and redirect
-from it, which is measured working.
-
-Report the underlying behaviour upstream regardless; if it is fixed, the check
-becomes dead code and is removed.
+Report the underlying behaviour upstream regardless.
 
 **The broker binary must live outside every path the sandbox can write.** nono
 refuses to start otherwise:
@@ -400,6 +394,24 @@ through a shim.
 **A worked example profile** for this repository, covering the commands the
 agent actually uses here, belongs with the implementation — it is the artifact
 that shows whether the enumeration cost is tolerable in practice.
+
+## Open decision
+
+**What the broker does when a policy command is a pipeline reader.** The case is
+detectable (see Measured constraints); what to do with it is not settled.
+
+- *Refuse.* The agent gets an error naming the workaround — write the upstream
+  output to a file and redirect from it, measured working. Costs one retry.
+  Turns a hang into a message, and becomes dead code if the behaviour is fixed
+  upstream.
+- *Buffer.* Run the upstream to completion into a temporary file, then feed the
+  reader from it. The line works as written, at the cost of streaming: a
+  producer that never ends (`tail -f | …`) never starts the reader, and an
+  unbounded producer fills the disk.
+- *Leave it.* The line hangs. No code, no message, and the failure is invisible
+  to the agent until something else times out.
+- *Patch nono.* Fix EOF propagation through the shim and carry a second patch
+  alongside the NixOS one.
 
 ## Evidence
 

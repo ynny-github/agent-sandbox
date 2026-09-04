@@ -290,10 +290,42 @@ the broker, so they never reach the wire.
   with `:` or `+` (token-prefix inspection) and `-c key=value` inspection. Deny
   `-c` wholesale; accept the refspec gap.
 
-`internal/shellquote` stays — `cmd/hook.go` and `internal/claude/settings.go`
-use it to build the rewritten command line.
+- `internal/safe/dockercompose`, `cmd/safe_docker_compose.go`, and with the git
+  wrapper gone too, `cmd/safe.go` and `internal/safe`. Command control narrows
+  to what nono can express, the same reduction git takes.
+- `policysnapshot.Write` and `policysnapshot.Load`, the `--policy-file` flag on
+  `agent-sandbox exec`, and the flag's injection in `cmd/hook.go` and
+  `internal/claude/settings.go`. The snapshot existed to freeze
+  `allow_commands` / `drop_commands` at launch so a mid-session config edit
+  could not change routing; with routing gone there is nothing left to freeze,
+  and the command profile is read once by nono when the broker starts.
+  `policysnapshot.StateDir` stays — `cmd/doctor.go` and the broker socket path
+  both use it.
 
-`internal/safe/dockercompose` is undecided; see the open items.
+`internal/shellquote` stays — `cmd/hook.go` and `internal/claude/settings.go`
+still quote the agent's command line into `agent-sandbox exec -- …`.
+
+### What the docker reduction costs
+
+`safe docker-compose` refused an invocation whose resolved Compose model would
+mount a host path outside the working directory or the Docker socket, set
+`privileged`, host `network`/`pid`/`ipc`, `userns_mode: host`, expose devices,
+add a dangerous Linux capability, or disable seccomp/apparmor — and refused the
+`run` and `exec` subcommands. Only the last is visible in argv.
+
+So the surviving policy is two `invocation_policy` rules:
+
+```json
+"deny": [
+  { "argv": { "prefix": ["compose", "run"] },  "reason": "docker compose run is disabled in this sandbox" },
+  { "argv": { "prefix": ["compose", "exec"] }, "reason": "docker compose exec is disabled in this sandbox" }
+]
+```
+
+Everything the wrapper read out of the YAML is no longer checked. That is a real
+loss, bounded by the fact that the Docker socket is not granted to commands
+unless an operator writes it into the command profile. An operator who does
+should know the compose file is no longer inspected.
 
 ## Measured constraints
 
@@ -312,9 +344,21 @@ propagated to a command reached through its shim, so the reader never finishes.
 Two policy commands running concurrently without a pipe (`a & b & wait`) both
 complete, so this is not serialization — it is the pipe.
 
-The design must pick one: refuse a line that makes a policy command a pipeline
-reader, buffer the upstream to completion first (losing streaming, and unsafe
-against an unbounded producer), or carry a patch. Report it upstream either way.
+**The broker refuses this case rather than hanging.** A hang is the worst
+outcome available: no output, no exit status, and a tool call that sits until
+something else times out. An explicit refusal costs the agent one retry and
+tells it what to do instead.
+
+The check needs no list of which commands are policy-controlled. nono prepends
+its shim directory to `PATH`, so `exec.LookPath` resolves a policy command to a
+path under that directory and a floor command to its real binary. In the exec
+handler: if the resolved path is under the shim directory *and* stdin is a
+pipeline pipe rather than the broker's own stdin or a file, refuse with a
+message naming the workaround — write the upstream output to a file and redirect
+from it, which is measured working.
+
+Report the underlying behaviour upstream regardless; if it is fixed, the check
+becomes dead code and is removed.
 
 **The broker binary must live outside every path the sandbox can write.** nono
 refuses to start otherwise:
@@ -348,25 +392,14 @@ instead state the two tiers, name the commands in each, and reproduce the
 `invocation_policy` denials with their reasons — the agent needs to know a
 refusal is a policy, not a bug.
 
-**`internal/safe/dockercompose`** cannot move to `invocation_policy`: its rules
-read the resolved compose YAML, which no argv matcher can see. Either keep it as
-a floor command that the operator lists explicitly, or drop it — the docker
-socket is not granted to commands today, so it only matters if an operator adds
-`docker` as a policy command.
-
 **Upstream reports.** Three items, each with a reproducer: `exec_paths` missing
 from the published schema; `invocation_policy` denials bypassable by absolute
 path when the caller holds a broad `exec_paths`; stdin EOF not propagated
 through a shim.
 
-## Open decisions
-
-1. The pipeline-reader limitation: refuse, buffer, or patch.
-2. `safe docker-compose`: keep as a floor command, or drop.
-3. Whether `agent-sandbox exec` keeps its `--policy-file` snapshot. The snapshot
-   froze `allow_commands` / `drop_commands` at launch; with routing gone there is
-   nothing left to freeze, and the command profile is already read once by nono
-   at broker startup.
+**A worked example profile** for this repository, covering the commands the
+agent actually uses here, belongs with the implementation — it is the artifact
+that shows whether the enumeration cost is tolerable in practice.
 
 ## Evidence
 

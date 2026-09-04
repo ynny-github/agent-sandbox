@@ -1,8 +1,14 @@
 # The broker, with command policies
 
 Date: 2026-09-04
-Status: agreed direction, not yet implemented
+Status: SUPERSEDED
+Superseded by: [2026-09-05-broker-runs-commands-inside-the-sandbox.md](2026-09-05-broker-runs-commands-inside-the-sandbox.md)
 Prerequisite reading: [2026-09-04-tool-sandbox-blocked-by-claude.md](2026-09-04-tool-sandbox-blocked-by-claude.md)
+
+Three of this document's claims were measured false on 2026-09-05: that an
+`invocation_policy` denial cannot be bypassed, that network can be granted per
+command, and that one `bash` entry is a sound whole policy. Read the superseding
+document instead; it carries forward what survived.
 
 ## The idea
 

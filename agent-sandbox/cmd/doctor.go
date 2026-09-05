@@ -219,6 +219,23 @@ func checkCommandProfile(cfg *config.Config) checkResult {
 		return r
 	}
 
+	declaredExecutable, declared, derr := profileEntrypointExecutable(path, base)
+	if derr != nil {
+		r.details = append(r.details, fmt.Sprintf("error: could not read command_policies.commands[%q].executable: %v", base, derr))
+		r.hint = "could not verify the profile's own pinned executable matches this binary; " +
+			"fix the error above and re-run doctor"
+		return r
+	}
+	if declared && cleanAbs(declaredExecutable) != cleanAbs(self) {
+		r.details = append(r.details, fmt.Sprintf("entrypoint: command_policies.commands[%q].executable is %s, not the running binary %s", base, declaredExecutable, self))
+		r.hint = "the profile pins the entrypoint's \"executable\" to a different path than the binary running " +
+			"this check, even though PATH resolves the name correctly above — not measured what nono does with " +
+			"this specific mismatch, but a profile and a binary disagreeing about which file the entrypoint is " +
+			"is not a state to launch from; update the profile's \"executable\" field, or reinstall to the " +
+			"pinned path"
+		return r
+	}
+
 	r.ok = true
 	return r
 }
@@ -234,15 +251,25 @@ func cleanAbs(p string) string {
 	return filepath.Clean(p)
 }
 
-// profileGrantsWrite reports whether binPath falls under one of the profile's
-// filesystem.allow entries. It reads only that list: it is the grant that made
-// nono refuse to start during the design measurements, and a fuller model of
-// nono's own trust check belongs in nono, not here.
+// profileGrantsWrite reports whether binPath falls under a directory the
+// profile grants write access to — either the top-level filesystem.allow
+// (the session-wide grant), or any command_policies command's own
+// from.<caller>.sandbox.fs_write (a per-command child sandbox's grant,
+// which the top-level list alone cannot see). This has to check both: the
+// first version of this check read only the top level, and both Criticals
+// this task's review found lived in a command's own fs_write instead
+// (Critical 1 in the broker's own entrypoint entry, Critical 2 in a
+// promoted-to-policy command's) — either could have re-landed silently
+// without this checking where they actually live.
+//
+// A fuller model of nono's own trust check belongs in nono, not here; this
+// reads only the grants that made nono refuse to start during the design
+// measurements.
 //
 // Matching is by filepath.Clean, not symlink resolution: a granted directory
 // that is itself a symlink (e.g. macOS's /tmp -> /private/tmp) could hide a
 // binary this check should have flagged. That gap is a deliberate choice, in
-// keeping with reading only filesystem.allow at all (see above) rather than
+// keeping with reading only these grant lists at all (see above) rather than
 // building a fuller model of nono's own trust check — not an oversight.
 func profileGrantsWrite(profilePath, binPath string) (bool, error) {
 	data, err := os.ReadFile(profilePath)
@@ -253,22 +280,74 @@ func profileGrantsWrite(profilePath, binPath string) (bool, error) {
 		Filesystem struct {
 			Allow []string `json:"allow"`
 		} `json:"filesystem"`
+		CommandPolicies struct {
+			Commands map[string]struct {
+				From map[string]struct {
+					Sandbox struct {
+						FSWrite []string `json:"fs_write"`
+					} `json:"sandbox"`
+				} `json:"from"`
+			} `json:"commands"`
+		} `json:"command_policies"`
 	}
 	if err := json.Unmarshal(data, &p); err != nil {
 		return false, err
 	}
+
 	bin := filepath.Clean(binPath)
-	for _, dir := range p.Filesystem.Allow {
-		dir = filepath.Clean(strings.TrimSpace(dir))
-		if dir == "" || strings.Contains(dir, "$") {
-			continue // $WORKDIR and friends are resolved by nono, not here
+	dirsGrantWrite := func(dirs []string) bool {
+		for _, dir := range dirs {
+			dir = filepath.Clean(strings.TrimSpace(dir))
+			if dir == "" || strings.Contains(dir, "$") {
+				continue // $WORKDIR and friends are resolved by nono, not here
+			}
+			if rel, rerr := filepath.Rel(dir, bin); rerr == nil &&
+				rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				return true
+			}
 		}
-		if rel, rerr := filepath.Rel(dir, bin); rerr == nil &&
-			rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return true, nil
+		return false
+	}
+
+	if dirsGrantWrite(p.Filesystem.Allow) {
+		return true, nil
+	}
+	for _, cmd := range p.CommandPolicies.Commands {
+		for _, edge := range cmd.From {
+			if dirsGrantWrite(edge.Sandbox.FSWrite) {
+				return true, nil
+			}
 		}
 	}
 	return false, nil
+}
+
+// profileEntrypointExecutable reports the "executable" the profile pins for
+// the command_policies.commands entry named base (the broker's own
+// entrypoint, matched by base name — see BrokerArgs), and whether such an
+// entry exists at all. A profile need not declare the entrypoint as a
+// policy command (checkCommandProfile's earlier PATH checks still apply
+// either way); this only has something to say when it does.
+func profileEntrypointExecutable(profilePath, base string) (executable string, declared bool, err error) {
+	data, err := os.ReadFile(profilePath)
+	if err != nil {
+		return "", false, err
+	}
+	var p struct {
+		CommandPolicies struct {
+			Commands map[string]struct {
+				Executable string `json:"executable"`
+			} `json:"commands"`
+		} `json:"command_policies"`
+	}
+	if err := json.Unmarshal(data, &p); err != nil {
+		return "", false, err
+	}
+	cmd, ok := p.CommandPolicies.Commands[base]
+	if !ok {
+		return "", false, nil
+	}
+	return cmd.Executable, true, nil
 }
 
 // toolSandboxProbeCommand is the trivial, argument-free program checkToolSandbox

@@ -21,8 +21,17 @@ Every command in your line sorts into one of two tiers:
   rules of their own.
 
 A program in neither tier cannot run at all — refused before it starts, the
-same way an unknown command would be. This is the allowlist; there is nothing
-else to check.
+same way an unknown command would be. This is the allowlist for *which
+programs exist to run at all*, and it is absolute: nothing bypasses it.
+
+It is not a claim about what a command that is itself a compiler or
+interpreter can do once it runs. A toolchain in either tier that can compile
+and immediately execute code you give it is bounded only by what *its own*
+sandbox can reach — not by argv rules, and not by which other tools are or
+are not enumerated elsewhere in this profile. If such a command is listed
+below, its own grants (not this document's prose about tiers) are the real
+boundary; ask the operator what those are before assuming a two-tier model
+holds for everything it might do.
 
 **Policy commands and their denials, from `{{.ProfilePath}}`:**
 {{if .PolicyCommands}}{{range .PolicyCommands}}

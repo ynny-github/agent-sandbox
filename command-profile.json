@@ -126,10 +126,9 @@
             "sandbox": {
               "fs_read_file": ["/home/yn/.local/share/mise/installs/go/1.25.14/bin/go"],
               "fs_read": [
-                "/nix/store",
-                "/run/current-system/sw",
                 "/home/yn/.local/share/mise/installs/go/1.25.14",
                 "/home/yn/go/pkg/mod",
+                "/home/yn/.cache/go-build",
                 "$WORKDIR"
               ],
               "fs_write": [

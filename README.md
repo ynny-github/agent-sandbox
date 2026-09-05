@@ -154,6 +154,17 @@ implements) run inside the broker process itself, at the broker's own
 filesystem grants — never through either tier. A redirect or a glob you
 write is bounded the same way.
 
+**Nor do the two tiers bound what a compiler or interpreter does once it
+runs.** The allowlist above is absolute about *which programs exist to run
+at all* — nothing bypasses that. It says nothing about what a command that
+is itself a compiler or interpreter can do with code you hand it: that
+command is bounded only by what *its own* sandbox can reach, not by argv
+rules and not by which other tools are or are not enumerated elsewhere in
+the profile. This repository's own profile enumerates `go` for exactly this
+reason — see [The command profile](#the-command-profile) below for what
+that costs and how far the containment actually reaches once you look
+closely at what a Go program can do from inside `go`'s own grants.
+
 ### The filesystem is not virtualized
 
 There is no container and no bind mount. A command runs directly on the host
@@ -211,10 +222,12 @@ MCP is enabled.
   plain write check is not enough — binding also catches the ~104-byte
   `sun_path` limit.
 - The command profile exists, `nono profile validate` accepts it, and it
-  does not grant write access to the broker's own binary (the check reads
-  `filesystem.allow` only, so a grant expressed purely through `$WORKDIR` is
-  not something this check can see — nono itself is the final word on this
-  at launch).
+  does not grant write access to the broker's own binary — checking both the
+  top-level `filesystem.allow` and every `command_policies` command's own
+  `fs_write` (both Critical findings a review of this profile found lived
+  in a command's own `fs_write`, not the top-level list). A grant expressed
+  purely through `$WORKDIR` is still not something this check can see —
+  nono itself is the final word on that at launch.
 - Resolving the broker's own base name through this process's own `PATH` —
   the same lookup the launcher's `BrokerArgs` relies on — lands back on this
   exact binary. A different `agent-sandbox` earlier on `PATH` would silently
@@ -395,9 +408,15 @@ top-level ceiling instead.
 
 **A worked example** — this repository's own `command-profile.json` at the
 repo root — declares `agent-sandbox` itself as the session's policy command
-(`can_use: ["git"]`, `exec_paths` covering `go`, `rg`, `mise`, and the
-coreutils this repo's own workflows use) and `git` as the one command with
-argv rules:
+(`can_use: ["git", "go"]`, `exec_paths` covering `rg`, `mise`, `gofmt` (as a
+single file, not its whole directory — see the note on multi-call binaries
+below), and the coreutils this repo's own workflows use). `git` and `go` are
+its two policy commands, for different reasons: `git` carries argv rules;
+`go` carries none — a compiler is not something argv-level rules can usefully
+bound — but still needs its own child sandbox, because `go test` compiles
+and immediately executes a test binary, and that write-then-execute
+directory has to stay out of reach of every other command. More on what a
+compiler being enumerable at all actually costs below.
 
 ```json
 "git": {
@@ -409,7 +428,7 @@ argv rules:
       "deny": [
         { "argv": { "contains": ["--force"] },
           "reason": "force push is disabled in this sandbox; use --force-with-lease..." },
-        { "argv": { "prefix": ["reset", "--hard"] },
+        { "argv": { "contains": ["--hard"] },
           "reason": "hard reset is disabled in this sandbox; it discards uncommitted work." }
       ]
     }
@@ -420,8 +439,33 @@ argv rules:
 `reason` reaches the agent verbatim on stderr, at exit code 126 — see
 `agent-sandbox ai explain` for the full, current list.
 
-Three properties worth knowing before writing your own:
+Four properties worth knowing before writing your own:
 
+- **A toolchain that compiles and runs code is bounded only by its own
+  sandbox, not by which other commands are enumerated.** This repository's
+  own `go` entry has no `invocation_policy` at all — a compiler is not
+  something argv-level rules can usefully bound — and its own child sandbox
+  originally granted `/nix/store` read access, the same NixOS execute path
+  every other command needs. That combination is a real, measured bypass:
+  `go run` on a program that copies `git`'s (or `bash`'s) real binary into
+  `/tmp` and `exec`s it directly reaches the real binary, unmediated by any
+  shim or `invocation_policy`, exactly as if the copy-then-exec had been
+  attempted at the floor. Fixed here by removing `/nix/store` and
+  `/run/current-system/sw` from `go`'s own `fs_read`: the toolchain (built
+  with `CGO_ENABLED=0`, confirmed with `ldd` reporting "not a dynamic
+  executable") and everything it compiles here need neither for their own
+  linking, so the fix costs nothing `go test`/`go build` need — but it does
+  not make the underlying risk disappear. A dynamically linked binary staged
+  through `$WORKDIR` instead (readable to both the floor and to `go`) and
+  then copied to `/tmp` and exec'd now fails at the shared-library-loading
+  step, since `/tmp` is not `/nix/store` and the copy carries no working
+  runtime with it — measured directly, both for `git` and for `bash`. A
+  sufficiently deliberate attack that stages an entire dependency closure
+  (a copy of the dynamic linker plus every `.so` it needs) into `$WORKDIR`
+  and invokes the copied linker directly was not attempted and is not
+  claimed to be closed. If you enumerate a compiler or interpreter in your
+  own profile, treat this as the honest boundary: its own sandbox's reach,
+  not the two-tier model's absoluteness, is what actually bounds it.
 - **The installed binary's directory must be on the launcher's own `PATH`.**
   The launcher invokes `agent-sandbox broker` by base name, never by an
   absolute path: nono treats an absolute-path invocation of a declared

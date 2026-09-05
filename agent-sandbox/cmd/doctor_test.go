@@ -387,6 +387,46 @@ func TestCheckCommandProfileFailsWhenTheBinaryIsWritable(t *testing.T) {
 	}
 }
 
+// TestCheckCommandProfileFailsWhenACommandsFSWriteCoversTheBinary is the
+// regression test for the shape both Criticals this task's review found
+// actually had: not the top-level filesystem.allow (already covered above),
+// but a command_policies command's own from.<caller>.sandbox.fs_write — a
+// per-command child sandbox's grant the original version of
+// profileGrantsWrite could not see at all.
+func TestCheckCommandProfileFailsWhenACommandsFSWriteCoversTheBinary(t *testing.T) {
+	dir := t.TempDir()
+	profile := filepath.Join(dir, "command-profile.json")
+	selfBin := filepath.Join(dir, "agent-sandbox")
+	body := `{
+	  "filesystem": {"allow": ["$WORKDIR"]},
+	  "command_policies": {
+	    "commands": {
+	      "go": {
+	        "executable": "/usr/bin/go",
+	        "from": {"agent-sandbox": {"sandbox": {"fs_write": ["` + dir + `"]}}}
+	      }
+	    }
+	  }
+	}`
+	if err := os.WriteFile(profile, []byte(body), 0o600); err != nil {
+		t.Fatalf("write profile: %v", err)
+	}
+	restoreRun := stubRunCommand(func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("valid"), nil
+	})
+	defer restoreRun()
+	restore := stubSelfPath(selfBin)
+	defer restore()
+
+	got := checkCommandProfile(configWithProfile(t, dir, profile))
+	if got.ok {
+		t.Errorf("checkCommandProfile ok = true, want false: a command's own fs_write covers the broker binary")
+	}
+	if got.hint == "" {
+		t.Errorf("a failing check must carry a hint")
+	}
+}
+
 func TestCheckCommandProfileOK(t *testing.T) {
 	dir := t.TempDir()
 	profile := filepath.Join(dir, "command-profile.json")
@@ -473,6 +513,75 @@ func TestCheckCommandProfileFailsWhenEntrypointOnPATHResolvesElsewhere(t *testin
 	}
 	if !strings.Contains(got.hint, "different binary") {
 		t.Errorf("hint = %q, want it to say PATH resolves to a different binary", got.hint)
+	}
+}
+
+// TestCheckCommandProfileFailsWhenProfilePinsADifferentExecutable covers the
+// case PATH resolution alone cannot see: the profile's own
+// command_policies.commands[base].executable field naming a path other than
+// the binary actually running this check, even though PATH resolves the
+// same base name correctly. A profile and a binary disagreeing about which
+// file the entrypoint is should not pass doctor.
+func TestCheckCommandProfileFailsWhenProfilePinsADifferentExecutable(t *testing.T) {
+	dir := t.TempDir()
+	selfBin := filepath.Join(t.TempDir(), "agent-sandbox")
+	pinnedBin := filepath.Join(t.TempDir(), "agent-sandbox")
+
+	profile := filepath.Join(dir, "command-profile.json")
+	body := `{
+	  "filesystem": {"allow": ["$WORKDIR"]},
+	  "command_policies": {"commands": {"agent-sandbox": {"executable": "` + pinnedBin + `"}}}
+	}`
+	if err := os.WriteFile(profile, []byte(body), 0o600); err != nil {
+		t.Fatalf("write profile: %v", err)
+	}
+	restore := stubRunCommand(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return []byte("valid"), nil
+	})
+	defer restore()
+	restoreSelf := stubSelfPath(selfBin)
+	defer restoreSelf()
+	// PATH correctly resolves "agent-sandbox" back to this exact binary —
+	// isolating the pinned-executable mismatch as the only failing signal.
+	restoreLookPath := stubLookPath(stubLookPathByName(map[string]string{"agent-sandbox": selfBin}))
+	defer restoreLookPath()
+
+	got := checkCommandProfile(configWithProfile(t, dir, profile))
+	if got.ok {
+		t.Fatal("checkCommandProfile ok = true, want false: the profile pins a different executable than the running binary")
+	}
+	if !strings.Contains(got.hint, "executable") {
+		t.Errorf("hint = %q, want it to mention the pinned executable", got.hint)
+	}
+}
+
+// TestCheckCommandProfileOKWhenProfilePinsTheRunningExecutable is the control:
+// a profile that declares the entrypoint and pins it correctly must still
+// pass.
+func TestCheckCommandProfileOKWhenProfilePinsTheRunningExecutable(t *testing.T) {
+	dir := t.TempDir()
+	selfBin := filepath.Join(t.TempDir(), "agent-sandbox")
+
+	profile := filepath.Join(dir, "command-profile.json")
+	body := `{
+	  "filesystem": {"allow": ["$WORKDIR"]},
+	  "command_policies": {"commands": {"agent-sandbox": {"executable": "` + selfBin + `"}}}
+	}`
+	if err := os.WriteFile(profile, []byte(body), 0o600); err != nil {
+		t.Fatalf("write profile: %v", err)
+	}
+	restore := stubRunCommand(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return []byte("valid"), nil
+	})
+	defer restore()
+	restoreSelf := stubSelfPath(selfBin)
+	defer restoreSelf()
+	restoreLookPath := stubLookPath(stubLookPathByName(map[string]string{"agent-sandbox": selfBin}))
+	defer restoreLookPath()
+
+	got := checkCommandProfile(configWithProfile(t, dir, profile))
+	if !got.ok {
+		t.Errorf("checkCommandProfile ok = false, want true: details=%v hint=%q", got.details, got.hint)
 	}
 }
 

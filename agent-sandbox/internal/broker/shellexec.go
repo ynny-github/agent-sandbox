@@ -46,16 +46,25 @@ func (e *ShellExecutor) Run(ctx context.Context, command, cwd string,
 		return 2, nil
 	}
 
-	// See refusePolicyPipeChains: a pipe stage with a policy-controlled
-	// command on both ends is measured to hang against a real nono session,
-	// for a reason entirely inside nono's own process-spawning machinery —
-	// outside anything this package controls (task-8-report.md's Finding B).
-	// Detecting and refusing it statically, before any command in the line
-	// has run, is deterministic and side-effect-free in a way that trying to
-	// detect and recover from the hang at runtime was not.
+	// See refusePolicyPipeChains: a specific shape of this — a two-stage
+	// pipe with a policy-controlled reader that blocks on stdin, fed by a
+	// policy-controlled writer (`git log ... | git cat-file --batch-check`,
+	// the case this exists for) — is measured, against a real nono session,
+	// to hang and strand a process, for a reason entirely inside nono's own
+	// process-spawning machinery, outside anything this package controls
+	// (task-8-report.md's Finding B). Detecting and refusing it statically,
+	// before any command in the line has run, is deterministic and
+	// side-effect-free in a way that trying to detect and recover from the
+	// hang at runtime was not. The refusal is wider than what was directly
+	// measured — see refusePolicyPipeChains's own doc comment for exactly
+	// which shapes were measured to hang, which were only reasoned to be
+	// exposed to the same hazard, and which are not caught at all — so the
+	// message below says "a combination measured to hang or exposed to the
+	// same underlying hazard", not that every refused case was itself
+	// observed hanging.
 	if names, refuse := refusePolicyPipeChains(file, cwd, expand.ListEnviron(os.Environ()...)); refuse {
 		fmt.Fprintf(stderr,
-			"agent-sandbox: refused: this pipeline pipes two or more policy-controlled commands together (%s), a combination measured to hang and strand a process rather than exit cleanly. Run them as separate commands instead of piping them directly together.\n",
+			"agent-sandbox: refused: this pipeline pipes two or more policy-controlled commands together (%s) — a combination measured to hang and strand a process in at least one shape, and reasoned to be exposed to the same underlying hazard in general. Run them as separate commands instead of piping them directly together.\n",
 			strings.Join(names, ", "))
 		return 126, nil
 	}
@@ -97,10 +106,23 @@ func isPolicyControlledPath(path string) bool {
 
 // refusePolicyPipeChains reports whether file's parsed command line contains
 // a pipe (`|` or `|&`) with two or more stages that resolve, before anything
-// runs, to a policy-controlled command — the shape measured to hang a real
-// nono session and strand a process rather than exit (task-8-report.md's
-// Finding B). names lists which resolved command names triggered the
-// refusal, for the caller's error message.
+// runs, to a policy-controlled command. names lists which resolved command
+// names triggered the refusal, for the caller's error message.
+//
+// The exact two-stage shape this exists for — a policy-controlled reader
+// that blocks on stdin, fed by a policy-controlled writer — is measured,
+// against a real nono session, to hang and strand a process
+// (task-8-report.md's Finding B). A three-or-more-stage chain with a
+// policy-controlled command at two non-adjacent ends (`policy | floor |
+// policy`) is refused by the same check but was not independently measured
+// to hang — it is reasoned to be exposed to the identical hazard, since all
+// stages of one pipe still run concurrently regardless of how many there
+// are, not confirmed to reproduce it. Two policy commands piped together
+// where neither blocks on stdin (`git --version | git --version`) was
+// measured *not* to hang, and would still be refused here — this check
+// cannot tell that case apart from the one it exists for, since doing so
+// would require knowing whether a stage reads its stdin to EOF, which is a
+// runtime property a static, parse-time pass cannot see.
 //
 // This is a static, parse-time check: LookPathDir is used only to learn
 // where a literal command name would resolve, never to run anything, so

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -14,6 +15,34 @@ import (
 
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/broker"
 )
+
+// syncBuffer is a mutex-protected bytes.Buffer. A pipeline stage can run more
+// than one command concurrently (mvdan.cc/sh's own Pipe case does exactly
+// this), and each command's own stdout/stderr drain (interposeOutputs) writes
+// into whatever the caller supplied independently of the others — a plain
+// bytes.Buffer's internal bookkeeping is not safe for that, and a race there
+// can silently truncate or lose one side's output (measured while chasing
+// Finding B: the refusal message from TestShellExecutorRefusesTwoPolicyCommandsPipedTogether
+// vanished under a bare bytes.Buffer, racing against the writer command's own
+// concurrent, empty stderr drain). The real broker never has this problem:
+// internal/broker/server.go's frameWriter already serializes every write
+// with its own mutex, for the same reason.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
+}
 
 // runShell executes command in dir and returns exit code, stdout and stderr.
 // Every case is bounded: the failure this executor exists to prevent is a
@@ -25,7 +54,7 @@ func runShell(t *testing.T, dir, command string, stdin string) (int, string, str
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	var out, errb bytes.Buffer
+	var out, errb syncBuffer
 	// in must stay a nil *interface*, not a typed nil pointer: a nil
 	// *strings.Reader assigned to an io.Reader makes a non-nil interface, and
 	// the executor would take the stdin path for every case that wants none.
@@ -331,5 +360,89 @@ func TestExecuteRejectsANonAbsoluteCwd(t *testing.T) {
 		if !strings.Contains(err.Error(), "not an absolute path") {
 			t.Errorf("Execute() with Cwd=%q: error = %q, want it to mention an absolute path", cwd, err.Error())
 		}
+	}
+}
+
+// fakePolicyShim creates a real, executable file at
+// <dir>/nono-tool-sandbox-<id>/shims/<name>, symlinked to a real host binary
+// (cat, chosen because it is a plain stdin-to-stdout passthrough, which is
+// exactly what these tests need to build a pipeline out of). This is the
+// directory shape isPolicyControlledPath matches: it lets these tests drive
+// refusePolicyToPolicyPipe through the executor's public API, without a real
+// nono session — the shape of the path is all the heuristic ever looks at.
+func fakePolicyShim(t *testing.T, dir, id, name string) string {
+	t.Helper()
+	if _, err := exec.LookPath("cat"); err != nil {
+		t.Skipf("cat not found on PATH, needed to build a fake policy-command shim: %v", err)
+	}
+	shimsDir := filepath.Join(dir, "nono-tool-sandbox-"+id, "shims")
+	if err := os.MkdirAll(shimsDir, 0o755); err != nil {
+		t.Fatalf("mkdir shims dir: %v", err)
+	}
+	// A real script that execs "cat" by name, not a symlink straight to cat's
+	// own resolved binary: on a host where coreutils are one combined
+	// multi-call binary dispatching on argv[0] (NixOS, notably — see
+	// task-8-report.md), a symlink named anything other than "cat" would
+	// exec that binary with the wrong argv[0] and fail outright. Shelling out
+	// here is fine: this file drives the executor under test from the host,
+	// unsandboxed, same as every other fixture in this file.
+	script := filepath.Join(shimsDir, name)
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nexec cat\n"), 0o755); err != nil {
+		t.Fatalf("write fake shim script: %v", err)
+	}
+	return shimsDir
+}
+
+// TestShellExecutorRefusesTwoPolicyCommandsPipedTogether covers Finding B
+// (task-8-report.md): a pipe with a policy-controlled command on both ends is
+// measured to hang against a real nono session, for a reason entirely inside
+// nono's own process-spawning machinery — outside anything this package
+// controls. Rather than let it hang, execHandler refuses it up front. This
+// test cannot reproduce the hang itself (a host binary has no shim to leak a
+// descriptor from), but it can and does verify the refusal actually fires
+// for a resolved path shaped like a real nono shim.
+func TestShellExecutorRefusesTwoPolicyCommandsPipedTogether(t *testing.T) {
+	dir := t.TempDir()
+	shimsDir := fakePolicyShim(t, dir, "refuse-test", "fakepolicy")
+	t.Setenv("PATH", shimsDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	code, out, errOut := runShell(t, dir, "fakepolicy | fakepolicy", "hello\n")
+	if code != 126 {
+		t.Errorf("exit = %d, want 126 (refused)", code)
+	}
+	if out != "" {
+		t.Errorf("stdout = %q, want empty: the pipeline should be refused before either side runs", out)
+	}
+	if !strings.Contains(errOut, "refused") {
+		t.Errorf("stderr = %q, want it to explain the refusal", errOut)
+	}
+}
+
+// TestShellExecutorAllowsAPolicyCommandPipedToAFloorCommand is the control
+// case in both directions: only a policy command on *both* ends is refused.
+// A policy command paired with an ordinary floor command must keep working —
+// this is the overwhelmingly common shape in practice (git piped into rg,
+// head, ...), and must not pay any real latency for the check either.
+func TestShellExecutorAllowsAPolicyCommandPipedToAFloorCommand(t *testing.T) {
+	dir := t.TempDir()
+	shimsDir := fakePolicyShim(t, dir, "allow-test", "fakepolicy")
+	t.Setenv("PATH", shimsDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	for _, tc := range []struct {
+		name    string
+		command string
+	}{
+		{"policy writer, floor reader", "fakepolicy | cat"},
+		{"floor writer, policy reader", "cat | fakepolicy"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			code, out, errOut := runShell(t, dir, tc.command, "hello\n")
+			if code != 0 {
+				t.Errorf("exit = %d, want 0; stderr = %q", code, errOut)
+			}
+			if strings.TrimSpace(out) != "hello" {
+				t.Errorf("stdout = %q, want %q", out, "hello")
+			}
+		})
 	}
 }

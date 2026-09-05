@@ -9,7 +9,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
+	"time"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
@@ -80,6 +82,13 @@ func execHandler(ctx context.Context, args []string) error {
 		return interp.NewExitStatus(127)
 	}
 
+	// See refusePolicyToPolicyPipe: a pipe with a policy-controlled command on
+	// both ends is measured to hang, for a reason outside this file's own
+	// control, so it is refused rather than attempted.
+	if err := refusePolicyToPolicyPipe(hc, path, args[0]); err != nil {
+		return err
+	}
+
 	cmd := exec.CommandContext(ctx, path, args[1:]...)
 	cmd.Dir = hc.Dir
 	cmd.Env = execEnv(hc)
@@ -146,6 +155,136 @@ func execHandler(ctx context.Context, args []string) error {
 	}
 	fmt.Fprintf(hc.Stderr, "agent-sandbox: %s: %v\n", args[0], err)
 	return interp.NewExitStatus(126)
+}
+
+// policyPipeWriters records, by a pipe's kernel inode number, that a
+// policy-controlled command's exec handler is currently writing into it. See
+// refusePolicyToPolicyPipe.
+var policyPipeWriters sync.Map // map[uint64]struct{}
+
+// policyPipePollWindow bounds how long a policy-controlled reader waits to
+// discover whether its own upstream pipe is fed by a policy-controlled
+// writer, before concluding it is not (an ordinary floor command, or nothing
+// at all). mvdan.cc/sh runs a pipe's two sides concurrently with no ordering
+// guarantee, so a reader that finds no registration on its first check cannot
+// yet tell "the writer is a floor command" from "the writer is a policy
+// command whose goroutine has not run yet" — polling briefly resolves the
+// ambiguity without either side ever blocking indefinitely.
+//
+// The window is short deliberately: it is paid only by a policy-controlled
+// reader (a floor command reading from anything, or any writer into a floor
+// command, costs nothing here), and only for as long as it takes the
+// concurrent writer goroutine to reach its own registration point, which
+// measured in practice is on the order of microseconds, not milliseconds.
+const policyPipePollWindow = 30 * time.Millisecond
+const policyPipePollInterval = 2 * time.Millisecond
+
+// isPolicyControlledPath reports whether path is a nono-generated shim for a
+// policy-controlled command, rather than a floor command's real binary,
+// judging only by the resolved path's own shape. This is a heuristic over
+// nono's own directory naming ("<TMPDIR>/nono-tool-sandbox-<id>/shims/<name>",
+// measured directly), not a documented API: nono gives the process it execs no
+// other signal that distinguishes the two tiers from the resolved path alone.
+// A future nono that renames this directory would make this heuristic stop
+// matching — the failure mode is a return to today's hang, not a false
+// refusal, since refusePolicyToPolicyPipe only acts when it matches.
+func isPolicyControlledPath(path string) bool {
+	shimsDir := filepath.Dir(path)
+	return filepath.Base(shimsDir) == "shims" &&
+		strings.Contains(filepath.Base(filepath.Dir(shimsDir)), "nono-tool-sandbox-")
+}
+
+// pipeInode reports the kernel inode number identifying rw's underlying
+// anonymous pipe, and whether rw is in fact a pipe-backed *os.File at all —
+// interp.HandlerContext.Stdout is only sometimes one (mvdan.cc/sh assigns a
+// real *os.File specifically for a syntax.Pipe/PipeAll operator's ends; a
+// caller-supplied stream, a real file redirect, or the top-level request's own
+// stdout/stderr are not). Both ends of one os.Pipe() report the same inode
+// number, which is what lets a writer and a reader on the same pipeline stage
+// recognize each other without sharing any Go-level reference.
+func pipeInode(rw any) (uint64, bool) {
+	f, ok := rw.(*os.File)
+	if !ok {
+		return 0, false
+	}
+	fi, err := f.Stat()
+	if err != nil || fi.Mode()&os.ModeNamedPipe == 0 {
+		return 0, false
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, false
+	}
+	return st.Ino, true
+}
+
+// refusePolicyToPolicyPipe detects a pipeline stage with a policy-controlled
+// command on both ends and refuses it before either side starts, rather than
+// let it hang.
+//
+// Measured directly: a pipe stage with a policy-controlled command on both
+// ends produces its complete, correct output and then never exits, stranding
+// the reader's shim process permanently in a blocking read (confirmed via
+// /proc: the reader's shim sits in anon_pipe_read; the broker's own stdin
+// pipe to it is still open on the broker's side, because the broker's write
+// end of the *writer's* own interposed stdout/stderr pipes is — in turn —
+// still held open by the reader's shim/worker process, which inherited it
+// purely through fork, unrelated to anything it is actually doing). The
+// leaked reference lives entirely inside nono's own process-spawning
+// machinery — its supervisor process retains file descriptors handed to it
+// while servicing one exec request past that request's own completion, and
+// those descriptors leak via ordinary fork inheritance into the next
+// concurrently (or subsequently) spawned worker process within the same
+// session. No amount of care in interposeOutputs changes what a *separate,
+// external* nono process does with fds it was handed for a different,
+// concurrent request; there is nothing left to fix on this side of the
+// process boundary. Full detail: task-8-report.md's Finding B fix report.
+//
+// See policyPipeWriters and policyPipePollWindow for how the race between a
+// pipe's two concurrently-running sides is resolved without either side
+// blocking indefinitely.
+func refusePolicyToPolicyPipe(hc interp.HandlerContext, path, name string) error {
+	if !isPolicyControlledPath(path) {
+		return nil
+	}
+
+	if inode, ok := pipeInode(hc.Stdout); ok {
+		// A policy-controlled writer. Register and proceed immediately —
+		// polling here would delay every policy-command pipe whose reader is
+		// an ordinary floor command, which is the common case.
+		policyPipeWriters.Store(inode, struct{}{})
+		go func() {
+			// Bounded past every reader's own poll window, so a reader on
+			// this exact pipe can never miss the registration; short enough
+			// that a later, unrelated pipe reusing the same kernel inode
+			// number (possible, if unlikely, once this pipe is fully closed)
+			// is not mistaken for this one.
+			time.Sleep(policyPipePollWindow + 20*time.Millisecond)
+			policyPipeWriters.Delete(inode)
+		}()
+		return nil
+	}
+
+	inode, ok := pipeInode(hc.Stdin)
+	if !ok {
+		return nil
+	}
+	// A policy-controlled reader. The writer may not have registered yet
+	// purely from goroutine scheduling, not because it is a floor command —
+	// poll briefly before concluding the latter.
+	deadline := time.Now().Add(policyPipePollWindow)
+	for {
+		if _, found := policyPipeWriters.Load(inode); found {
+			fmt.Fprintf(hc.Stderr,
+				"agent-sandbox: %s: refused: this pipeline pipes one policy-controlled command into another, a combination measured to hang and strand a process rather than exit or refuse cleanly. Run them as separate commands (through a temp file, or two agent-sandbox exec calls) instead of piping one directly into the other.\n",
+				name)
+			return interp.NewExitStatus(126)
+		}
+		if time.Now().After(deadline) {
+			return nil
+		}
+		time.Sleep(policyPipePollInterval)
+	}
 }
 
 // outputDrain copies one command's output pipe into the interpreter's writer.

@@ -232,18 +232,28 @@ effective policy across self-invocation unless an explicit self edge says
 otherwise.
 
 **The launcher invokes this entrypoint by base name, never by absolute path,
-and the profile must list its directory in `executable_dirs` for that to
-resolve.** nono treats an absolute-path invocation of a declared policy
-command as a direct exec bypass and refuses it outright — the same refusal
-`git`'s own shim produces for an absolute-path bypass attempt, measured here
-against the entrypoint itself. Resolving the base name goes through
-`command_policies.executable_dirs` plus the entry's pinned `executable`, not
-through the launcher's own `PATH`. A command profile that declares
-`agent-sandbox` as a policy command (every profile in this document does)
-must therefore list the directory holding the installed `agent-sandbox`
-binary in `executable_dirs` — omitting it means the broker session fails to
-start, for every command in the profile at once, not just this one.
-`agent-sandbox doctor` checks for this specifically.
+and that name resolves through the launcher's own `PATH`, not through
+`executable_dirs`.** nono treats an absolute-path invocation of a declared
+policy command as a direct exec bypass and refuses it outright — the same
+refusal `git`'s own shim produces for an absolute-path bypass attempt,
+measured here against the entrypoint itself. Measured separately, holding
+one variable at a time: a profile whose `command_policies.executable_dirs`
+names the installed binary's directory, invoked with that directory absent
+from the launcher's own `PATH`, fails outright (`cannot find binary path`);
+the same profile with `executable_dirs` pointed at an unrelated, empty
+directory instead, but with the right directory on `PATH`, starts the named
+binary successfully. `executable_dirs` plays no measured part in resolving
+the session entrypoint — nono resolves the bare name the same way an
+ordinary shell would, searching the launcher process's own `PATH` before any
+sandbox exists at all.
+
+This means the directory holding the installed `agent-sandbox` binary must
+be on the *launcher's* `PATH` — and that PATH resolution finds whichever
+`agent-sandbox` comes first on it, not necessarily the one currently running:
+a stale copy or an unrelated program sharing the name, earlier on that same
+`PATH`, would silently become the broker instead. `agent-sandbox doctor`
+checks that resolving the entrypoint's base name through this process's own
+`PATH` lands back on this exact binary.
 
 `reason` reaches the agent verbatim:
 `nono: tool-sandbox denied git: Command 'git' is blocked: force push is disabled in this sandbox`

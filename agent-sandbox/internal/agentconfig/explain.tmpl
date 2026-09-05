@@ -32,7 +32,10 @@ else to check.
 {{else}}
 - (none declared in the current profile)
 {{end}}
-**Floor commands** — no argv rules, run at the broker's own grants:
+**Floor paths** — every executable inside these (a directory) or the file
+itself (a single path) is a floor command, no argv rules, run at the
+broker's own grants. This lists *where* they live, not their names — `ls`
+the directory (or ask the operator) to see exactly which programs that is:
 {{if .FloorPaths}}{{range .FloorPaths}}- `{{.}}`
 {{end -}}
 {{else}}- (none declared in the current profile)
@@ -63,9 +66,10 @@ at `{{.ProfilePath}}`: it is read once, when the broker starts.
 After editing, run `agent-sandbox ai config-check` — it loads the config and
 resolves the agent profile exactly as launch does, so a passing check means the
 config will not be what breaks the next launch. `agent-sandbox doctor` checks
-the command profile itself (that it exists, that `nono profile validate`
-passes on it, and that it does not grant write access to the broker's own
-binary).
+the command profile itself: that it exists, that `nono profile validate`
+passes on it, that it does not grant write access to the broker's own
+binary, and that resolving the broker's own name through this process's PATH
+lands back on that exact binary.
 
 Schema:
 

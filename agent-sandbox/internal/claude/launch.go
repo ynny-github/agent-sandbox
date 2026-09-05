@@ -396,17 +396,28 @@ func waitForSocketOrExit(path string, timeout time.Duration, exited <-chan error
 // A command profile that declares "agent-sandbox" as its own policy command
 // (the shape docs/superpowers/specs/2026-09-05-broker-runs-commands-inside-the-sandbox.md's
 // own worked example uses, and the shape command-profile.json in this
-// repository uses) is matched against a *name*, resolved through nono's own
-// command_policies.executable_dirs plus that entry's pinned executable — not
-// against whatever absolute path the caller happened to invoke it by. Handing
-// nono the absolute path instead is treated as a direct exec bypass of the
-// policy command it resolves to and refused outright ("tool-sandbox direct
-// exec bypass denied for policy-controlled command 'agent-sandbox'"), measured
-// against a real profile carrying that shape. Resolution of the base name
-// still goes through nono's own process (inheriting this process's PATH,
-// unaffected by anything the sandbox itself grants), so the profile's
-// executable_dirs must contain the directory selfPath resolves to; doctor's
-// checkCommandProfile verifies this.
+// repository uses) treats an absolute-path invocation as a direct exec
+// bypass of the policy command it resolves to and refuses it outright
+// ("tool-sandbox direct exec bypass denied for policy-controlled command
+// 'agent-sandbox'"), measured against a real profile carrying that shape.
+//
+// nono resolves the bare name the same way an ordinary shell would: by
+// searching this *launcher* process's own PATH before the sandbox exists at
+// all — measured directly, against two profiles differing in only one
+// variable each: a profile whose command_policies.executable_dirs names the
+// directory but whose PATH omits it fails outright ("cannot find binary
+// path"); a profile whose executable_dirs names a directory the resolved
+// binary is *not* in, but whose PATH includes the right one, starts the
+// named binary successfully. executable_dirs plays no part in resolving the
+// entrypoint itself — what it is actually for is not established by this
+// measurement.
+//
+// This means the directory holding the installed agent-sandbox binary must
+// be on the *launcher's* PATH, not merely named somewhere in the profile —
+// and that PATH resolution finds whichever "agent-sandbox" comes first: a
+// different, stale copy earlier on PATH would silently become the broker
+// instead of this one. doctor's checkCommandProfile verifies the resolution
+// this process's own PATH would produce lands on this exact binary.
 func BrokerArgs(cfg *config.Config, nonoPath, selfPath, sockPath, workdir string) []string {
 	return []string{
 		nonoPath, "run", "--silent",

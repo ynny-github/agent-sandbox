@@ -54,6 +54,15 @@ func stubRunCommand(rc func(context.Context, string, ...string) ([]byte, error))
 	return func() { runCommand = orig }
 }
 
+// stubLookPath overrides only lookPath, leaving runCommand untouched — the
+// counterpart to stubRunCommand, for checkCommandProfile's own use of
+// lookPath to resolve the broker entrypoint's base name.
+func stubLookPath(lp func(string) (string, error)) func() {
+	orig := lookPath
+	lookPath = lp
+	return func() { lookPath = orig }
+}
+
 func TestCheckNono_NotInPath(t *testing.T) {
 	stubNonoSeams(t,
 		func(string) (string, error) { return "", errors.New("not found") },
@@ -86,7 +95,19 @@ func TestCheckNono_VersionFails(t *testing.T) {
 func stubAllSeamsOK(t *testing.T) {
 	t.Helper()
 	stubNonoSeams(t,
-		func(string) (string, error) { return "/usr/bin/nono", nil },
+		func(name string) (string, error) {
+			if name == "nono" {
+				return "/usr/bin/nono", nil
+			}
+			// Anything else — specifically "agent-sandbox", the broker
+			// entrypoint's base name that checkCommandProfile looks up —
+			// resolves to whatever selfPath is stubbed to at call time,
+			// matching what a real PATH lookup would find if this exact
+			// binary's own directory were on it. A closure, not a fixed
+			// value, because tests that use this helper stub selfPath
+			// afterward.
+			return selfPath()
+		},
 		func(context.Context, string, ...string) ([]byte, error) { return []byte("nono 0.4.2\n"), nil },
 	)
 	t.Setenv("XDG_STATE_HOME", shortStateDir(t))
@@ -376,8 +397,15 @@ func TestCheckCommandProfileOK(t *testing.T) {
 		return []byte("valid"), nil
 	})
 	defer restore()
-	restoreSelf := stubSelfPath(filepath.Join(t.TempDir(), "agent-sandbox"))
+	selfBin := filepath.Join(t.TempDir(), "agent-sandbox")
+	restoreSelf := stubSelfPath(selfBin)
 	defer restoreSelf()
+	// PATH must resolve the same base name back to this exact binary — see
+	// BrokerArgs's doc comment on why that is what actually matters, measured
+	// directly against a real nono session (not command_policies.executable_dirs,
+	// despite an earlier version of this check assuming so).
+	restoreLookPath := stubLookPath(stubLookPathByName(map[string]string{"agent-sandbox": selfBin}))
+	defer restoreLookPath()
 
 	got := checkCommandProfile(configWithProfile(t, dir, profile))
 	if !got.ok {
@@ -385,28 +413,17 @@ func TestCheckCommandProfileOK(t *testing.T) {
 	}
 }
 
-func TestCheckCommandProfileFailsWhenEntrypointExecutableDirMissing(t *testing.T) {
-	// BrokerArgs invokes the broker by base name, and nono resolves a
-	// declared policy command's name against command_policies.executable_dirs,
-	// not the process's own PATH. A profile that declares "agent-sandbox" (the
-	// base name of whatever selfPath resolves to) as a policy command without
-	// listing its directory here would fail to start the broker session —
-	// exactly the shape this test's fixture profile has.
+func TestCheckCommandProfileFailsWhenEntrypointNotOnPATH(t *testing.T) {
+	// BrokerArgs invokes the broker by base name, resolved through this
+	// process's own PATH the same way an ordinary shell would (measured
+	// directly; see BrokerArgs's doc comment) — not through
+	// command_policies.executable_dirs. A binary that PATH cannot find at
+	// all means the broker session fails to start.
 	dir := t.TempDir()
-	binDir := t.TempDir()
-	selfBin := filepath.Join(binDir, "agent-sandbox")
+	selfBin := filepath.Join(t.TempDir(), "agent-sandbox")
 
 	profile := filepath.Join(dir, "command-profile.json")
-	body := `{
-	  "filesystem": {"allow": ["$WORKDIR"]},
-	  "command_policies": {
-	    "executable_dirs": ["/some/other/dir"],
-	    "commands": {
-	      "agent-sandbox": {"executable": "` + selfBin + `"}
-	    }
-	  }
-	}`
-	if err := os.WriteFile(profile, []byte(body), 0o600); err != nil {
+	if err := os.WriteFile(profile, []byte(`{"filesystem":{"allow":["$WORKDIR"]}}`), 0o600); err != nil {
 		t.Fatalf("write profile: %v", err)
 	}
 	restore := stubRunCommand(func(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -415,35 +432,30 @@ func TestCheckCommandProfileFailsWhenEntrypointExecutableDirMissing(t *testing.T
 	defer restore()
 	restoreSelf := stubSelfPath(selfBin)
 	defer restoreSelf()
+	restoreLookPath := stubLookPath(stubLookPathByName(nil))
+	defer restoreLookPath()
 
 	got := checkCommandProfile(configWithProfile(t, dir, profile))
 	if got.ok {
-		t.Fatal("checkCommandProfile ok = true, want false: profile declares the entrypoint as a policy command without its directory in executable_dirs")
+		t.Fatal("checkCommandProfile ok = true, want false: the entrypoint's base name is not on PATH at all")
 	}
-	if !strings.Contains(got.hint, "executable_dirs") {
-		t.Errorf("hint = %q, want it to mention executable_dirs", got.hint)
-	}
-	if !strings.Contains(got.hint, binDir) {
-		t.Errorf("hint = %q, want it to name the missing directory %q", got.hint, binDir)
+	if !strings.Contains(got.hint, "PATH") {
+		t.Errorf("hint = %q, want it to mention PATH", got.hint)
 	}
 }
 
-func TestCheckCommandProfileOKWhenEntrypointExecutableDirPresent(t *testing.T) {
+func TestCheckCommandProfileFailsWhenEntrypointOnPATHResolvesElsewhere(t *testing.T) {
+	// The failure mode this catches is not "not found" but "found the wrong
+	// one": PATH resolving "agent-sandbox" to some *other* binary than the
+	// one currently running this check means that other binary — a stale
+	// install, or an unrelated program that happens to share the name —
+	// would silently become the broker instead.
 	dir := t.TempDir()
-	binDir := t.TempDir()
-	selfBin := filepath.Join(binDir, "agent-sandbox")
+	selfBin := filepath.Join(t.TempDir(), "agent-sandbox")
+	otherBin := filepath.Join(t.TempDir(), "agent-sandbox")
 
 	profile := filepath.Join(dir, "command-profile.json")
-	body := `{
-	  "filesystem": {"allow": ["$WORKDIR"]},
-	  "command_policies": {
-	    "executable_dirs": ["` + binDir + `"],
-	    "commands": {
-	      "agent-sandbox": {"executable": "` + selfBin + `"}
-	    }
-	  }
-	}`
-	if err := os.WriteFile(profile, []byte(body), 0o600); err != nil {
+	if err := os.WriteFile(profile, []byte(`{"filesystem":{"allow":["$WORKDIR"]}}`), 0o600); err != nil {
 		t.Fatalf("write profile: %v", err)
 	}
 	restore := stubRunCommand(func(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -452,10 +464,15 @@ func TestCheckCommandProfileOKWhenEntrypointExecutableDirPresent(t *testing.T) {
 	defer restore()
 	restoreSelf := stubSelfPath(selfBin)
 	defer restoreSelf()
+	restoreLookPath := stubLookPath(stubLookPathByName(map[string]string{"agent-sandbox": otherBin}))
+	defer restoreLookPath()
 
 	got := checkCommandProfile(configWithProfile(t, dir, profile))
-	if !got.ok {
-		t.Errorf("checkCommandProfile ok = false, want true: details=%v hint=%q", got.details, got.hint)
+	if got.ok {
+		t.Fatal("checkCommandProfile ok = true, want false: PATH resolves the entrypoint to a different binary")
+	}
+	if !strings.Contains(got.hint, "different binary") {
+		t.Errorf("hint = %q, want it to say PATH resolves to a different binary", got.hint)
 	}
 }
 

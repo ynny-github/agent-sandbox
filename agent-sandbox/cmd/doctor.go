@@ -201,18 +201,21 @@ func checkCommandProfile(cfg *config.Config) checkResult {
 	}
 
 	base := filepath.Base(self)
-	declared, missingDir, derr := profileDeclaresEntrypointWithoutExecutableDir(path, base, self)
-	if derr != nil {
-		r.details = append(r.details, fmt.Sprintf("error: could not check command_policies.executable_dirs for %q: %v", base, derr))
-		r.hint = "could not verify the broker's own directory is in command_policies.executable_dirs; " +
-			"fix the error above and re-run doctor"
+	resolved, rerr := lookPath(base)
+	if rerr != nil {
+		r.details = append(r.details, fmt.Sprintf("entrypoint: %q not found on PATH", base))
+		r.hint = "the launcher invokes the broker by base name (\"" + base + "\"), resolved through this " +
+			"process's own PATH the same way an ordinary shell would, before any sandbox exists — nono's " +
+			"command_policies.executable_dirs plays no part in resolving it (measured; see BrokerArgs's doc " +
+			"comment); put the directory holding the installed agent-sandbox binary on PATH, or the session " +
+			"will fail to start"
 		return r
 	}
-	if declared {
-		r.details = append(r.details, fmt.Sprintf("entrypoint: %q declared under command_policies.commands, but %q is not in command_policies.executable_dirs", base, missingDir))
-		r.hint = "the launcher invokes the broker by base name (\"" + base + "\"), which nono resolves against " +
-			"command_policies.executable_dirs, not the process's own PATH; add " + missingDir +
-			" to executable_dirs, or the session will fail to start"
+	if cleanAbs(resolved) != cleanAbs(self) {
+		r.details = append(r.details, fmt.Sprintf("entrypoint: %q on PATH resolves to %s, not the running binary %s", base, resolved, self))
+		r.hint = "PATH resolves \"" + base + "\" to a different binary than the one running this check — " +
+			"that other one would silently become the broker instead, whatever it is; put this binary's own " +
+			"directory ahead of it on PATH, or remove the other one"
 		return r
 	}
 
@@ -220,53 +223,15 @@ func checkCommandProfile(cfg *config.Config) checkResult {
 	return r
 }
 
-// profileDeclaresEntrypointWithoutExecutableDir reports whether the profile at
-// profilePath declares a command_policies.commands entry named base — i.e.
-// declares the broker itself as a policy command, the shape this repository's
-// own command-profile.json and the design's worked example both use — while
-// filepath.Dir(self) is absent from command_policies.executable_dirs.
-//
-// This matters because BrokerArgs invokes the broker by base name (see its own
-// doc comment): nono resolves that name against command_policies.commands plus
-// executable_dirs, not against the launcher's own PATH. A profile that declares
-// the entrypoint as a policy command without listing its directory here fails
-// to start the broker session at all, silently from the operator's point of
-// view until they read the broker's own stderr.
-//
-// missingDir is self's directory, returned for the hint message regardless of
-// whether declared is true, so the caller need not recompute it.
-func profileDeclaresEntrypointWithoutExecutableDir(profilePath, base, self string) (declared bool, missingDir string, err error) {
-	missingDir = filepath.Dir(self)
-
-	data, err := os.ReadFile(profilePath)
-	if err != nil {
-		return false, missingDir, err
+// cleanAbs is filepath.Clean for two paths being compared for identity, one
+// of which (lookPath's result) may not be absolute if PATH itself contains a
+// relative entry. Comparing raw strings would treat "./agent-sandbox" and its
+// absolute equivalent as different binaries when they are the same file.
+func cleanAbs(p string) string {
+	if abs, err := filepath.Abs(p); err == nil {
+		return filepath.Clean(abs)
 	}
-	var p struct {
-		CommandPolicies struct {
-			ExecutableDirs []string                   `json:"executable_dirs"`
-			Commands       map[string]json.RawMessage `json:"commands"`
-		} `json:"command_policies"`
-	}
-	if err := json.Unmarshal(data, &p); err != nil {
-		return false, missingDir, err
-	}
-
-	if _, ok := p.CommandPolicies.Commands[base]; !ok {
-		// The profile does not declare the broker itself as a policy command at
-		// all (e.g. it is reached only through PATH resolution as an ordinary
-		// program, or the profile has no command_policies yet). Nothing here to
-		// check.
-		return false, missingDir, nil
-	}
-
-	want := filepath.Clean(missingDir)
-	for _, dir := range p.CommandPolicies.ExecutableDirs {
-		if filepath.Clean(strings.TrimSpace(dir)) == want {
-			return false, missingDir, nil
-		}
-	}
-	return true, missingDir, nil
+	return filepath.Clean(p)
 }
 
 // profileGrantsWrite reports whether binPath falls under one of the profile's

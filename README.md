@@ -178,7 +178,7 @@ inspects beyond its path. See [The command profile](#the-command-profile).
 |---|---|
 | `agent-sandbox claude -- [claude args...]` | Launch Claude under nono, with the command broker running as a sibling session |
 | `agent-sandbox exec -- <command>` | Send one command to the broker and stream its output |
-| `agent-sandbox doctor` | Check that `nono` works, the broker socket can bind, and the command profile exists, validates, and does not grant write access to the broker's own binary. Exit 0 / 1 |
+| `agent-sandbox doctor` | Check that `nono` works, the broker socket can bind, and the command profile exists, validates, does not grant write access to the broker's own binary, and resolves its own name back to itself. Exit 0 / 1 |
 | `agent-sandbox debug -- [claude args...]` | Print the `nono` invocations for both sessions, the generated agent profile, and the GitHub MCP config (token redacted) — without running anything |
 | `agent-sandbox ai explain` | Agent-facing description of the sandbox: how commands run, both tiers, and every denial's reason |
 | `agent-sandbox ai config-check` | Validate `agent-sandbox.toml` the way launch reads it, and print what the launched agent's own profile grants |
@@ -215,6 +215,10 @@ MCP is enabled.
   `filesystem.allow` only, so a grant expressed purely through `$WORKDIR` is
   not something this check can see — nono itself is the final word on this
   at launch).
+- Resolving the broker's own base name through this process's own `PATH` —
+  the same lookup the launcher's `BrokerArgs` relies on — lands back on this
+  exact binary. A different `agent-sandbox` earlier on `PATH` would silently
+  become the broker instead.
 
 If any of these fail, `agent-sandbox claude` will not launch Claude at all.
 
@@ -418,16 +422,19 @@ argv rules:
 
 Three properties worth knowing before writing your own:
 
-- **The broker's own entry must list its directory in `executable_dirs`.**
+- **The installed binary's directory must be on the launcher's own `PATH`.**
   The launcher invokes `agent-sandbox broker` by base name, never by an
   absolute path: nono treats an absolute-path invocation of a declared
-  policy command as a direct exec bypass and refuses it, so resolving the
-  broker's own entrypoint goes through `command_policies.executable_dirs`
-  plus its pinned `executable`, not through the launcher's own `PATH`. Every
-  profile that declares `agent-sandbox` as a policy command — which is every
-  profile shaped like the example above — needs the directory holding the
-  installed binary in `executable_dirs`, or the whole session fails to
-  start. `agent-sandbox doctor` checks for exactly this.
+  policy command as a direct exec bypass and refuses it. That name then
+  resolves the same way an ordinary shell would — through the *launcher
+  process's own* `PATH`, before any sandbox exists — not through
+  `command_policies.executable_dirs`, which measurably plays no part in
+  resolving the session entrypoint at all. This also means PATH resolution
+  finds whichever `agent-sandbox` comes first on it, not necessarily the one
+  you meant: a stale copy or an unrelated program sharing the name, earlier
+  on that PATH, would silently become the broker instead. `agent-sandbox
+  doctor` checks that resolving the entrypoint through this process's own
+  PATH lands back on this exact binary.
 - **Enumerating every runnable command is the real cost of this design.** A
   program absent from both tiers cannot run at all, which is the allowlist
   working as intended — and also the profile's recurring maintenance

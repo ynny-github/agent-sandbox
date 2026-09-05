@@ -6,13 +6,14 @@
     "include": ["nix_runtime", "git_config", "mise_manager"]
   },
   "filesystem": {
-    "allow": ["$WORKDIR", "/tmp"],
+    "allow": ["$WORKDIR", "/home/yn/.local/state/agent-sandbox"],
     "read": [
       "/nix/store",
       "/run/current-system/sw",
       "/home/yn/.local/share/mise",
       "/home/yn/.cache/go-build",
-      "/home/yn/go"
+      "/home/yn/go/pkg/mod",
+      "/home/yn/.local/state/agent-sandbox"
     ],
     "read_file": ["/home/yn/go/bin/agent-sandbox"]
   },
@@ -28,7 +29,7 @@
     "commands": {
       "agent-sandbox": {
         "executable": "/home/yn/go/bin/agent-sandbox",
-        "can_use": ["git"],
+        "can_use": ["git", "go"],
         "from": {
           "session": {
             "sandbox": {
@@ -39,17 +40,18 @@
                 "/home/yn/.local/share/mise",
                 "/home/yn/.config/mise",
                 "/home/yn/.cache/go-build",
-                "/home/yn/go",
+                "/home/yn/go/pkg/mod",
+                "/home/yn/.local/state/agent-sandbox",
                 "$WORKDIR"
               ],
-              "fs_write": ["$WORKDIR", "/tmp", "/home/yn/.cache/go-build", "/home/yn/go"],
+              "fs_write": ["$WORKDIR", "/home/yn/.local/state/agent-sandbox"],
               "environment": {
                 "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM"]
               },
 
               "exec_paths": [
                 "/nix/store/zc6fy62c341aibk36p4ywff7rf9wn4wx-ripgrep-15.2.0/bin",
-                "/home/yn/.local/share/mise/installs/go/1.25.14",
+                "/home/yn/.local/share/mise/installs/go/1.25.14/bin/gofmt",
                 "/nix/store/kask8rc5n2vrs492p1sq62vilj1sfdrs-mise-2026.8.6/bin",
                 "/nix/store/q8wvrqkl9x8vfmjflgxl9y0y7bnjlv12-coreutils-full-9.11/bin",
                 "/nix/store/c3pj1yrqn88cc8zkr5hywmvy15m0r6c9-gnused-4.10/bin",
@@ -57,8 +59,7 @@
                 "/nix/store/i6hlg4ss9m53gvh8jqp0zgac67x6mblg-findutils-4.10.0/bin",
                 "/nix/store/lxzzxlm3dis6as7y13l13ywb0nh1c3h8-diffutils-3.12/bin",
                 "/nix/store/hzqx251825abx40q1zqgd37g6hmkz75g-which-2.23/bin",
-                "/home/yn/.local/share/mise/installs/lefthook/2.1.10",
-                "/tmp"
+                "/home/yn/.local/share/mise/installs/lefthook/2.1.10"
               ]
             }
           }
@@ -89,7 +90,11 @@
                   "reason": "force push is disabled in this sandbox; use --force-with-lease if you must overwrite a remote ref you expect, or ask the operator to run it."
                 },
                 {
-                  "argv": { "prefix": ["reset", "--hard"] },
+                  "argv": { "contains": ["-f"] },
+                  "reason": "force push is disabled in this sandbox; use --force-with-lease if you must overwrite a remote ref you expect, or ask the operator to run it."
+                },
+                {
+                  "argv": { "contains": ["--hard"] },
                   "reason": "hard reset is disabled in this sandbox; it discards uncommitted work. Use `git stash` or commit first, or ask the operator."
                 },
                 {
@@ -108,6 +113,37 @@
                   "argv": { "contains": ["-c"] },
                   "reason": "git -c is disabled in this sandbox; it can override any config key, including ones that run arbitrary commands (core.pager, credential.helper, ...). Edit .git/config directly if you need a persistent change."
                 }
+              ]
+            }
+          }
+        }
+      },
+
+      "go": {
+        "executable": "/home/yn/.local/share/mise/installs/go/1.25.14/bin/go",
+        "from": {
+          "agent-sandbox": {
+            "sandbox": {
+              "fs_read_file": ["/home/yn/.local/share/mise/installs/go/1.25.14/bin/go"],
+              "fs_read": [
+                "/nix/store",
+                "/run/current-system/sw",
+                "/home/yn/.local/share/mise/installs/go/1.25.14",
+                "/home/yn/go/pkg/mod",
+                "$WORKDIR"
+              ],
+              "fs_write": [
+                "$WORKDIR",
+                "/home/yn/.cache/go-build",
+                "/home/yn/go/pkg/mod",
+                "/tmp"
+              ],
+              "environment": {
+                "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM"]
+              },
+              "exec_paths": [
+                "/home/yn/.local/share/mise/installs/go/1.25.14/pkg/tool/linux_amd64",
+                "/tmp"
               ]
             }
           }

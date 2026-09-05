@@ -19,8 +19,14 @@ type Executor interface {
 }
 
 // Server accepts one command per connection on a unix socket. It runs in the
-// launcher process, outside the sandbox, which is the whole point: a process
-// inside the sandbox cannot create a new sandbox boundary.
+// dedicated broker process — outside the agent's own sandbox, but inside a
+// nono session of its own — which is the point: a process cannot create a
+// new sandbox boundary around itself, so the broker needs a boundary of its
+// own rather than borrowing the agent's, or worse, running with the
+// unsandboxed launcher's own reach.
+//
+// That boundary is not wired up yet: see internal/claude.startCommandBroker,
+// which refuses to start the broker until it does.
 type Server struct {
 	listener net.Listener
 	sockPath string

@@ -19,6 +19,14 @@ type HandlerConfig struct {
 }
 
 func HandleRunCommand(ctx context.Context, cmd string, cfg HandlerConfig) (*mcp.CallToolResult, any, error) {
+	// A nil CommandRunner means the server was started with no broker
+	// connection at all (cmd/serve.go's lightweight/E2E path builds
+	// HandlerConfig{} directly, without even unavailableRunner). Guard here
+	// rather than let the call below panic the whole MCP server process.
+	if cfg.CommandRunner == nil {
+		return errorResult(broker.SandboxNotRunningHint), nil, nil
+	}
+
 	files, err := output.CreateFiles(cfg.OutputDir)
 	if err != nil {
 		return errorResult(fmt.Sprintf("output: %v", err)), nil, nil

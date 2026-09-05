@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/broker"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/mcptool"
 )
 
@@ -195,6 +196,31 @@ func TestRunCommand_CommandRunnerError_ReturnsStructuredResponse(t *testing.T) {
 	text := res.Content[0].(*mcp.TextContent).Text
 	if !strings.Contains(text, "attach interrupted") {
 		t.Errorf("error content = %q, want it to contain runner error", text)
+	}
+}
+
+// A HandlerConfig with no CommandRunner at all (cmd/serve.go's
+// lightweight/E2E path builds one this way) must not panic the server
+// process; it must return the same actionable hint printed everywhere else
+// the broker is unreachable.
+func TestRunCommand_NilCommandRunner_ReturnsStructuredErrorNotPanic(t *testing.T) {
+	dir := t.TempDir()
+	cfg := mcptool.HandlerConfig{OutputDir: dir}
+	session := setupServerWithConfig(t, cfg)
+
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "run_command",
+		Arguments: map[string]any{"command": "echo hi"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected tool error for a nil CommandRunner, got: %v", res.Content)
+	}
+	text := res.Content[0].(*mcp.TextContent).Text
+	if !strings.Contains(text, broker.SandboxNotRunningHint) {
+		t.Errorf("error content = %q, want the broker unavailable hint", text)
 	}
 }
 

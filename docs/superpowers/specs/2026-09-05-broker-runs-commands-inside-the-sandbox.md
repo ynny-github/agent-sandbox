@@ -361,11 +361,38 @@ mediate *everything* is mistaken about these.
   ever fed the shell side. `Resolve` and the catalog stay: the agent profile is
   still generated.
 - `internal/safe/git` and `cmd/safe_git.go`. Its rules move to
-  `invocation_policy` on git's edge, where they are stronger — the current
-  wrapper is evaded by `sh -c 'git push --force'`, and the replacement cannot be
-  evaded at all. Two of its sixteen rules do not translate: a refspec beginning
-  with `:` or `+` (token-prefix inspection) and `-c key=value` inspection. Deny
-  `-c` wholesale; accept the refspec gap.
+  `invocation_policy` on git's edge, where they cannot be evaded by wrapping —
+  the deleted wrapper itself was evaded by `sh -c 'git push --force'`. That is
+  narrower than "the replacement translates the sixteen rules": counted
+  against `internal/safe/git/rules.go`'s own rule IDs at the commit that
+  deleted it, at least eight — `config-write`, `branch-force-delete`,
+  `filter-history`, `update-ref-delete`, `gc-prune`, `remote-tamper`,
+  `tag-delete`, and `discard-changes` — shipped with no `invocation_policy`
+  counterpart at all when this profile was first written, not even an
+  imprecise one. `config-write`'s absence was a real, demonstrated
+  regression: `git config alias.h 'reset --hard'` then `git h` (or writing
+  `$WORKDIR/.git/config` directly, which `fs_write` already permits) reaches
+  a denied command with no execve in between, so no shim ever sees it, and
+  the fix pass that found this closed seven of the eight with argv rules
+  precise enough not to block common legitimate usage (`git config`'s own
+  subcommand denied wholesale, `-D`/`--delete`/`--prune=now`/`--prune=all`/
+  `filter-branch`/`filter-repo`/`remote remove|rm|set-url`/`tag -d`, each as
+  its own `prefix` or `contains` rule) plus one true mechanism gap this
+  branch's own choice does not close, described next. `discard-changes`
+  stays accepted loss: nothing in `exact`/`prefix`/`contains` can express "the
+  worktree-affecting form of `checkout`/`restore`, but not the `--staged` or
+  path-scoped ones" without either missing the dangerous default case or
+  blocking the safe, everyday one — see `command-profile.json`'s git entry
+  for the seven that did ship.
+  Two things the *matcher itself* cannot express regardless of which rule ID
+  is being ported: a refspec beginning with `:` or `+` (token-prefix
+  inspection at an arbitrary position) and per-key `-c`/`--config-env`
+  inspection (`alias.*` vs. an ordinary override). Deny `-c` (as a `prefix`,
+  not `contains` — `contains` also wrongly matches `-c` as a *subcommand's*
+  own flag, e.g. `git switch -c`) and `--config-env` wholesale instead, which
+  is stronger for the keys it was guarding but also refuses legitimate
+  one-off uses like `git -c core.pager=cat log` the original per-key
+  inspection would have let through; accept the refspec gap.
 
 - `internal/safe/dockercompose`, `cmd/safe_docker_compose.go`, and with the git
   wrapper gone too, `cmd/safe.go` and `internal/safe`. Command control narrows

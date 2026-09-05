@@ -15,7 +15,7 @@
       "/home/yn/go/pkg/mod",
       "/home/yn/.local/state/agent-sandbox"
     ],
-    "read_file": ["/home/yn/go/bin/agent-sandbox"]
+    "read_file": ["/home/yn/.local/share/mise/installs/go/1.25.14/bin/agent-sandbox"]
   },
   "environment": {
     "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM"]
@@ -25,15 +25,15 @@
   },
 
   "command_policies": {
-    "executable_dirs": ["/home/yn/go/bin"],
+    "executable_dirs": ["/home/yn/.local/share/mise/installs/go/1.25.14/bin"],
     "commands": {
       "agent-sandbox": {
-        "executable": "/home/yn/go/bin/agent-sandbox",
+        "executable": "/home/yn/.local/share/mise/installs/go/1.25.14/bin/agent-sandbox",
         "can_use": ["git", "go"],
         "from": {
           "session": {
             "sandbox": {
-              "fs_read_file": ["/home/yn/go/bin/agent-sandbox"],
+              "fs_read_file": ["/home/yn/.local/share/mise/installs/go/1.25.14/bin/agent-sandbox"],
               "fs_read": [
                 "/nix/store",
                 "/run/current-system/sw",
@@ -80,7 +80,10 @@
               "network": { "allow_all": true },
               "environment": {
                 "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM"]
-              }
+              },
+              "exec_paths": [
+                "/nix/store/8yh8zbb0r4na7gkqk0db0gbdid2ax7zm-git-2.54.0/libexec/git-core"
+              ]
             },
             "invocation_policy": {
               "default": "allow",
@@ -110,8 +113,64 @@
                   "reason": "stash drop is disabled in this sandbox; it discards stashed work irreversibly. Use `git stash pop` if you want it back."
                 },
                 {
-                  "argv": { "contains": ["-c"] },
-                  "reason": "git -c is disabled in this sandbox; it can override any config key, including ones that run arbitrary commands (core.pager, credential.helper, ...). Edit .git/config directly if you need a persistent change."
+                  "argv": { "prefix": ["-c"] },
+                  "reason": "git -c is disabled in this sandbox; it can override any config key, including ones that run arbitrary commands (core.pager, credential.helper, ...). Edit .git/config directly if you need a persistent change. (prefix, not contains: -c is a global flag and only ever valid as argv[0]; this also stops it from wrongly catching -c as a *subcommand's own* flag, e.g. `git switch -c`, `git branch -c`, `git commit -c HEAD`.)"
+                },
+                {
+                  "argv": { "contains": ["--config-env"] },
+                  "reason": "git --config-env is disabled in this sandbox for the same reason -c is: it can override any config key, sourced from an environment variable this sandbox does not otherwise expose to argv inspection."
+                },
+                {
+                  "argv": { "prefix": ["config"] },
+                  "reason": "git config is disabled in this sandbox, reads included; writing config (or defining an alias) from here can install something that reaches a denied command with no shim in the way at all — e.g. `git config alias.h 'reset --hard'` then `git h`, or `git config credential.helper ...`. Read $WORKDIR/.git/config directly if you only need to inspect it, or ask the operator for a persistent change."
+                },
+                {
+                  "argv": { "contains": ["-D"] },
+                  "reason": "git branch -D (force-delete) is disabled in this sandbox; it discards a branch's commits without checking they are merged anywhere else. Use `git branch -d`, or ask the operator."
+                },
+                {
+                  "argv": { "prefix": ["filter-branch"] },
+                  "reason": "rewriting history with git filter-branch is disabled in this sandbox; it rewrites every commit it touches, effectively irreversibly for anything already pushed or referenced elsewhere."
+                },
+                {
+                  "argv": { "prefix": ["filter-repo"] },
+                  "reason": "rewriting history with git filter-repo is disabled in this sandbox; it rewrites every commit it touches, effectively irreversibly for anything already pushed or referenced elsewhere."
+                },
+                {
+                  "argv": { "prefix": ["update-ref", "-d"] },
+                  "reason": "git update-ref -d is disabled in this sandbox; it deletes a ref directly, bypassing the normal branch/tag-delete paths and their own safety checks."
+                },
+                {
+                  "argv": { "prefix": ["update-ref", "--delete"] },
+                  "reason": "git update-ref --delete is disabled in this sandbox; it deletes a ref directly, bypassing the normal branch/tag-delete paths and their own safety checks."
+                },
+                {
+                  "argv": { "contains": ["--prune=now"] },
+                  "reason": "git gc --prune=now is disabled in this sandbox; it immediately discards unreachable objects, including ones a mistaken hard reset or stash drop would otherwise still let you recover from the reflog."
+                },
+                {
+                  "argv": { "contains": ["--prune=all"] },
+                  "reason": "git gc --prune=all is disabled in this sandbox; it immediately discards unreachable objects, including ones a mistaken hard reset or stash drop would otherwise still let you recover from the reflog."
+                },
+                {
+                  "argv": { "prefix": ["remote", "remove"] },
+                  "reason": "changing a git remote is disabled in this sandbox; it can silently redirect where a future push or fetch goes. Ask the operator."
+                },
+                {
+                  "argv": { "prefix": ["remote", "rm"] },
+                  "reason": "changing a git remote is disabled in this sandbox; it can silently redirect where a future push or fetch goes. Ask the operator."
+                },
+                {
+                  "argv": { "prefix": ["remote", "set-url"] },
+                  "reason": "changing a git remote is disabled in this sandbox; it can silently redirect where a future push or fetch goes. Ask the operator."
+                },
+                {
+                  "argv": { "prefix": ["tag", "-d"] },
+                  "reason": "deleting a git tag is disabled in this sandbox; ask the operator if a tag genuinely needs to go."
+                },
+                {
+                  "argv": { "prefix": ["tag", "--delete"] },
+                  "reason": "deleting a git tag is disabled in this sandbox; ask the operator if a tag genuinely needs to go."
                 }
               ]
             }

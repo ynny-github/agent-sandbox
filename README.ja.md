@@ -2,29 +2,35 @@
 
 [English](README.md) | **日本語**
 
-AI コーディングエージェント (Claude Code) をサンドボックス内で動かし、エージェントが
-実行するシェルコマンドを **ホスト** / **コマンドごとの
-[nono](https://github.com/tkancf/nono) サンドボックス** / **実行拒否** の
-3 つの行き先に、TOML で書いたポリシーに従って振り分けます。
+AI コーディングエージェント (Claude Code) を [nono](https://github.com/tkancf/nono)
+サンドボックス内で動かし、エージェントが発行するすべてのシェルコマンドを、
+専用の兄弟 nono セッションで動くホスト側コマンドブローカー経由で仲介します。
+どのコマンドを実行してよいか、それぞれが何に触れてよいか、どの呼び出しを
+拒否するかは、オペレーターが書く nono のコマンドプロファイルだけが決めます
+— `agent-sandbox.toml` の関心事ではありません。
 
-目的はエージェントをマシンから締め出すことではなく、境界を *明示的に、検査可能に*
-することです。`agent-sandbox ai config-check` を実行すれば、サンドボックス内の
-コマンドが到達できるパスと通信できるドメインが、実際に起動時に使われる設定から
-解決されて表示されます。
+目的はエージェントをマシンから締め出すことではなく、境界を *明示的に、
+検査可能に* することです。`agent-sandbox ai explain` は、どのコマンドが
+ポリシー制御下にあり、どのコマンドが argv ルール無しでフロアで動き、
+どの拒否がなぜ発生したのかをエージェントに伝えます。ポリシーによる拒否は
+「ポリシーによる拒否」として読め、原因不明の失敗として再試行されることは
+ありません。
 
 ```
-                       agent-sandbox.toml
-                              │
-          ┌───────────────────┼───────────────────┐
-          ▼                   ▼                   ▼
-    allow_commands      drop_commands        (それ以外すべて)
-          │                   │                   │
-          ▼                   ▼                   ▼
-   ┌─────────────┐     ┌─────────────┐     ┌──────────────────┐
-   │   ホスト    │     │    拒否     │     │  nono run        │
-   │  (直接実行) │     │  (exit 1)   │     │  CWD にスコープ  │
-   └─────────────┘     └─────────────┘     └──────────────────┘
+launcher
+├── nono wrap  --profile <エージェント用プロファイル>    -- claude …   ここにコマンド制御は無い
+└── nono run   --profile <コマンドプロファイル>          -- agent-sandbox broker
+                                                            │
+                                                            ├─ exec git  → shim → 専用の子サンドボックス + argv ルール
+                                                            └─ exec rg   → ブローカー自身のサンドボックスで直接実行
 ```
+
+2 つのセッションは兄弟関係であり、決して入れ子にはなりません。間に
+シェルは挟まりません: ブローカーはエージェントのコマンドラインをそれ自身で
+解釈し (パイプライン、`&&`/`||`/`;`、リダイレクト、グロブ、`$(…)`、
+`for`/`if`、`cd` などの組み込みはすべて動きます)、単純コマンドはそれぞれ
+直接 exec します。`bash` と `sh` は、このサンドボックス内ではそもそも
+実行できません。
 
 ## 目次
 
@@ -35,14 +41,12 @@ AI コーディングエージェント (Claude Code) をサンドボックス�
 - [コマンド](#コマンド)
 - [設定](#設定)
   - [`tool_mode`](#tool_mode)
-  - [ホストアクセス: 3 つのセクション](#ホストアクセス-3-つのセクション)
+  - [ホストアクセス: `[sandbox.agent]`](#ホストアクセス-sandboxagent)
   - [capability](#capability)
-  - [コマンドルーティング](#コマンドルーティング)
-  - [ネットワーク](#ネットワーク)
+  - [コマンドプロファイル](#コマンドプロファイル)
   - [ユーザースコープ設定](#ユーザースコープ設定)
 - [環境変数 (`--env`)](#環境変数---env)
 - [GitHub MCP](#github-mcp)
-- [safe ラッパー](#safe-ラッパー)
 - [開発](#開発)
 - [ライセンス](#ライセンス)
 
@@ -68,91 +72,124 @@ go install github.com/ynny-github/agent-sandbox@latest
 "go:github.com/ynny-github/agent-sandbox" = "latest"
 ```
 
+**インストールしたバイナリは、コマンドプロファイルが書き込みを許可する
+すべてのパスの外に置く必要があります。** そうしないと nono はセッションの
+起動を拒否します
+(`tool-sandbox policy command binary is replaceable through writable parent directory`)。
+プロジェクト自身の作業ディレクトリ内に置いたビルド成果物は、それが
+エージェントの作業領域である以上この条件を満たしません。`agent-sandbox`
+をポリシーコマンドとして宣言するコマンドプロファイルを書く前に、
+安定した、プロジェクト外のパスにインストールしてください
+(`go install` が既定でそうします)。
+
 ## クイックスタート
 
-プロジェクトルートに `agent-sandbox.toml` を書きます:
+プロジェクトルートに `agent-sandbox.toml` を書きます — これは起動される
+エージェント自身のホストアクセスだけを扱います:
 
 ```toml
 tool_mode = "hook"
 
-[sandbox.shared]
-capabilities = ["go", "python"]
-
 [sandbox.agent]
-capabilities = ["ssh"]          # ホストの認証情報 — エージェント専用。サンドボックスには渡らない
-allow_commands = ["go *"]       # ホストで直接実行する
-drop_commands = [
-  { pattern = "gh *", message = "gh is disabled; use the GitHub MCP tools." },
-]
+capabilities = ["go", "ssh"]   # エージェントプロセス自身へのホストアクセス
 ```
 
-設定が解決できることを確認してから起動します:
+そのそばに `command-profile.json` を nono 自身のスキーマで書き、ブローカーが
+どのコマンドをどう実行してよいかを宣言します
+([コマンドプロファイル](#コマンドプロファイル) 参照)。既定値はありません:
+ファイルが無ければ起動エラーになり、agent-sandbox はその中身を生成も
+読み取りもしません (パス以外は)。
+
+両方が解決できることを確認してから起動します:
 
 ```bash
-agent-sandbox doctor            # nono とブローカーソケットは使えるか
-agent-sandbox ai config-check   # 設定は解決できるか、そして何を許可しているか
+agent-sandbox doctor            # nono・ブローカーソケット・コマンドプロファイルはすべて使えるか
+agent-sandbox ai config-check   # agent-sandbox.toml は解決できるか、エージェントに何を許可しているか
 agent-sandbox claude -- --model opus
 ```
 
-`sandbox up` のような事前準備は不要です。`agent-sandbox claude` がホスト側の
-コマンドブローカーを起動し、nono の下で Claude を立ち上げ、Claude の終了時に
-ブローカーを片付けます。
+`sandbox up` のような事前準備は不要です。`agent-sandbox claude` はホスト側の
+コマンドブローカーを専用の nono セッション内で起動し、Claude をもう一つの
+兄弟セッションの下で立ち上げ、Claude の終了時にブローカーを片付けます。
 
 ## 仕組み
 
-### ルーティング
+### ブローカーはルーターではなく、サンドボックス化されたプロセスである
 
-エージェントが実行するコマンドは、次の順にポリシーと照合されます。
+`agent-sandbox claude` は 2 つの兄弟 nono セッションを起動します:
+1 つは `[sandbox.agent]` から生成したプロファイルの下で Claude Code を
+包み、もう 1 つは *オペレーターが書いた* コマンドプロファイルの下で
+`agent-sandbox broker` を実行します。両者は兄弟であり、入れ子ではありません
+— nono はサンドボックスの中にサンドボックスを入れ子にすることを拒否するため
+であり、だからこそブローカーはエージェント自身のセッションの中では
+動きません。
 
-1. **allow** — `sandbox.agent.allow_commands` にマッチ → シェル安全性の検証を経て
-   **ホストで実行**
-2. **drop** — `sandbox.agent.drop_commands` にマッチ → **拒否**。ホストでも
-   サンドボックスでも実行されず、exit code 1 と stderr の 1 行 (ルールの `message`、
-   未指定なら既定の `dropped: command matches drop pattern "<pattern>"`) を返す
-3. **sandbox** — それ以外すべて → コマンドブローカーへ送られ、カレントワーキング
-   ディレクトリにスコープされた専用の `nono run` の下で実行される
+エージェントが発行するすべてのシェルコマンドは unix ソケット経由で
+ブローカーに届きます。ブローカーはシェルではありません: 組み込みの
+インタプリタでコマンドラインをそれ自身で解釈し、単純コマンドごとに直接
+`execve` を呼びます。コマンドラインを `bash -c` に渡す方式 — このプロジェクトが
+以前採用していた設計 — は、修正不能であることが分かりました:
+`git reset --hard` に対して書いた拒否ルールは、git を名前ではなく
+`/nix/store` のパスで直接呼び出すだけで簡単に破られますし、nono 自身の
+ドキュメントも、`exec` を汎用シェルに向けることはサンドボックスを
+無効化すると明言しています。この設計には、そもそも破るべきシェルが
+存在しません。
 
-**allow が drop に優先します。** 両方にマッチするコマンドはホストで実行されます。
-パターンは `*` が任意長の文字列にマッチするグロブで、前後両端がアンカーされます
-(`go *` は `go test ./...` にマッチしますが `cd x && go test` にはマッチしません)。
+### 2 つの階層、それ以外は何も動かない
 
-次の 2 つは常にホスト許可で、TOML には書かれません: `agent-sandbox ai *`
-(エージェントが自身の環境ドキュメントを読めるように) と `agent-sandbox safe *`
-(safe ラッパーは実行前に検証するため)。
+コマンドプロファイルは、実行され得るすべてのプログラムを 2 つの階層の
+どちらかに振り分けます。どちらの階層にも名前が無いプログラムはそもそも
+実行できません — それがこの許可リストのすべてであり、他に確認すべきことは
+ありません:
+
+- **ポリシーコマンド** は、専用の子サンドボックスと argv ルールから成る
+  `invocation_policy` とともにプロファイルへ宣言されます。到達できるのは
+  nono 自身が生成する shim 経由だけなので、ルールは絶対パスやシンボリック
+  リンクなどのどんな迂回によっても回避できません。
+- **フロアコマンド** はブローカー自身の `exec_paths` に名前が挙がっており、
+  ブローカーのサンドボックスの中で直接動きます。自分自身の argv ルールは
+  持ちません — 強制すべきものが何も無いので、回避すべき shim もありません。
+
+拒否は必ず自分自身を説明します: ポリシーコマンドの拒否は、そのプロファイル
+エントリが書いた `reason` を運びます。どちらの階層にも無いコマンドは、
+未知のコマンドと同じように `execve` の時点で拒否され、それ以上の詳細は
+ありません。
+
+2 つの階層がカバーしないものが 1 つあります: ブローカー自身のシェル組み込み
+コマンド (`echo`, `cd`, `test`, `read`、その他組み込みインタプリタが実装する
+もの) は、ブローカープロセス自身の中で、ブローカー自身のファイルシステム
+許可のもとで動きます — どちらの階層も経由しません。あなたが書く
+リダイレクトやグロブも同じように制限されます。
 
 ### ファイルシステムは仮想化されない
 
-コンテナも bind マウントもありません。サンドボックス内のコマンドは、ホストの
-ファイルシステム上で *同じ絶対パス* のまま実行され、カレントワーキングディレクトリ
-(読み書き可) に制限されます。`HOME` は実際の値のままです。ホストコマンドと
-サンドボックスコマンドの間でパスを変換する必要は一切ありません。
+コンテナも bind マウントもありません。コマンドはホストのファイルシステム上で
+*同じ絶対パス* のまま、自分自身のサンドボックス (ポリシーコマンドの場合) か
+ブローカーのサンドボックス (フロアコマンドの場合) が許可する範囲に制限されて
+実行されます。`HOME` は実際の値のままです。エージェントが見るものと
+コマンドが実際に触れるものとの間で、パスを変換する必要は一切ありません。
 
-ワーキングディレクトリの外は、設定で明示的に許可した範囲だけが見えます。
+コマンド自身の許可の外にあるパスは、そのプロファイルエントリが明示した
+場合にだけ到達できます。
 
-### 2 つのプロファイル、相互継承なし
+### コマンドプロファイルは agent-sandbox のものではなく、オペレーターのもの
 
-`agent-sandbox` は nono プロファイルを 2 つ生成します。起動されるエージェント用と、
-ブローカー経由の各コマンドが動くシェルサンドボックス用です。
-
-**2 つの間には一切の継承がありません。** ある許可がサンドボックスに届くのは、それが
-そのサンドボックスから見える場所に書かれているときだけです。だからこそ許可を
-*引き算* する手段は存在しません。「これはサンドボックスコマンドには渡したくない」は、
-共通ベースではなく `[sandbox.agent]` に書くことで表現します。`[sandbox.shared]` に
-書き忘れればコマンドサンドボックスはその許可を得られませんが、コマンドサンドボックスが
-知らないうちに許可を *獲得する* ことは起こりません。
+agent-sandbox が生成する nono プロファイルは、`[sandbox.agent]` から作る
+起動エージェント自身のものだけです。*コマンド* に関するすべては別途、
+nono のスキーマで直接、agent-sandbox がパス以外は生成も検査もしないファイルに
+表現されます。詳しくは [コマンドプロファイル](#コマンドプロファイル) を
+参照してください。
 
 ## コマンド
 
 | コマンド | 内容 |
 |---|---|
-| `agent-sandbox claude -- [claude の引数...]` | コマンドブローカーを起動した状態で、nono 下に Claude を立ち上げる |
-| `agent-sandbox exec -- <command>` | コマンドを 1 つルーティングして実行し、出力をストリームする |
-| `agent-sandbox doctor` | `nono` が動作するか、ブローカーソケットが bind できるかを確認。exit 0 / 1 |
-| `agent-sandbox debug -- [claude の引数...]` | 実行はせずに、組み立てられる `nono` コマンド、生成される 2 つのプロファイル、GitHub MCP 設定 (トークンは伏字) を表示 |
-| `agent-sandbox ai explain` | 現在のサンドボックス環境の、エージェント向け説明 |
-| `agent-sandbox ai config-check` | 起動時と同じ手順で設定を検証し、サンドボックスコマンドの到達範囲を表示 |
-| `agent-sandbox safe git [引数...]` | 危険と分かっている呼び出しを拒否したうえで git を実行 |
-| `agent-sandbox safe docker-compose [引数...]` | 解決済みプロジェクトを検証したうえで docker compose を実行 |
+| `agent-sandbox claude -- [claude の引数...]` | コマンドブローカーを兄弟セッションとして起動した状態で、nono 下に Claude を立ち上げる |
+| `agent-sandbox exec -- <command>` | コマンドを 1 つブローカーへ送り、出力をストリームする |
+| `agent-sandbox doctor` | `nono` が動作するか、ブローカーソケットが bind できるか、コマンドプロファイルが存在し検証を通り自身のバイナリへの書き込みを許可していないかを確認。exit 0 / 1 |
+| `agent-sandbox debug -- [claude の引数...]` | 実行はせずに、両セッション分の `nono` コマンド、生成されるエージェント用プロファイル、GitHub MCP 設定 (トークンは伏字) を表示 |
+| `agent-sandbox ai explain` | サンドボックスの、エージェント向け説明 — コマンドがどう動くか、2 つの階層、各拒否の理由 |
+| `agent-sandbox ai config-check` | 起動時と同じ手順で `agent-sandbox.toml` を検証し、起動エージェント自身のプロファイルが何を許可しているかを表示 |
 | `agent-sandbox command-router` | MCP サーバーを起動 (`tool_mode = "mcp"`) |
 | `agent-sandbox hook` | PreToolUse アダプタ (`tool_mode = "hook"`。Claude が呼ぶもので、手で叩くものではない) |
 
@@ -161,7 +198,8 @@ agent-sandbox claude -- --model opus
 
 `claude` と `debug` では、`--` の前に置けるのは `--config` と `--env` だけです。
 `--` の後ろはすべて `claude` に渡ります。`agent-sandbox` は `nono` にオプションを
-転送しません — プロファイルは設定ファイルから生成されます。
+転送しません — 両方のプロファイルは設定ファイルと、それが指すコマンド
+プロファイルから決まります。
 
 `--settings` は `agent-sandbox` が予約しており、パススルーオプションとして拒否
 されます。GitHub MCP が有効なときは `--mcp-config` / `--strict-mcp-config` も
@@ -169,31 +207,35 @@ agent-sandbox claude -- --model opus
 
 ### `doctor`
 
-`doctor` は起動が依存する 2 点を確認します。
+`doctor` は起動が依存する事柄を確認します。
 
-- `nono` が `PATH` にあり、`nono --version` が動作すること
+- `nono` が `PATH` にあり、`nono --version` が動作すること。
+- `nono` がこのホストで実際に tool-sandbox を起動できること — バージョン
+  確認だけでなく、実際に短命なプローブセッションを動かして確かめます。
+  NixOS 上のパッチ未適用の nono は tool-sandbox をそもそも起動できないため、
+  バイナリの存在だけではこれは分かりません。
 - コマンドブローカーが、ソケットディレクトリ (`$XDG_STATE_HOME/agent-sandbox`、
   未設定なら `~/.local/state/agent-sandbox`) で実際に **unix ソケットを bind
   できる** こと。単なる書き込みチェックでは不十分で、bind することで
-  `sun_path` の約 104 バイト制限も検出できます
+  `sun_path` の約 104 バイト制限も検出できます。
+- コマンドプロファイルが存在し、`nono profile validate` を通り、自身の
+  バイナリへの書き込みを許可していないこと (このチェックは
+  `filesystem.allow` だけを読むので、`$WORKDIR` だけを通じて表現された
+  許可はこのチェックからは見えません — 起動時の最終判断は常に nono 自身が
+  下します)。
 
-どちらかが失敗する場合、`agent-sandbox claude` は Claude を起動しません。
+どれか 1 つでも失敗する場合、`agent-sandbox claude` は Claude を起動しません。
 
 ## 設定
 
 ### `tool_mode`
 
-エージェントのコマンドがルーターに届く経路を選びます。
+エージェントのコマンドがブローカーに届く経路を選びます。
 
 | モード | 挙動 |
 |---|---|
 | `hook` | Bash と Monitor は有効のまま。起動時に `claude --settings` 経由で PreToolUse フックが注入され、各コマンドが `agent-sandbox exec -- <command>` に書き換えられる。`.claude/settings.json` には何も書き込まれない。`agent-sandbox` が `PATH` にある必要がある |
 | `mcp` (既定) | Bash と Monitor を無効化。エージェントは `run_command` MCP ツール経由でコマンドを実行し、出力は `mcp.command_output_dir` 配下のファイルに書かれる — レスポンスにはパスと exit code のみが載る |
-
-`hook` モードでは、コマンドは **起動時に凍結されたポリシースナップショット** を
-通ってルーティングされます。そのため、セッション中に `agent-sandbox.toml` を
-編集しても実行中セッションのポリシーは変わりません。編集は次回の
-`agent-sandbox claude` から反映されます。
 
 ```toml
 tool_mode = "hook"
@@ -202,15 +244,20 @@ tool_mode = "hook"
 command_output_dir = "/tmp/mcp-output"  # mcp モードでは必須。hook モードでは無視される
 ```
 
-### ホストアクセス: 3 つのセクション
+コマンドプロファイルはブローカー起動時に一度だけ読まれます —
+`agent-sandbox.toml` の編集と同じく、これを編集しても効果が出るのは次回の
+`agent-sandbox claude` からで、セッション途中で反映されることはありません。
 
-| セクション | 適用先 |
-|---|---|
-| `[sandbox.shared]` | 起動されるエージェントとシェルサンドボックスの両方 |
-| `[sandbox.agent]` | 起動されるエージェントのみ |
-| `[sandbox.shell]` | シェルサンドボックス (ブローカー経由のコマンド) のみ |
+### ホストアクセス: `[sandbox.agent]`
 
-3 つとも、同じ 6 つのホストアクセスフィールドを取ります。
+`agent-sandbox` がホストアクセスのために読むセクションは `[sandbox.agent]`
+だけであり、agent-sandbox が生成する唯一の nono プロファイルでもあります:
+起動されるエージェント自身のプロセス (そのファイルツールと、直接の
+子プロセスとして立ち上げる MCP サーバー — これらはブローカー経由ではありません)
+が対象です。シェル *コマンド* が動くサンドボックスは完全に別の関心事で、
+すべて後述のコマンドプロファイルが決めます。ここに書いたものはブローカー経由の
+コマンドには届かず、コマンドプロファイルに書いたものもエージェントには
+届きません。
 
 | フィールド | 許可する対象 |
 |---|---|
@@ -228,7 +275,7 @@ command_output_dir = "/tmp/mcp-output"  # mcp モードでは必須。hook モ�
 `nix_runtime` を capability ではなくベースラインに置いているのは、NixOS ホストでは
 これがツールチェーンではなく**何かを実行するための前提条件**だからです。全実行ファイルの
 実体が `/nix/store` にあり、nono のベースプロファイルはそのツリーを read では通すが
-exec では通さないため、これが無いとサンドボックス内のコマンドは理由の出ない exit 127
+exec では通さないため、これが無いとエージェント自身のプロセスは理由の出ない exit 127
 で終わります。Nix の無いホストでは、グループが挙げるパスが単に存在しないだけです。
 
 `git_config` がベースラインなのは、ツールチェーンが黙って git を呼ぶからです。flutter の
@@ -236,8 +283,8 @@ exec では通さないため、これが無いとサンドボックス内のコ
 はバージョンをスタンプし、npm と cargo は git 依存を解決します。グループの中身は設定
 ファイルのみで、`~/.git-credentials` は含まれないため認証情報は渡しません。
 
-`NONO_*` はどの `allow_env` でも拒否されます — サンドボックス自体を再設定できて
-しまう変数だからです。
+`NONO_*` は `allow_env` で拒否されます — これらの変数はエージェント自身だけでなく、
+コマンドブローカーが動く nono セッションそのものを再設定できてしまうからです。
 
 保護対象プレフィックス (`~/.ssh`, `~/.aws`, `~/.docker`, `~/.gnupg`,
 `~/.config/gh`, `~/.kube`) を生の `allow` / `read` で指定すると拒否されます。
@@ -245,24 +292,26 @@ exec では通さないため、これが無いとサンドボックス内のコ
 
 ### capability
 
-ディレクトリ・ファイル・環境変数・ネットワークドメイン、そして認証情報系バンドルでは
-対応する Claude の権限 deny ルールにまで展開される、名前付きバンドルです。
+ディレクトリ・ファイル・環境変数、そして認証情報系バンドルでは対応する
+Claude の権限 deny ルールにまで展開される、名前付きバンドルです。これらは
+エージェント自身のプロファイルにしか適用されません: ここで宣言した
+capability は起動されるエージェントのプロセスに届くだけで、ブローカー経由の
+コマンドには決して届きません。コマンドにネットワークやファイルシステムへの
+アクセスを与えたい場合は、コマンドプロファイル側でそのコマンドのエントリに
+明示的に書いてください。
 
-| capability | 許可する対象 | シェルサンドボックスに追加されるドメイン |
-|---|---|---|
-| `go` | Go ランタイムグループ、および `GOCACHE`, `~/go/pkg/mod` (読み書き) | `proxy.golang.org`, `sum.golang.org` |
-| `python` | Python ランタイムグループ、および uv / pip のキャッシュと `~/.local/share/uv/python` (読み書き) | `pypi.org`, `files.pythonhosted.org` |
-| `node` | Node ランタイムグループ、および `~/.npm` と pnpm ストア (読み書き) | `registry.npmjs.org` |
-| `rust` | Rust ランタイムグループ、および `~/.cargo/registry`, `~/.cargo/git` (読み書き)。`~/.cargo/credentials*` は Claude のファイルツールから隠す | `crates.io`, `index.crates.io`, `static.crates.io` |
-| `dart` | `~/.pub-cache`, `~/.dart`, `~/.dart-tool` (読み書き)、`PUB_CACHE` / `PUB_HOSTED_URL` 環境変数。`~/.dart-tool/pub-tokens.json` は Claude のファイルツールから隠す | `pub.dev`, `storage.googleapis.com` |
-| `flutter` | `~/.config/flutter`, `~/.local/share/mise/http-tarballs` (読み書き)、`FLUTTER_ROOT` / `FLUTTER_STORAGE_BASE_URL` 環境変数 | `storage.googleapis.com` |
-| `docker` | `~/.docker`, `~/.orbstack` (読み取り専用) | `auth.docker.io`, `index.docker.io`, `registry-1.docker.io`, `production.cloudflare.docker.com` |
-| `ssh` | `~/.ssh` (読み取り専用)、`~/.ssh/known_hosts` (読み書き) | — |
-| `mise` | `~/.local/share/mise`, `~/.config/mise` (読み取り専用)、`MISE*` 環境変数 | `mise.jdx.dev`, `mise-versions.jdx.dev` |
-| `bashrc` | `~/.bashrc`, `/etc/bashrc`, `/etc/bash.bashrc` (読み取り専用) | — |
-
-各ツールチェーンが自分のレジストリを持ち込むため、Go モジュールプロキシや PyPI を
-設定側で書き直す必要はありません。
+| capability | 許可する対象 |
+|---|---|
+| `go` | Go ランタイムグループ、および `GOCACHE`, `~/go/pkg/mod` (読み書き) |
+| `python` | Python ランタイムグループ、および uv / pip のキャッシュと `~/.local/share/uv/python` (読み書き) |
+| `node` | Node ランタイムグループ、および `~/.npm` と pnpm ストア (読み書き) |
+| `rust` | Rust ランタイムグループ、および `~/.cargo/registry`, `~/.cargo/git` (読み書き)。`~/.cargo/credentials*` は Claude のファイルツールから隠す |
+| `dart` | `~/.pub-cache`, `~/.dart`, `~/.dart-tool` (読み書き)、`PUB_CACHE` / `PUB_HOSTED_URL` 環境変数。`~/.dart-tool/pub-tokens.json` は Claude のファイルツールから隠す |
+| `flutter` | `~/.config/flutter`, `~/.local/share/mise/http-tarballs` (読み書き)、`FLUTTER_ROOT` / `FLUTTER_STORAGE_BASE_URL` 環境変数 |
+| `docker` | `~/.docker`, `~/.orbstack` (読み取り専用) |
+| `ssh` | `~/.ssh` (読み取り専用)、`~/.ssh/known_hosts` (読み書き) |
+| `mise` | `~/.local/share/mise`, `~/.config/mise` (読み取り専用)、`MISE*` 環境変数 |
+| `bashrc` | `~/.bashrc`, `/etc/bashrc`, `/etc/bash.bashrc` (読み取り専用) |
 
 nono のランタイムグループは4つとも読み取り専用です。そのため単体ではどれもビルドが
 できません — ツールチェーンがパッケージに到達する前に自分のキャッシュで失敗します。
@@ -284,8 +333,9 @@ deny-overlap が無いため、nono は「強制できないポリシー」と�
 - **Claude 自身のファイルツール**に対して `Read(//…/.cargo/credentials*)` を deny します。
   `docker` / `ssh` と同じ形です。これはツール呼び出ししか縛らないので、サンドボックス内の
   `cat` は依然としてファイルを読めます。
-- **どのセクションで capability を宣言するか**が、ブローカー経由のコマンドが到達できるか
-  を決めます。トークンが問題になるなら `rust` を `[sandbox.agent]` に置いてください。
+- **そもそも capability を宣言するかどうか**が、ブローカー経由のコマンドがそれに
+  到達し得るかを決めます — capability はコマンドには一切適用されないので、これは
+  実質「起動エージェントに `rust` が必要か」だけの話です。
 
 deny ルールのパスは絶対形です。`Read(/etc/bashrc)` ではなく `Read(//etc/bashrc)` と
 書きます。Claude Code はパスを gitignore パターンとして読み、スラッシュ1本は設定ソース
@@ -307,51 +357,90 @@ dartdev の analytics が起動時にここへ書き込むため、これが無�
 形で、理由も同じです — 付与されたディレクトリ内の切り出しは強制できません。
 
 `flutter doctor` はサンドボックスでは動きません。Android やブラウザのツールチェーンを
-探すために `$HOME` を列挙するためで、それを許すとサンドボックス内のコマンドがホーム
+探すために `$HOME` を列挙するためで、それを許すとエージェント自身のプロセスがホーム
 ディレクトリを列挙できることになります。`flutter --version` や `pub get`、ビルドには
 影響しません。
 
 > **`docker` と `ssh` はホストの認証情報を露出します。** とはいえ扱いは他の
-> capability と同じで、宣言した側にだけ適用されます。サンドボックス内のコマンドが
-> 本当に鍵を必要とするのでない限り、`[sandbox.shared]` ではなく `[sandbox.agent]`
-> に書いてください。シェルプロファイル側に認証情報パスが渡ってしまう設定では、
-> `agent-sandbox debug` が警告します。
+> capability と同じです。`[sandbox.agent]` が残る唯一のセクションなので、
+> ここで宣言することがそのままエージェント自身のプロセスに認証情報を
+> 届けることになります — ブローカー経由のコマンドには届きません。届けたい
+> 場合は、コマンドプロファイル側で別途、明示的に許可する必要があります。
 
-### コマンドルーティング
+### コマンドプロファイル
 
-```toml
-[sandbox.agent]
-allow_commands = ["go *", "mise use *", "mise install *"]
-drop_commands = [
-  { pattern = "git *" },
-  { pattern = "gh *", message = "gh is disabled in this sandbox. Use the GitHub MCP server's tools instead." },
-]
+`command-profile.json`。nono 自身のスキーマで書き、`agent-sandbox.toml` の
+そばに解決されます — TOML のトップレベルで `command_profile = "<path>"` を
+書けば名前を上書きでき、相対パスは TOML を含むディレクトリを基準に解決
+されます。ファイルが無ければ起動エラーです: 生成される既定値は存在しません。
+静的な既定値ではホストごとの違い (`/nix/store` か `/usr/bin` か) を吸収
+できませんし、「存在しているように見えて実はすべてのコマンドを拒否する」
+プロファイルは最悪の壊れ方だからです。
+
+`agent-sandbox` がこのファイルから読むのは、`ai explain` が 2 つの階層を
+説明する (「[仕組み](#仕組み)」参照) のに必要な分と、`doctor` が検証に
+通り自身のバイナリへの書き込みを許可していないことを確認するのに必要な
+分だけです。それ以外のすべての判断 — どのコマンドが存在するか、それぞれが
+何に触れてよいか、どの呼び出しを拒否するか — はオペレーターのもので、
+nono のスキーマで直接表現されます。
+
+**`$WORKDIR`。** nono は `filesystem` の中と、すべての `command_policies`
+子サンドボックスの中でこれを展開します。作業ディレクトリを意味する箇所には
+リテラルなパスではなく必ずこれを書いてください — これが 1 つのプロファイルで
+複数の git worktree を扱えるようにする仕組みです。
+
+**ネットワーク。** トップレベルの `network` セクションが上限であり、
+ドメインフィルタリングが機能する唯一の場所です。コマンド自身の `network`
+は on/off だけです: `{"allow_all": true}` はその上限が許すものすべてに
+到達できるようにし、キーを省略するとネットワークは一切与えられません。
+コマンドごとの `allow_domain` は強制されません — コマンドが到達できる範囲を
+絞りたい場合は、トップレベルの上限そのものを絞る必要があります。
+
+**実例** — このリポジトリ自身のルート直下の `command-profile.json` は、
+`agent-sandbox` 自身をセッションのポリシーコマンドとして宣言し
+(`can_use: ["git"]`、`exec_paths` は `go`, `rg`, `mise`、およびこのリポジトリ
+自身のワークフローが使う coreutils をカバー)、`git` を argv ルールを持つ
+唯一のコマンドとしています:
+
+```json
+"git": {
+  "executable": "/nix/store/…-git-2.54.0/bin/git",
+  "from": { "agent-sandbox": {
+    "sandbox": { "...": "..." },
+    "invocation_policy": {
+      "default": "allow",
+      "deny": [
+        { "argv": { "contains": ["--force"] },
+          "reason": "force push is disabled in this sandbox; use --force-with-lease..." },
+        { "argv": { "prefix": ["reset", "--hard"] },
+          "reason": "hard reset is disabled in this sandbox; it discards uncommitted work." }
+      ]
+    }
+  }}
+}
 ```
 
-`drop_commands` の各エントリは `{ pattern, message }` テーブルです。`message` は
-任意で、省略すると既定の拒否メッセージが表示されます。
+`reason` はそのまま stderr でエージェントに届きます (exit code 126)。
+現在の完全な一覧は `agent-sandbox ai explain` を参照してください。
 
-パターンに否定はなく、allow が先に評価されます。そのため allow で許可したものの
-一部だけを切り出して除外することはできません。`"mise use *"` は `mise use -g` も
-含みます。これを制限したい場合はプロファイル側に任せます — `mise` capability は
-`~/.config/mise` を読み取り専用で許可するので、グローバル書き込みはリストではなく
-サンドボックスによって拒否されます。
+自分で書く前に知っておくべき性質が 2 つあります:
 
-### ネットワーク
-
-サンドボックス内のコマンドは nono の `developer` ネットワークプロファイル
-(LLM API、パッケージレジストリ、GitHub、sigstore、ドキュメント) に加えて、
-宣言された capability が持ち込むドメインの下で動きます。
-
-```toml
-[sandbox.shell]
-allow_domains = ["internal.example.com"]   # どちらもカバーしないものだけを書く
-```
-
-ドメインは「広げるネットワークを持っている側」にのみ適用されます — つまり
-シェルサンドボックスだけです。起動されるエージェントは nono のベースプロファイルの
-ネットワークをそのまま使うため、`[sandbox.agent]` に宣言した capability は
-ドメインを何も追加しません。
+- **実行され得るすべてのコマンドを列挙することが、この設計の本当のコストです。**
+  どちらの階層にも無いプログラムはそもそも実行できません — これは許可リストが
+  意図通りに働いている証拠であると同時に、プロファイルを保守し続ける負担でも
+  あります。NixOS ホストでは coreutils の各アプレット (`cat`, `ls`, `rm`, `cp`, …)
+  は 1 つの結合されたマルチコールバイナリへのシンボリックリンクです:
+  それぞれを個別のポリシーコマンドとして固定すると、強制が黙って無効になります
+  — だからこそフロアに置き、1 つのディレクトリとしてまとめて許可すべきです。
+  固定する `executable` は実プログラムでなければなりません。マルチコールホストや
+  バージョンマネージャの shim を指してはいけません — `mise` をエントリに
+  指定すると、mise が管理するすべてのツールが `mise` 自身への直接 exec の
+  試みになってしまいます。
+- **`nono profile validate` は JSON の構文とグループ参照だけを検証します** —
+  スキーマの誤りすべてを検出するわけではありません (`exec_paths` 自体、
+  公開されている JSON Schema には載っていませんが、ランタイムは尊重します)。
+  `validate` が通ることだけでなく、実際のワークフローを実際の `nono run`
+  セッションに対して検証してください。
 
 ### ユーザースコープ設定
 
@@ -362,7 +451,9 @@ allow_domains = ["internal.example.com"]   # どちらもカバーしないも�
 
 つまりプロジェクトファイルはリストに *追加* できますが、ユーザースコープ設定が
 持ち込むものを *削除* することはできません。書いた覚えのない許可が
-`agent-sandbox ai config-check` に現れたら、出どころはここです。
+`agent-sandbox ai config-check` に現れたら、出どころはここです。これが
+影響するのは `[sandbox.agent]` だけです — コマンドプロファイルには
+ユーザースコープの対応物はありません。
 
 ## 環境変数 (`--env`)
 
@@ -382,7 +473,8 @@ agent-sandbox exec --env file:.env -- go test ./...
 
 `agent-sandbox claude` では、読み込んだキーが `[sandbox.agent].allow_env` に
 追加されます — つまり `--env` は起動されるエージェントにのみ許可を与えます。
-サンドボックス内のコマンドに変数を渡すかどうかは、明示的な設定編集のままです。
+ブローカー経由のコマンドに変数を渡したい場合は、コマンドプロファイルの
+`environment.allow_vars` を別途、明示的に編集してください。
 
 ## GitHub MCP
 
@@ -396,71 +488,6 @@ agent-sandbox claude --env file:.secrets.env -- --model opus
 ```
 
 `agent-sandbox debug` は、トークンを伏字にした MCP 設定を表示します。
-
-## safe ラッパー
-
-`agent-sandbox safe <tool> ...` は呼び出しを検証してから、そのまま素通しで実行します。
-拒否した場合は何も実行せず exit 1 になります。
-
-`agent-sandbox safe *` は常にホスト許可なので、素のツールを drop してラッパー経由
-でのみ触らせる、というのが定番の使い方です。
-
-```toml
-[sandbox.agent]
-drop_commands = [{ pattern = "git *" }]   # git はすべて `safe git` を通す
-```
-
-### `safe git`
-
-```bash
-agent-sandbox safe git push --force-with-lease
-```
-
-拒否される呼び出し:
-
-| ルール | 拒否対象 |
-|---|---|
-| force-push | `push --force` / `-f`、`--delete` / `-d`、`--mirror`、`--prune`、`:` / `+` 付き refspec。`--force-with-lease` と `--force-if-includes` は許可 — ただし裸の `--force` が同時にある場合は拒否 |
-| hard-reset | `reset --hard` |
-| clean-force | `clean -f` / `--force` |
-| branch-force-delete | `branch -D`、または `-d` と `--force` の併用 |
-| filter-history | `filter-branch`, `filter-repo` |
-| update-ref-delete | `update-ref -d` |
-| reflog-expire | `reflog expire` |
-| gc-prune | `gc --prune=now` / `--prune=all` |
-| bypass-hooks | `--no-verify`、`--no-gpg-sign`、`commit -n`、`-c` / `--config-env` による `core.hooksPath` 設定や `commit.gpgsign` の無効化 |
-| alias-injection | `-c alias.*=...` |
-| config-exec-injection | `-c` による実行可能な設定キーの注入 (`core.sshCommand`, `core.pager`, `core.editor`, `credential.helper`, `gpg.program`, `diff.external` など) |
-| stash-destroy | `stash drop`, `stash clear` |
-| remote-tamper | `remote remove` / `rm` / `set-url` |
-| tag-delete | `tag -d` |
-| discard-changes | `checkout -- <path>` / `checkout .`、およびワーキングツリーを対象にした `restore` |
-| config-write | 読み取り (`--get*`, `--list`, `-l`) 以外の `git config` |
-
-### `safe docker-compose`
-
-```bash
-agent-sandbox safe docker-compose up -d
-```
-
-`docker compose config` でプロジェクトを解決し、次のいずれかに該当する場合は
-拒否します。
-
-- `bind` マウントの解決先がカレントワーキングディレクトリの外にある
-- `bind` マウントが Docker ソケット (`docker.sock`) を指している
-- サービスが `privileged: true` / `network_mode: host` / `pid: host` /
-  `ipc: host` / `userns_mode: host` を設定している
-- サービスがホストの `devices` を公開している
-- `cap_add` に危険な capability が含まれる (`ALL`, `SYS_ADMIN`, `SYS_PTRACE`,
-  `SYS_MODULE`, `SYS_RAWIO`, `SYS_BOOT`, `SYS_TIME`, `NET_ADMIN`, `NET_RAW`,
-  `DAC_READ_SEARCH`, `DAC_OVERRIDE`, `MKNOD`)
-- `security_opt` が拘束を無効化している (`*:unconfined`, `label:disable`)
-- サブコマンドが `run` または `exec`
-- 先頭のグローバルフラグを分類できない (フェイルクローズ)
-
-名前付きボリュームと `tmpfs` マウントは許可されます。それ以外のサブコマンド
-(`up`, `build`, `down`, `ps`, `logs` など) は素通しです。判定ルールは固定の
-組み込みです。
 
 ## 開発
 

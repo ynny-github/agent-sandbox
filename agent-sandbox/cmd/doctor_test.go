@@ -555,6 +555,49 @@ func TestCheckCommandProfileFailsWhenProfilePinsADifferentExecutable(t *testing.
 	}
 }
 
+// TestCheckCommandProfileFailsWhenProfileDeclaresEntrypointWithoutExecutable
+// covers a profile that declares the entrypoint's command_policies entry but
+// omits "executable" entirely. profileEntrypointExecutable then returns "",
+// which cleanAbs resolves to this process's own working directory — the
+// omission must be reported as an omission, not as a path mismatch naming a
+// directory that appears nowhere in the profile.
+func TestCheckCommandProfileFailsWhenProfileDeclaresEntrypointWithoutExecutable(t *testing.T) {
+	dir := t.TempDir()
+	selfBin := filepath.Join(t.TempDir(), "agent-sandbox")
+
+	profile := filepath.Join(dir, "command-profile.json")
+	body := `{
+	  "filesystem": {"allow": ["$WORKDIR"]},
+	  "command_policies": {"commands": {"agent-sandbox": {"can_use": ["git"]}}}
+	}`
+	if err := os.WriteFile(profile, []byte(body), 0o600); err != nil {
+		t.Fatalf("write profile: %v", err)
+	}
+	restore := stubRunCommand(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return []byte("valid"), nil
+	})
+	defer restore()
+	restoreSelf := stubSelfPath(selfBin)
+	defer restoreSelf()
+	restoreLookPath := stubLookPath(stubLookPathByName(map[string]string{"agent-sandbox": selfBin}))
+	defer restoreLookPath()
+
+	got := checkCommandProfile(configWithProfile(t, dir, profile))
+	if got.ok {
+		t.Fatal("checkCommandProfile ok = true, want false: the entrypoint entry omits \"executable\"")
+	}
+	if !strings.Contains(got.hint, "does not pin") {
+		t.Errorf("hint = %q, want it to name the omission, not a path mismatch", got.hint)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("os.Getwd() error = %v", err)
+	}
+	if strings.Contains(got.hint, cwd) {
+		t.Errorf("hint = %q, must not send the operator hunting for the process's own working directory", got.hint)
+	}
+}
+
 // TestCheckCommandProfileOKWhenProfilePinsTheRunningExecutable is the control:
 // a profile that declares the entrypoint and pins it correctly must still
 // pass.

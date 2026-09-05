@@ -132,13 +132,15 @@ defeat.
 ### Two tiers, and nothing else runs
 
 The command profile sorts every runnable program into one of two tiers. A
-program named in neither cannot execute at all — that is the allowlist, and
-there is nothing else to check:
+program named in neither is never dispatched by the broker — that is the
+allowlist, and there is nothing else to check:
 
 - **Policy commands** are declared in the profile with their own child
-  sandbox and an `invocation_policy` of argv rules. They are reachable only
-  through nono's own generated shim, so a rule cannot be evaded by an
-  absolute path, a symlink, or any other indirection.
+  sandbox and an `invocation_policy` of argv rules. The broker dispatches to
+  one only through nono's own generated shim — never by an absolute path, a
+  symlink, or any other indirection that skips it. That guarantee is about
+  how the broker itself dispatches; it is not a guarantee about what a
+  *different* command's own sandbox can still reach and run — see below.
 - **Floor commands** are named in the broker's own `exec_paths` and run
   directly in the broker's sandbox, with no argv rules of their own — there
   is no shim to bypass because there is nothing being enforced.
@@ -155,15 +157,17 @@ filesystem grants — never through either tier. A redirect or a glob you
 write is bounded the same way.
 
 **Nor do the two tiers bound what a compiler or interpreter does once it
-runs.** The allowlist above is absolute about *which programs exist to run
-at all* — nothing bypasses that. It says nothing about what a command that
-is itself a compiler or interpreter can do with code you hand it: that
-command is bounded only by what *its own* sandbox can reach, not by argv
-rules and not by which other tools are or are not enumerated elsewhere in
-the profile. This repository's own profile enumerates `go` for exactly this
-reason — see [The command profile](#the-command-profile) below for what
-that costs and how far the containment actually reaches once you look
-closely at what a Go program can do from inside `go`'s own grants.
+runs.** The allowlist above is absolute about *what the broker itself will
+dispatch* — not about which programs can execute. A command the profile does
+not enumerate will never be dispatched by the broker; a toolchain that
+compiles and executes code is bounded only by what *its own* sandbox can
+reach, not by argv rules and not by which other tools are or are not
+enumerated elsewhere in the profile, and it can run whatever those grants
+reach — including a copy of a program neither tier names. This repository's
+own profile enumerates `go` for exactly this reason — see
+[The command profile](#the-command-profile) below for what that costs and
+how far the containment actually reaches once you look closely at what a Go
+program can do from inside `go`'s own grants.
 
 ### The filesystem is not virtualized
 
@@ -224,14 +228,24 @@ MCP is enabled.
 - The command profile exists, `nono profile validate` accepts it, and it
   does not grant write access to the broker's own binary — checking both the
   top-level `filesystem.allow` and every `command_policies` command's own
-  `fs_write` (both Critical findings a review of this profile found lived
-  in a command's own `fs_write`, not the top-level list). A grant expressed
-  purely through `$WORKDIR` is still not something this check can see —
-  nono itself is the final word on that at launch.
+  `fs_write`. The one Critical finding that actually matches this check's
+  own shape — a write grant over the broker's own binary — lived in a
+  command's own `fs_write`, not the top-level list, so checking only the
+  top level would have missed it. This does not cover a separate class of
+  finding from the same review: a directory that is both writable and
+  executable lets a copy of some other program be staged and executed
+  directly, with nothing to do with the broker's own binary path — doctor
+  has no writable-and-executable intersection check of any kind. A grant
+  expressed purely through `$WORKDIR` is also still not something this
+  check can see — nono itself is the final word on that at launch.
 - Resolving the broker's own base name through this process's own `PATH` —
   the same lookup the launcher's `BrokerArgs` relies on — lands back on this
   exact binary. A different `agent-sandbox` earlier on `PATH` would silently
   become the broker instead.
+- When the profile pins `command_policies.commands["agent-sandbox"].executable`,
+  that path also names this exact binary — a profile and a binary
+  disagreeing about which file the entrypoint is is not a state to launch
+  from, even when PATH alone resolves correctly.
 
 If any of these fail, `agent-sandbox claude` will not launch Claude at all.
 

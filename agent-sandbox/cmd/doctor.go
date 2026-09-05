@@ -226,6 +226,13 @@ func checkCommandProfile(cfg *config.Config) checkResult {
 			"fix the error above and re-run doctor"
 		return r
 	}
+	if declared && declaredExecutable == "" {
+		r.details = append(r.details, fmt.Sprintf("entrypoint: command_policies.commands[%q] does not pin \"executable\"", base))
+		r.hint = "the profile declares \"" + base + "\" as a policy command but does not pin its \"executable\" " +
+			"field; add it, naming this exact running binary (" + self + "), so the profile and the running " +
+			"binary cannot silently disagree about which file the entrypoint is"
+		return r
+	}
 	if declared && cleanAbs(declaredExecutable) != cleanAbs(self) {
 		r.details = append(r.details, fmt.Sprintf("entrypoint: command_policies.commands[%q].executable is %s, not the running binary %s", base, declaredExecutable, self))
 		r.hint = "the profile pins the entrypoint's \"executable\" to a different path than the binary running " +
@@ -256,11 +263,21 @@ func cleanAbs(p string) string {
 // (the session-wide grant), or any command_policies command's own
 // from.<caller>.sandbox.fs_write (a per-command child sandbox's grant,
 // which the top-level list alone cannot see). This has to check both: the
-// first version of this check read only the top level, and both Criticals
-// this task's review found lived in a command's own fs_write instead
-// (Critical 1 in the broker's own entrypoint entry, Critical 2 in a
-// promoted-to-policy command's) — either could have re-landed silently
-// without this checking where they actually live.
+// first version of this check read only the top level, and the one
+// Critical finding from this task's review that actually matches this
+// check's own shape — a write grant over the broker's own binary — lived
+// in the broker's own entrypoint entry's fs_write, not the top-level list;
+// it could have re-landed silently without this checking where it actually
+// lived.
+//
+// This does not cover a second, distinct class of finding from the same
+// review: a directory that is both writable and executable (for example,
+// /tmp in a promoted-to-policy command's own fs_write) lets a
+// floor-reachable binary be copied in and executed directly, with nothing
+// to do with the broker's own binary path. That is not "a write grant over
+// the broker's binary" at all, so this function has nothing to say about
+// it — doctor has no writable-and-executable intersection check of any
+// kind. Closing that class needs a different check than this one.
 //
 // A fuller model of nono's own trust check belongs in nono, not here; this
 // reads only the grants that made nono refuse to start during the design

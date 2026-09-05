@@ -15,23 +15,29 @@ sandbox at all.
 Every command in your line sorts into one of two tiers:
 
 - **Policy commands** run in their own child sandbox, with their own
-  filesystem/network grants and argv rules. Reaching one bypasses nothing:
-  its rules cannot be evaded by an absolute path or any other trick.
+  filesystem/network grants and argv rules. The broker dispatches to one
+  only through nono's own generated shim — never by an absolute path, a
+  symlink, or any other indirection that skips it. That guarantee is about
+  how the broker itself dispatches; it is not a guarantee about what a
+  *different* command's own sandbox can still reach and run — see below.
 - **Floor commands** run directly in the broker's own sandbox, with no argv
   rules of their own.
 
-A program in neither tier cannot run at all — refused before it starts, the
-same way an unknown command would be. This is the allowlist for *which
-programs exist to run at all*, and it is absolute: nothing bypasses it.
+A program in neither tier is never dispatched by the broker — refused
+before it starts, the same way an unknown command would be. This allowlist
+is absolute about *what the broker itself will dispatch*, not about which
+programs can execute: it says nothing about what a command the broker does
+dispatch can go on to do once it runs. See the next paragraph.
 
-It is not a claim about what a command that is itself a compiler or
-interpreter can do once it runs. A toolchain in either tier that can compile
-and immediately execute code you give it is bounded only by what *its own*
-sandbox can reach — not by argv rules, and not by which other tools are or
-are not enumerated elsewhere in this profile. If such a command is listed
-below, its own grants (not this document's prose about tiers) are the real
-boundary; ask the operator what those are before assuming a two-tier model
-holds for everything it might do.
+A toolchain in either tier that can compile and immediately execute code you
+give it is bounded only by what *its own* sandbox can reach — not by argv
+rules, and not by which other tools are or are not enumerated elsewhere in
+this profile — and it can run whatever those grants reach, including a copy
+of a program neither tier names, made and executed entirely inside its own
+sandbox without ever going through the broker's dispatch or nono's shim. If
+such a command is listed below, its own grants (not this document's prose
+about tiers) are the real boundary; ask the operator what those are before
+assuming a two-tier model holds for everything it might do.
 
 **Policy commands and their denials, from `{{.ProfilePath}}`:**
 {{if .PolicyCommands}}{{range .PolicyCommands}}
@@ -77,8 +83,9 @@ resolves the agent profile exactly as launch does, so a passing check means the
 config will not be what breaks the next launch. `agent-sandbox doctor` checks
 the command profile itself: that it exists, that `nono profile validate`
 passes on it, that it does not grant write access to the broker's own
-binary, and that resolving the broker's own name through this process's PATH
-lands back on that exact binary.
+binary, that resolving the broker's own name through this process's PATH
+lands back on that exact binary, and — when the profile pins the entrypoint's
+`executable` — that the pinned path also names that exact binary.
 
 Schema:
 

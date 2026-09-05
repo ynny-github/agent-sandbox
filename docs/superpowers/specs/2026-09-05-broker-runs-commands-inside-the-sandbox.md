@@ -329,28 +329,53 @@ should know the compose file is no longer inspected.
 
 ## Measured constraints
 
-**A policy command cannot be the reader in a pipeline.** stdin EOF is not
-propagated to a command reached through its shim, so the reader never finishes.
+**A pipeline cannot have a policy command at both ends.** Five runs of each,
+deterministic:
 
 | pipeline | result |
 | --- | --- |
-| policy command → floor command (`git log \| rg x`) | works |
-| floor command → floor command | works |
-| policy command → shell builtin | works |
-| shell builtin → policy command | works |
-| policy command → policy command, reader consumes stdin | **hangs** |
-| policy command → policy command, reader ignores stdin | works |
+| policy → floor (`git log \| rg x`, only git policy-controlled) | works |
+| floor → policy (only the reader policy-controlled) | works |
+| shell builtin → policy | works |
+| floor → floor | works |
+| **policy → policy** | **hangs, 5/5** |
 
 Two policy commands running concurrently without a pipe (`a & b & wait`) both
 complete, so this is not serialization — it is the pipe.
+
+The failure is worse than an error. The pipeline produces its complete, correct
+output and then does not exit:
+
+```
+$ rg --version | rg ripgrep
+ripgrep 15.2.0        ← correct output
+                      ← never returns
+```
+
+The agent sees a timeout with no exit status, and the output is discarded. The
+process left behind is the *reader's* shim, blocked in `anon_pipe_read`: it
+relays stdin for the real command and never receives EOF, because the writer's
+side of the pipe stays open after the writer exits. Each occurrence leaks that
+shim process; it does not exit on its own.
+
+The broker cannot close the gap from its side. Closing its own copy of the write
+end when the writer's `Wait` returns changes nothing (measured) — the writer's
+shim holds another copy.
 
 What to do about it is an open decision; see below. One enabling fact, whichever
 way it goes: the broker can identify the case exactly, without keeping a list of
 which commands are policy-controlled. nono prepends its shim directory to
 `PATH`, so `exec.LookPath` resolves a policy command under that directory and a
-floor command to its real binary. "Resolved under the shim directory, and stdin
-is a pipeline pipe rather than the broker's own stdin or a file" is the whole
-test.
+floor command to its real binary. "Both ends of this pipe resolved under the
+shim directory" is the whole test.
+
+This interacts badly with the two-tier design, which gives operators a reason to
+move commands into the policy tier: per-command filesystem and network grants
+live there. With only `git` and `docker` policy-controlled the case is nearly
+unreachable, because nothing pipes one into the other. Policy-control `go`,
+`rg` and `curl` to scope their network, and `go list ./... | rg foo` — an
+ordinary line — stops working. The blast radius is set by how thick the policy
+tier is.
 
 Report the underlying behaviour upstream regardless.
 
@@ -397,21 +422,24 @@ that shows whether the enumeration cost is tolerable in practice.
 
 ## Open decision
 
-**What the broker does when a policy command is a pipeline reader.** The case is
-detectable (see Measured constraints); what to do with it is not settled.
+**What the broker does with a pipeline that has a policy command at both ends.**
+The case is detectable (see Measured constraints); what to do with it is not
+settled.
 
 - *Refuse.* The agent gets an error naming the workaround — write the upstream
   output to a file and redirect from it, measured working. Costs one retry.
-  Turns a hang into a message, and becomes dead code if the behaviour is fixed
-  upstream.
+  Turns a hang into a message, leaks nothing, and becomes dead code if the
+  behaviour is fixed upstream.
 - *Buffer.* Run the upstream to completion into a temporary file, then feed the
   reader from it. The line works as written, at the cost of streaming: a
   producer that never ends (`tail -f | …`) never starts the reader, and an
   unbounded producer fills the disk.
-- *Leave it.* The line hangs. No code, no message, and the failure is invisible
-  to the agent until something else times out.
-- *Patch nono.* Fix EOF propagation through the shim and carry a second patch
-  alongside the NixOS one.
+- *Leave it, and keep the policy tier thin.* No code. The case stays nearly
+  unreachable as long as only commands that are never piped into each other are
+  policy-controlled — but nothing enforces that, and when it is hit the agent
+  loses the output and a shim process is leaked.
+- *Patch nono.* Fix the pipe teardown and carry a second patch alongside the
+  NixOS one.
 
 ## Evidence
 

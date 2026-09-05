@@ -3,10 +3,12 @@ package broker_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -169,5 +171,126 @@ func TestShellExecutorReportsAMissingCommand(t *testing.T) {
 	}
 	if errb == "" {
 		t.Errorf("stderr is empty; a missing command must say so")
+	}
+}
+
+// TestShellExecutorRunsMultipleExternalCommandsInOnePipelineStage guards
+// against closing the interpreter's own pipe writer once a command finishes:
+// the group runs two external commands into the same downstream reader, so if
+// anything closed that writer after "echo one" finished, "echo two" would
+// write to a closed pipe and "two" would never reach cat's stdin.
+func TestShellExecutorRunsMultipleExternalCommandsInOnePipelineStage(t *testing.T) {
+	dir := t.TempDir()
+	code, out, _ := runShell(t, dir, "{ sh -c 'echo one'; sh -c 'echo two'; } | cat", "")
+	if code != 0 {
+		t.Errorf("exit = %d, want 0", code)
+	}
+	if got := strings.TrimSpace(out); got != "one\ntwo" {
+		t.Errorf("stdout = %q, want %q", got, "one\ntwo")
+	}
+}
+
+// recordingWriteCloser is a stdout stand-in that notices whether it was
+// closed and, once closed, behaves like a real closed transport by failing
+// further writes — the way an HTTP response writer or a closed file would.
+type recordingWriteCloser struct {
+	mu     sync.Mutex
+	buf    bytes.Buffer
+	closed bool
+}
+
+func (w *recordingWriteCloser) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return 0, errors.New("write to closed writer")
+	}
+	return w.buf.Write(p)
+}
+
+func (w *recordingWriteCloser) Close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.closed = true
+	return nil
+}
+
+func (w *recordingWriteCloser) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.String()
+}
+
+func (w *recordingWriteCloser) wasClosed() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.closed
+}
+
+// TestShellExecutorDoesNotCloseTheCallersStdout runs two external commands in
+// sequence — sh, not a shell builtin like echo, so each one actually reaches
+// execHandler and interposeOutputs — against a stdout that implements
+// io.Closer, which is exactly what Task 3 hands the executor for its response
+// stream. Only the interpreter — which alone knows when the whole request is
+// done with the writer — may end its lifetime; if Run closed it after the
+// first command, the second command's output would be silently lost.
+func TestShellExecutorDoesNotCloseTheCallersStdout(t *testing.T) {
+	out := &recordingWriteCloser{}
+	var errb bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	e := broker.NewShellExecutor()
+	code, err := e.Run(ctx, "sh -c 'echo one'; sh -c 'echo two'", t.TempDir(), nil, out, &errb)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if code != 0 {
+		t.Errorf("exit = %d, want 0", code)
+	}
+	if out.wasClosed() {
+		t.Errorf("Run closed the caller's stdout; the interpreter must own that writer's lifetime")
+	}
+	if got := strings.TrimSpace(out.String()); got != "one\ntwo" {
+		t.Errorf("stdout = %q, want %q (a close between commands would drop \"two\")", got, "one\ntwo")
+	}
+}
+
+// TestShellExecutorRedirectsBothStreamsOfAnAliasedWriterWithoutLoss covers
+// `2>&1`, where hc.Stdout and hc.Stderr become the same writer. Wiring that
+// through two independent pipes and copy goroutines races them against each
+// other with no synchronization, unlike os/exec's own guarantee for an
+// aliased writer ("at most one goroutine at a time will call Write"); the
+// race drops roughly half of one stream's output under that bug, so the loop
+// below would flake reliably if the aliasing weren't collapsed to one pipe.
+func TestShellExecutorRedirectsBothStreamsOfAnAliasedWriterWithoutLoss(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i < 30; i++ {
+		code, out, _ := runShell(t, dir, "sh -c 'echo out; echo err >&2' 2>&1", "")
+		if code != 0 {
+			t.Fatalf("iteration %d: exit = %d, want 0", i, code)
+		}
+		if !strings.Contains(out, "out") || !strings.Contains(out, "err") {
+			t.Fatalf("iteration %d: stdout = %q, want it to contain both %q and %q", i, out, "out", "err")
+		}
+	}
+}
+
+// TestShellExecutorLooksUpCommandsRelativeToCwd guards the LookPathDir fix:
+// exec.LookPath resolves "./script.sh" against the broker process's own
+// working directory, not the cwd this executor was given, so a script that
+// exists only in the command's cwd would wrongly report "command not found".
+func TestShellExecutorLooksUpCommandsRelativeToCwd(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "script.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho scripted\n"), 0o700); err != nil {
+		t.Fatalf("write script.sh: %v", err)
+	}
+	code, out, _ := runShell(t, dir, "./script.sh", "")
+	if code != 0 {
+		t.Errorf("exit = %d, want 0", code)
+	}
+	if strings.TrimSpace(out) != "scripted" {
+		t.Errorf("stdout = %q, want %q", out, "scripted")
 	}
 }

@@ -44,13 +44,21 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		checkToolSandbox(ctx),
 		checkBrokerSocketDir(),
 	}
-	if cfgErr != nil {
+	switch {
+	case cfgErr == nil, errors.Is(cfgErr, config.ErrCommandProfileMissing) && cfg != nil:
+		// config.Load returns cfg alongside ErrCommandProfileMissing
+		// specifically (unlike every other validate failure, which leaves cfg
+		// nil), so checkCommandProfile can still run and report its own
+		// dedicated, actionable hint ("write the profile, or point
+		// command_profile at it") instead of the generic one below, which
+		// config.go:204 made otherwise unreachable for this, the headline
+		// case doctor exists to catch.
+		results = append(results, checkCommandProfile(cfg))
+	default:
 		results = append(results, checkResult{
 			name: "command profile",
 			hint: "fix the config first: " + cfgErr.Error(),
 		})
-	} else {
-		results = append(results, checkCommandProfile(cfg))
 	}
 	renderResults(cmd.OutOrStdout(), results)
 	for _, r := range results {

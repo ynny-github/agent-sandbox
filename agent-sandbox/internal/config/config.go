@@ -202,7 +202,12 @@ func validate(cfg *Config) (*Config, error) {
 	}
 
 	if _, err := os.Stat(cfg.CommandProfilePath()); err != nil {
-		return nil, fmt.Errorf("%w: %s", ErrCommandProfileMissing, cfg.CommandProfilePath())
+		// Unlike the other validate failures below, cfg itself is returned
+		// alongside this error: doctor's checkCommandProfile needs
+		// cfg.CommandProfilePath() to report the dedicated, actionable
+		// "write the profile, or point command_profile at it" hint instead of
+		// the generic "fix the config first" one — see cmd/doctor.go.
+		return cfg, fmt.Errorf("%w: %s", ErrCommandProfileMissing, cfg.CommandProfilePath())
 	}
 
 	// command_output_dir is only consumed by the MCP server path, so require it

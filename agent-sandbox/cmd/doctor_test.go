@@ -190,6 +190,44 @@ func TestRunDoctor_RunsAllChecksEvenOnEarlyFailure(t *testing.T) {
 	}
 }
 
+// A missing command profile is config.Load's headline failure
+// (config.go:204 requires the file to exist before anything else about the
+// config can be trusted), so this is the case doctor most needs to get
+// right — and until config.Load started returning cfg alongside
+// ErrCommandProfileMissing, runDoctor's cfgErr branch could not reach
+// checkCommandProfile at all here, so this exact scenario always fell back
+// to the generic "fix the config first" hint instead of the dedicated one.
+func TestRunDoctor_MissingCommandProfileReportsActionableHint(t *testing.T) {
+	stubAllSeamsOK(t)
+
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "command-profile.json") // never written
+	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
+	body := "tool_mode = \"hook\"\ncommand_profile = " + strconv.Quote(missing) + "\n"
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	origConfigPath := configPath
+	configPath = cfgPath
+	t.Cleanup(func() { configPath = origConfigPath })
+
+	var buf bytes.Buffer
+	doctorCmd.SetOut(&buf)
+	t.Cleanup(func() { doctorCmd.SetOut(nil) })
+
+	err := runDoctor(doctorCmd, nil)
+	if !errors.Is(err, errDoctorChecksFailed) {
+		t.Fatalf("expected errDoctorChecksFailed, got %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "write the profile, or point command_profile at it") {
+		t.Errorf("output missing checkCommandProfile's dedicated hint:\n%s", out)
+	}
+	if strings.Contains(out, "fix the config first") {
+		t.Errorf("output still uses the generic cfgErr hint for the missing-profile case:\n%s", out)
+	}
+}
+
 func TestCheckNono_OK(t *testing.T) {
 	stubNonoSeams(t,
 		func(string) (string, error) { return "/usr/bin/nono", nil },
@@ -635,12 +673,11 @@ func TestCheckCommandProfileFailsWhenTheFileIsMissing(t *testing.T) {
 		t.Fatalf("write profile: %v", err)
 	}
 	// config.Load itself already refuses a missing profile (validate's
-	// ErrCommandProfileMissing), which is exactly why runDoctor never reaches
-	// checkCommandProfile in that case (see its cfgErr branch). Build the
-	// *Config while the file still exists, then remove it, to exercise
-	// checkCommandProfile's own defensive os.Stat directly — covering the
-	// window between Load succeeding and the profile disappearing before
-	// launch.
+	// ErrCommandProfileMissing) — see TestRunDoctor_MissingCommandProfileReportsActionableHint
+	// for that path through runDoctor. Build the *Config while the file still
+	// exists, then remove it, to exercise checkCommandProfile's own
+	// defensive os.Stat directly here — covering the window between Load
+	// succeeding and the profile disappearing before launch.
 	cfg := configWithProfile(t, dir, present)
 	if err := os.Remove(present); err != nil {
 		t.Fatalf("remove profile: %v", err)

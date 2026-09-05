@@ -102,9 +102,16 @@ func TestValidateRejectsMissingCommandProfile(t *testing.T) {
 	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
 	writeFile(t, cfgPath, "tool_mode = \"hook\"\n")
 
-	_, err := config.Load(cfgPath)
+	cfg, err := config.Load(cfgPath)
 	if !errors.Is(err, config.ErrCommandProfileMissing) {
 		t.Fatalf("Load error = %v, want ErrCommandProfileMissing", err)
+	}
+	// Unlike every other validate failure, this one still returns cfg: doctor's
+	// checkCommandProfile (cmd/doctor.go) needs cfg.CommandProfilePath() to
+	// report its own dedicated, actionable hint instead of the generic
+	// "fix the config first" one.
+	if cfg == nil {
+		t.Fatal("Load(cfg) = nil, want the partially-validated config alongside ErrCommandProfileMissing")
 	}
 }
 

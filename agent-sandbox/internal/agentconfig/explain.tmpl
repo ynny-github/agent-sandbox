@@ -9,8 +9,9 @@
 There is no shell in the loop. The command broker parses your command line
 itself (pipelines, `&&`/`||`/`;`, redirections, globbing, `$(…)`, `for`/`if`,
 `cd` and the other shell builtins all work), and executes each simple command
-directly — never through `bash` or `sh`, which are not runnable in this
-sandbox at all.
+directly — never through `bash` or `sh`. The broker never dispatches a
+shell, and no shell is in either tier, so nothing the broker runs gives you
+a shell directly.
 
 Every command in your line sorts into one of two tiers:
 

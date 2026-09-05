@@ -493,11 +493,15 @@ Four properties worth knowing before writing your own:
   on that PATH, would silently become the broker instead. `agent-sandbox
   doctor` checks that resolving the entrypoint through this process's own
   PATH lands back on this exact binary.
-- **Enumerating every runnable command is the real cost of this design.** A
-  program absent from both tiers cannot run at all, which is the allowlist
-  working as intended — and also the profile's recurring maintenance
-  burden. On a NixOS host, coreutils applets (`cat`, `ls`, `rm`, `cp`, …) are
-  symlinks into one combined multi-call binary: pinning each as its own
+- **Enumerating every runnable command is the real cost of this design.**
+  The broker will not *dispatch* a program absent from both tiers, which is
+  the allowlist working as intended — and also the profile's recurring
+  maintenance burden. That is a claim about dispatch, not about
+  reachability in general: a command with a compiler or interpreter in its
+  own sandbox can still execute code the broker never dispatched, exactly
+  the chain the compiler caveat above measures. On a NixOS host, coreutils
+  applets (`cat`, `ls`, `rm`, `cp`, …) are symlinks into one combined
+  multi-call binary: pinning each as its own
   policy command silently disables enforcement, so they belong at the floor,
   granted as one directory. A pinned `executable` must be the real program,
   never a multi-call host or a version-manager shim — pointing an entry at

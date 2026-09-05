@@ -569,7 +569,7 @@ agent-sandbox claude --env file:.secrets.env -- --model opus
 mise install          # Go + lefthook
 go test ./...         # unit + integration tests
 go build ./...
-mise run build         # install a working-tree build to $(go env GOPATH)/bin
+mise run build         # install a working-tree build via `go install`
 ```
 
 **Building this project's own binary no longer puts it on `PATH`.** `agent-sandbox
@@ -577,15 +577,23 @@ claude` resolves its own broker entrypoint by base name through the launcher's
 PATH (see [the command profile](#the-command-profile)), and a build that
 landed in this working tree would sit inside the same directory the command
 profile grants `fs_write` — the writable-and-executable combination nono
-refuses a policy command's binary for. `mise run build` installs to
-`$(go env GOPATH)/bin` instead, which is also the path this repository's own
-`command-profile.json` pins as `agent-sandbox`'s `executable`, so a build here
-and a session launched here agree on which binary is the broker. Run `mise run
-build` after every change you want to exercise, then launch as usual
-(`agent-sandbox claude`) — `GOPATH/bin` is already expected to be on a Go
-developer's `PATH`. `go run .` cannot stand in for this: its output binary is
-staged under `$TMPDIR` at run time, on no reliable footing with the profile at
-all.
+refuses a policy command's binary for. `mise run build` runs `go install`
+instead, which installs to `$(go env GOBIN)` when it is set and to
+`$(go env GOPATH)/bin` otherwise — outside `$WORKDIR` either way. That
+resolved path (measured here as `$(go env GOBIN)`, because this repository's
+own mise-managed Go sets `GOBIN` to its own version-scoped `bin/`, itself
+already on the developer's `PATH`) is also the exact path this repository's
+own `command-profile.json` currently pins as `agent-sandbox`'s `executable`
+and `command_policies.executable_dirs` — a build here and a session launched
+here agree on which binary is the broker. **The profile's pin and `go
+install`'s actual output directory can drift** (a Go toolchain upgrade under
+mise renumbers that path, or a `GOBIN` change moves it outright); re-run
+`go env GOBIN` (or `GOPATH`) and update `command-profile.json` to match
+whenever `agent-sandbox doctor`'s command-profile check starts failing with
+an entrypoint mismatch. Run `mise run build` after every change you want to
+exercise, then launch as usual (`agent-sandbox claude`). `go run .` cannot
+stand in for this: its output binary is staged under `$TMPDIR` at run time,
+on no reliable footing with the profile at all.
 
 End-to-end suites live in `e2e` (Python/pytest, MCP stdio).
 

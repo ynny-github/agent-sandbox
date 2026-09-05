@@ -8,13 +8,17 @@ lefthook = "latest"
 # the command profile's fs_write also reaches ($WORKDIR) — exactly the
 # writable-and-executable state nono refuses the broker's own entrypoint for
 # (see doctor's checkCommandProfile and the README's "installed binary's
-# directory" note). `mise run build` instead installs to `go env GOPATH`'s
-# bin/, outside $WORKDIR, which is also the path this repository's own
-# command-profile.json already pins as agent-sandbox's "executable" — so
-# building here and launching a session here agree on which binary is the
-# broker. See the Development section in README.md for the resulting loop.
+# directory" note). `mise run build` instead runs `go install`, which lands
+# outside $WORKDIR either way: GOBIN if set, GOPATH/bin otherwise. Measured
+# here as GOBIN, because mise's own Go plugin points it at that Go version's
+# own bin/ (already on PATH) rather than leaving it unset — this repository's
+# command-profile.json currently pins that exact resolved path as
+# agent-sandbox's "executable", so a build here and a session launched here
+# agree on which binary is the broker. That pin can drift from `go install`'s
+# actual target (a toolchain upgrade renumbers the path; GOBIN can also just
+# change) — see the Development section in README.md for what to do then.
 [tasks.build]
-description = "Build agent-sandbox and install it to GOPATH/bin, outside the working tree"
+description = "Build agent-sandbox and install it outside the working tree (go install)"
 # -buildvcs=false because go build/install otherwise shells out to git to
 # stamp the revision, and git needs configuration the shell sandbox does not
 # grant — the task would only work when run outside it. A dev build gains

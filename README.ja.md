@@ -586,7 +586,7 @@ agent-sandbox claude --env file:.secrets.env -- --model opus
 mise install          # Go と lefthook
 go test ./...         # ユニットテスト + 統合テスト
 go build ./...
-mise run build         # 作業ツリーのビルドを $(go env GOPATH)/bin にインストール
+mise run build         # `go install` で作業ツリーのビルドをインストール
 ```
 
 **このプロジェクト自身のバイナリをビルドしても、もう `PATH` には乗りません。**
@@ -596,14 +596,23 @@ mise run build         # 作業ツリーのビルドを $(go env GOPATH)/bin に
 ビルド出力を置いてしまうと、それはコマンドプロファイルが `fs_write` を
 許可しているのと同じディレクトリに収まってしまい — nono がポリシーコマンドの
 バイナリに対して拒否する、書き込み可能かつ実行可能という組み合わせに
-なります。そこで `mise run build` はその代わりに `$(go env GOPATH)/bin` へ
-インストールします。ここは、このリポジトリ自身の `command-profile.json` が
-`agent-sandbox` の `executable` として指定しているパスと同じです。つまり、
+なります。そこで `mise run build` はその代わりに `go install` を実行します。
+これは `GOBIN` が設定されていればそこへ、なければ `$(go env GOPATH)/bin` へ
+インストールします — いずれにせよ `$WORKDIR` の外です。(このリポジトリでの
+実測では `GOBIN` の方でした。mise 管理下の Go プラグインが、未設定のままに
+せず、その Go バージョン専用の `bin/` — すでに `PATH` に入っています — を
+`GOBIN` に指定しているためです。) その解決済みのパスは、このリポジトリ自身の
+`command-profile.json` が現在 `agent-sandbox` の `executable` および
+`command_policies.executable_dirs` として指定しているパスと同じです。つまり、
 ここでビルドしたバイナリと、ここから起動したセッションとで、どれがブローカー
-なのかについて食い違いが起きません。変更を試したいときは毎回 `mise run
-build` を実行してから、いつも通り起動してください
-(`agent-sandbox claude`) — `GOPATH/bin` は Go 開発者の `PATH` にすでに
-含まれているはずのものです。`go run .` はこの代わりにはなりません:
+なのかについて食い違いが起きません。**プロファイルのピン留めと `go install`
+の実際の出力先は、ずれることがあります** (mise 配下の Go ツールチェーンが
+アップグレードされてパスの番号が変わる、あるいは `GOBIN` 自体が変わる、
+など)。`agent-sandbox doctor` のコマンドプロファイルチェックがエントリ
+ポイントの不一致で落ち始めたら、`go env GOBIN` (または `GOPATH`) を確認し
+なおし、`command-profile.json` を実際の値に合わせて更新してください。変更を
+試したいときは毎回 `mise run build` を実行してから、いつも通り起動して
+ください (`agent-sandbox claude`)。`go run .` はこの代わりにはなりません:
 生成されるバイナリは実行時に `$TMPDIR` 以下に置かれ、プロファイルとの間に
 何の対応関係もないからです。
 

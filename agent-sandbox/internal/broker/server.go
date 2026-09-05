@@ -10,8 +10,9 @@ import (
 	"sync"
 )
 
-// Executor runs one command. The production implementation spawns nono; tests
-// substitute a fake so the server can be exercised without a sandbox.
+// Executor runs one command line. The production implementation is
+// ShellExecutor; tests substitute a fake so the server can be exercised
+// without spawning anything.
 type Executor interface {
 	Execute(ctx context.Context, req Request, stdin io.Reader,
 		stdout, stderr io.Writer) (int, error)

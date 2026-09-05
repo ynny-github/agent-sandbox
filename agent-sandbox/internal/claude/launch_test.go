@@ -157,8 +157,8 @@ func TestBuildArgs_HookMode_InjectsSettings(t *testing.T) {
 	}
 	val := args[si+1]
 	if !strings.Contains(val, `"PreToolUse"`) ||
-		!strings.Contains(val, "agent-sandbox hook --policy-file '/state/policy-1.json'") {
-		t.Errorf("--settings value missing policy-file hook config; got %q", val)
+		!strings.Contains(val, "agent-sandbox hook") {
+		t.Errorf("--settings value missing the hook config; got %q", val)
 	}
 	if si < ci {
 		t.Errorf("--settings must appear after claude; got %v", args)

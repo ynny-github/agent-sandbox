@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"math"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -21,9 +20,19 @@ type mockRunner struct {
 	stdout   string
 	stderr   string
 	err      error
+
+	// blockUntilCancel, when set, makes RunCommand ignore the canned fields
+	// above and instead wait for ctx to be cancelled, returning 124 (the
+	// conventional "timed out" status) — used to prove a timeout set on the
+	// tool call actually reaches the command runner.
+	blockUntilCancel bool
 }
 
-func (m *mockRunner) RunSandboxed(ctx context.Context, argv []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+func (m *mockRunner) RunCommand(ctx context.Context, command string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	if m.blockUntilCancel {
+		<-ctx.Done()
+		return 124, nil
+	}
 	if m.stdout != "" {
 		io.WriteString(stdout, m.stdout)
 	}
@@ -68,17 +77,17 @@ func parseToolResult(t *testing.T, res *mcp.CallToolResult) mcptool.ToolResult {
 	return result
 }
 
-func TestRunCommand_HostExecution_ReturnsExitCodeAndStdoutPath(t *testing.T) {
+func TestRunCommand_ReturnsExitCodeAndStdoutPath(t *testing.T) {
 	dir := t.TempDir()
 	cfg := mcptool.HandlerConfig{
 		OutputDir:     dir,
-		AllowPatterns: []string{"echo *"},
+		CommandRunner: &mockRunner{exitCode: 0, stdout: "test output\n"},
 	}
 	session := setupServerWithConfig(t, cfg)
 
 	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "run_command",
-		Arguments: map[string]any{"command": "echo hello"},
+		Arguments: map[string]any{"command": "npm test"},
 	})
 	if err != nil {
 		t.Fatalf("CallTool error: %v", err)
@@ -92,24 +101,24 @@ func TestRunCommand_HostExecution_ReturnsExitCodeAndStdoutPath(t *testing.T) {
 		t.Errorf("exit_code = %d, want 0", result.ExitCode)
 	}
 	if result.StdoutPath == "" {
-		t.Error("stdout_path should be non-empty (command produced output)")
+		t.Error("stdout_path should be non-empty (runner wrote output)")
 	}
 	if result.StderrPath != "" {
 		t.Errorf("stderr_path should be empty, got %q", result.StderrPath)
 	}
 }
 
-func TestRunCommand_HostExecution_ReturnsStderrPath(t *testing.T) {
+func TestRunCommand_ReturnsStderrPath(t *testing.T) {
 	dir := t.TempDir()
 	cfg := mcptool.HandlerConfig{
 		OutputDir:     dir,
-		AllowPatterns: []string{"ls *"},
+		CommandRunner: &mockRunner{exitCode: 1, stderr: "boom\n"},
 	}
 	session := setupServerWithConfig(t, cfg)
 
 	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "run_command",
-		Arguments: map[string]any{"command": "ls /nonexistent-path-xyz-12345"},
+		Arguments: map[string]any{"command": "false"},
 	})
 	if err != nil {
 		t.Fatalf("CallTool error: %v", err)
@@ -120,7 +129,7 @@ func TestRunCommand_HostExecution_ReturnsStderrPath(t *testing.T) {
 
 	result := parseToolResult(t, res)
 	if result.ExitCode == 0 {
-		t.Errorf("exit_code = 0, want non-zero (ls of nonexistent path fails)")
+		t.Errorf("exit_code = 0, want non-zero")
 	}
 	if result.StdoutPath != "" {
 		t.Errorf("stdout_path should be empty, got %q", result.StdoutPath)
@@ -134,7 +143,7 @@ func TestRunCommand_NoOutput_OmitsBothPaths(t *testing.T) {
 	dir := t.TempDir()
 	cfg := mcptool.HandlerConfig{
 		OutputDir:     dir,
-		AllowPatterns: []string{"true"},
+		CommandRunner: &mockRunner{exitCode: 0},
 	}
 	session := setupServerWithConfig(t, cfg)
 
@@ -161,114 +170,10 @@ func TestRunCommand_NoOutput_OmitsBothPaths(t *testing.T) {
 	}
 }
 
-func TestRunCommand_PatternMismatch_ReturnsNonZeroExitAndStderrPath(t *testing.T) {
-	dir := t.TempDir()
-	cfg := mcptool.HandlerConfig{
-		OutputDir:     dir,
-		AllowPatterns: []string{"git *"}, // npm test won't match
-	}
-	session := setupServerWithConfig(t, cfg)
-
-	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
-		Name:      "run_command",
-		Arguments: map[string]any{"command": "npm test"},
-	})
-	if err != nil {
-		t.Fatalf("CallTool error: %v", err)
-	}
-
-	result := parseToolResult(t, res)
-	if result.ExitCode == 0 {
-		t.Error("exit_code should be non-zero for pattern mismatch")
-	}
-	if result.StderrPath == "" {
-		t.Error("stderr_path should be non-empty for pattern mismatch")
-	}
-	if result.StdoutPath != "" {
-		t.Errorf("stdout_path should be empty for rejection, got %q", result.StdoutPath)
-	}
-
-	// Verify rejection reason is written to the stderr file
-	data, readErr := os.ReadFile(result.StderrPath)
-	if readErr != nil {
-		t.Fatalf("read stderr file: %v", readErr)
-	}
-	if !strings.Contains(string(data), "no command broker configured") {
-		t.Errorf("stderr file should contain rejection reason, got: %q", string(data))
-	}
-}
-
-func TestRunCommand_ParseError_ReturnsNonZeroExitAndStderrPath(t *testing.T) {
-	// An unterminated quote is a parse error → engine writes "rejected: ..." to stderr.
-	dir := t.TempDir()
-	cfg := mcptool.HandlerConfig{
-		OutputDir:     dir,
-		AllowPatterns: []string{"echo *"},
-	}
-	session := setupServerWithConfig(t, cfg)
-
-	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
-		Name:      "run_command",
-		Arguments: map[string]any{"command": `echo "hi`},
-	})
-	if err != nil {
-		t.Fatalf("CallTool error: %v", err)
-	}
-
-	result := parseToolResult(t, res)
-	if result.ExitCode == 0 {
-		t.Error("exit_code should be non-zero for parse error")
-	}
-	if result.StderrPath == "" {
-		t.Error("stderr_path should be non-empty for rejection")
-	}
-	if result.StdoutPath != "" {
-		t.Errorf("stdout_path should be empty for rejection, got %q", result.StdoutPath)
-	}
-
-	data, readErr := os.ReadFile(result.StderrPath)
-	if readErr != nil {
-		t.Fatalf("read stderr file: %v", readErr)
-	}
-	if !strings.Contains(string(data), "rejected") {
-		t.Errorf("stderr file should contain rejection reason, got: %q", string(data))
-	}
-}
-
-func TestRunCommand_SandboxExecution_ReturnsExitCodeAndPaths(t *testing.T) {
-	dir := t.TempDir()
-	cfg := mcptool.HandlerConfig{
-		OutputDir:     dir,
-		AllowPatterns: []string{"git *"}, // npm test won't match → sandbox
-		CommandRunner: &mockRunner{exitCode: 0, stdout: "test output\n"},
-	}
-	session := setupServerWithConfig(t, cfg)
-
-	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
-		Name:      "run_command",
-		Arguments: map[string]any{"command": "npm test"},
-	})
-	if err != nil {
-		t.Fatalf("CallTool error: %v", err)
-	}
-	if res.IsError {
-		t.Fatalf("unexpected tool error: %v", res.Content)
-	}
-
-	result := parseToolResult(t, res)
-	if result.ExitCode != 0 {
-		t.Errorf("exit_code = %d, want 0", result.ExitCode)
-	}
-	if result.StdoutPath == "" {
-		t.Error("stdout_path should be non-empty (runner wrote output)")
-	}
-}
-
 func TestRunCommand_CommandRunnerError_ReturnsStructuredResponse(t *testing.T) {
 	dir := t.TempDir()
 	cfg := mcptool.HandlerConfig{
-		OutputDir:     dir,
-		AllowPatterns: []string{},
+		OutputDir: dir,
 		CommandRunner: &mockRunner{
 			exitCode: 0,
 			stdout:   "partial output\n",
@@ -284,27 +189,12 @@ func TestRunCommand_CommandRunnerError_ReturnsStructuredResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CallTool error: %v", err)
 	}
-	if res.IsError {
-		t.Fatalf("unexpected tool error: %v", res.Content)
+	if !res.IsError {
+		t.Fatalf("expected tool error for runner error, got: %v", res.Content)
 	}
-
-	result := parseToolResult(t, res)
-	if result.ExitCode == 0 {
-		t.Error("exit_code should be non-zero for runner error")
-	}
-	if result.StdoutPath == "" {
-		t.Error("stdout_path should preserve partial output")
-	}
-	if result.StderrPath == "" {
-		t.Error("stderr_path should contain runner error")
-	}
-
-	data, readErr := os.ReadFile(result.StderrPath)
-	if readErr != nil {
-		t.Fatalf("read stderr file: %v", readErr)
-	}
-	if !strings.Contains(string(data), "sandbox exec: attach interrupted") {
-		t.Errorf("stderr file should contain runner error, got: %q", string(data))
+	text := res.Content[0].(*mcp.TextContent).Text
+	if !strings.Contains(text, "attach interrupted") {
+		t.Errorf("error content = %q, want it to contain runner error", text)
 	}
 }
 
@@ -313,7 +203,7 @@ var _ mcptool.CommandRunner = (*mockRunner)(nil)
 
 func TestRunCommand_TimeoutSeconds_Zero_ReturnsError(t *testing.T) {
 	dir := t.TempDir()
-	cfg := mcptool.HandlerConfig{OutputDir: dir, AllowPatterns: []string{"echo *"}}
+	cfg := mcptool.HandlerConfig{OutputDir: dir}
 	session := setupServerWithConfig(t, cfg)
 
 	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
@@ -330,7 +220,7 @@ func TestRunCommand_TimeoutSeconds_Zero_ReturnsError(t *testing.T) {
 
 func TestRunCommand_TimeoutSeconds_Negative_ReturnsError(t *testing.T) {
 	dir := t.TempDir()
-	cfg := mcptool.HandlerConfig{OutputDir: dir, AllowPatterns: []string{"echo *"}}
+	cfg := mcptool.HandlerConfig{OutputDir: dir}
 	session := setupServerWithConfig(t, cfg)
 
 	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
@@ -345,11 +235,14 @@ func TestRunCommand_TimeoutSeconds_Negative_ReturnsError(t *testing.T) {
 	}
 }
 
-func TestRunCommand_TimeoutExpires_ReturnsExitCode124(t *testing.T) {
+// A timeout set on the tool call must reach the command runner as a
+// cancelled context, so a runner that respects ctx can end the command
+// promptly instead of running to whatever its own limits are.
+func TestRunCommand_TimeoutExpires_ReachesTheRunner(t *testing.T) {
 	dir := t.TempDir()
 	cfg := mcptool.HandlerConfig{
 		OutputDir:     dir,
-		AllowPatterns: []string{"sleep *"},
+		CommandRunner: &mockRunner{blockUntilCancel: true},
 	}
 	session := setupServerWithConfig(t, cfg)
 
@@ -363,6 +256,9 @@ func TestRunCommand_TimeoutExpires_ReturnsExitCode124(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Fatalf("expected timeout in ~1s, took %v", elapsed)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %v", res.Content)
 	}
 
 	result := parseToolResult(t, res)
@@ -378,7 +274,7 @@ func TestRunCommand_WithTimeout_FastCommand_DoesNotInterfere(t *testing.T) {
 	dir := t.TempDir()
 	cfg := mcptool.HandlerConfig{
 		OutputDir:     dir,
-		AllowPatterns: []string{"echo *"},
+		CommandRunner: &mockRunner{exitCode: 0, stdout: "hello\n"},
 	}
 	session := setupServerWithConfig(t, cfg)
 
@@ -406,7 +302,7 @@ func TestRunCommand_WithoutTimeout_RunsNaturally(t *testing.T) {
 	dir := t.TempDir()
 	cfg := mcptool.HandlerConfig{
 		OutputDir:     dir,
-		AllowPatterns: []string{"echo *"},
+		CommandRunner: &mockRunner{exitCode: 0, stdout: "hello\n"},
 	}
 	session := setupServerWithConfig(t, cfg)
 
@@ -428,90 +324,11 @@ func TestRunCommand_WithoutTimeout_RunsNaturally(t *testing.T) {
 	}
 }
 
-func TestRunCommand_DropPattern_WritesStderrAndExits1(t *testing.T) {
-	dir := t.TempDir()
-	cfg := mcptool.HandlerConfig{
-		OutputDir: dir,
-		DropRules: []mcptool.DropRule{{Pattern: "rm -rf *"}},
-	}
-	session := setupServerWithConfig(t, cfg)
-
-	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
-		Name:      "run_command",
-		Arguments: map[string]any{"command": "rm -rf /tmp/anything"},
-	})
-	if err != nil {
-		t.Fatalf("CallTool error: %v", err)
-	}
-	if res.IsError {
-		t.Fatalf("unexpected tool error: %v", res.Content)
-	}
-
-	result := parseToolResult(t, res)
-	if result.ExitCode != 1 {
-		t.Errorf("exit_code = %d, want 1", result.ExitCode)
-	}
-	if result.StdoutPath != "" {
-		t.Errorf("stdout_path should be empty, got %q", result.StdoutPath)
-	}
-	if result.StderrPath == "" {
-		t.Fatal("stderr_path should be non-empty for drop")
-	}
-
-	data, readErr := os.ReadFile(result.StderrPath)
-	if readErr != nil {
-		t.Fatalf("read stderr file: %v", readErr)
-	}
-	want := "dropped: command matches drop pattern \"rm -rf *\"\n"
-	if string(data) != want {
-		t.Errorf("stderr file = %q, want %q", string(data), want)
-	}
-}
-
-func TestRunCommand_DropPattern_DoesNotCallCommandRunner(t *testing.T) {
-	dir := t.TempDir()
-	// If the runner is invoked it will write the contamination strings below
-	// to stdout/stderr; the assertions afterwards confirm those strings never
-	// appear, proving the drop branch skipped the runner entirely.
-	runner := &mockRunner{exitCode: 0, stdout: "sandbox ran\n", stderr: "sandbox err\n"}
-	cfg := mcptool.HandlerConfig{
-		OutputDir:     dir,
-		DropRules:     []mcptool.DropRule{{Pattern: "rm -rf *"}},
-		CommandRunner: runner,
-	}
-	session := setupServerWithConfig(t, cfg)
-
-	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
-		Name:      "run_command",
-		Arguments: map[string]any{"command": "rm -rf /tmp/anything"},
-	})
-	if err != nil {
-		t.Fatalf("CallTool error: %v", err)
-	}
-
-	result := parseToolResult(t, res)
-	if result.ExitCode != 1 {
-		t.Errorf("exit_code = %d, want 1", result.ExitCode)
-	}
-	if result.StdoutPath != "" {
-		t.Errorf("stdout_path should be empty (sandbox must not run), got %q", result.StdoutPath)
-	}
-
-	data, readErr := os.ReadFile(result.StderrPath)
-	if readErr != nil {
-		t.Fatalf("read stderr file: %v", readErr)
-	}
-	want := "dropped: command matches drop pattern \"rm -rf *\"\n"
-	if string(data) != want {
-		t.Errorf("stderr file = %q, want %q (sandbox runner must not contribute output)", string(data), want)
-	}
-}
-
 func TestRunCommand_WithHugeTimeout_ReturnsToolError(t *testing.T) {
 	dir := t.TempDir()
 	cfg := mcptool.HandlerConfig{
 		OutputDir:     dir,
-		AllowPatterns: []string{"echo *"},
+		CommandRunner: &mockRunner{exitCode: 0, stdout: "hello\n"},
 	}
 	session := setupServerWithConfig(t, cfg)
 	overflowingTimeout := int(math.MaxInt64/int64(time.Second) + 1)
@@ -539,7 +356,7 @@ func TestRunCommand_ResponseContainsNoRawOutput(t *testing.T) {
 	dir := t.TempDir()
 	cfg := mcptool.HandlerConfig{
 		OutputDir:     dir,
-		AllowPatterns: []string{"echo *"},
+		CommandRunner: &mockRunner{exitCode: 0, stdout: "supersecretoutput\n"},
 	}
 	session := setupServerWithConfig(t, cfg)
 

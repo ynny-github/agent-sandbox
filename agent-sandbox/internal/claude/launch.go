@@ -131,7 +131,7 @@ func BuildArgs(cfg *config.Config, opts Options, snapshotPath, mcpConfigPath,
 	args = append(args, "claude")
 	args = append(args, "--append-system-prompt", agentconfig.Pointer())
 
-	settingsStr, err := settingsJSON(snapshotPath, mcpConfigPath, cfg.ToolMode == "hook", denyRules)
+	settingsStr, err := settingsJSON(mcpConfigPath, cfg.ToolMode == "hook", denyRules)
 	if err != nil {
 		return "", nil, err
 	}
@@ -272,51 +272,28 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 	return nil
 }
 
-// startCommandBroker generates the per-command sandbox profile, opens the
-// broker socket, and starts serving. The returned cleanup closes the socket and
-// removes the profile.
+// startCommandBroker opens the broker socket and starts serving requests
+// through the in-process shell interpreter. The returned cleanup closes the
+// socket.
+//
+// cfg is currently unused: nothing about the interpreter itself is
+// configurable, and what a command may do is now a property of the command
+// profile the broker process runs under rather than of anything decided here.
+// It stays a parameter to match runDeps.startBroker.
 func startCommandBroker(cfg *config.Config) (string, func(), error) {
-	nonoPath, err := exec.LookPath("nono")
-	if err != nil {
-		return "", nil, fmt.Errorf("nono not found in PATH: %w", err)
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", nil, fmt.Errorf("getwd: %w", err)
-	}
-
-	resolved, err := sandboxhost.ResolveShell(cfg, cwd)
-	if err != nil {
-		return "", nil, err
-	}
-	profilePath, cleanupProfile, err := resolved.WriteProfile()
-	if err != nil {
-		return "", nil, err
-	}
-
 	sockPath, err := BrokerSocketPath()
 	if err != nil {
-		cleanupProfile()
 		return "", nil, err
 	}
 
-	// The executor gets the launcher's own working directory and the very
-	// allow_vars list written into the profile. Both bound what a request
-	// (which originates inside the sandbox) can reach: the command runs only
-	// under cwd, and its environment is drawn from the launcher's variables
-	// filtered by the same list the sandbox itself enforces.
-	executor := broker.NewNonoExecutor(nonoPath, profilePath, cwd,
-		resolved.EnvAllowVars())
-	srv, err := broker.NewServer(sockPath, executor)
+	srv, err := broker.NewServer(sockPath, broker.NewShellExecutor())
 	if err != nil {
-		cleanupProfile()
 		return "", nil, err
 	}
 	go srv.Serve()
 
 	cleanup := func() {
 		srv.Close()
-		cleanupProfile()
 	}
 	return srv.SocketPath(), cleanup, nil
 }

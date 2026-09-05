@@ -3,8 +3,6 @@ package claude
 import (
 	"encoding/json"
 	"fmt"
-
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/shellquote"
 )
 
 const hookCommand = "agent-sandbox hook"
@@ -18,24 +16,19 @@ func denyReadRule(absPath string) string {
 
 // settingsJSON builds the compact Claude Code settings JSON injected via
 // `claude --settings`. In hook mode it registers the PreToolUse hook for Bash
-// and Monitor (routing through `agent-sandbox hook`, adding --policy-file when
-// policyFile is non-empty). denyRules (capability-derived permission deny
-// rules) are merged into permissions.deny. When mcpConfigPath is non-empty
-// (the github MCP is active) it also adds the deny rule that blocks reading the
-// generated MCP config file (it embeds the token) plus the github repos
-// write-tool deny rules. It returns "" when nothing applies, signaling the
-// caller to inject no --settings flag.
-func settingsJSON(policyFile, mcpConfigPath string, hookMode bool, denyRules []string) (string, error) {
+// and Monitor, routing through `agent-sandbox hook`. denyRules
+// (capability-derived permission deny rules) are merged into permissions.deny.
+// When mcpConfigPath is non-empty (the github MCP is active) it also adds the
+// deny rule that blocks reading the generated MCP config file (it embeds the
+// token) plus the github repos write-tool deny rules. It returns "" when
+// nothing applies, signaling the caller to inject no --settings flag.
+func settingsJSON(mcpConfigPath string, hookMode bool, denyRules []string) (string, error) {
 	settings := map[string]any{}
 	if hookMode {
-		command := hookCommand
-		if policyFile != "" {
-			command += " --policy-file " + shellquote.Quote(policyFile)
-		}
 		entry := func(matcher string) map[string]any {
 			return map[string]any{
 				"matcher": matcher,
-				"hooks":   []any{map[string]any{"type": "command", "command": command}},
+				"hooks":   []any{map[string]any{"type": "command", "command": hookCommand}},
 			}
 		}
 		settings["hooks"] = map[string]any{

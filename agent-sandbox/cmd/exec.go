@@ -10,23 +10,16 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/broker"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/policysnapshot"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/router"
 )
 
 var execCmd = &cobra.Command{
 	Use:   "exec -- <command>",
-	Short: "Route and run a command through the sandbox router, streaming output",
+	Short: "Send a command to the broker and stream its output",
 	Args:  cobra.ArbitraryArgs,
 	RunE:  runExec,
 }
 
-var execPolicyFile string
-
 func init() {
-	execCmd.Flags().StringVar(&execPolicyFile, "policy-file", "",
-		"read the frozen sandbox policy from this JSON snapshot instead of the config file")
 	rootCmd.AddCommand(execCmd)
 }
 
@@ -35,33 +28,8 @@ func runExec(cmd *cobra.Command, args []string) error {
 	if strings.TrimSpace(command) == "" {
 		return fmt.Errorf("no command given after --")
 	}
-
-	cfg, err := resolveExecConfig(execPolicyFile, configPath)
-	if err != nil {
-		return err
-	}
-
-	os.Exit(runExecCore(context.Background(), cfg, command, os.Stdout, os.Stderr))
+	os.Exit(runExecCore(context.Background(), command, os.Stdout, os.Stderr))
 	return nil
-}
-
-// resolveExecConfig picks the config source: the frozen snapshot when a
-// policy file is given (hook mode), otherwise the on-disk TOML. A given but
-// unreadable snapshot is a hard error — exec fails closed rather than routing
-// against the mutable config.
-func resolveExecConfig(policyFile, configPath string) (*config.Config, error) {
-	if policyFile != "" {
-		cfg, err := policysnapshot.Load(policyFile)
-		if err != nil {
-			return nil, fmt.Errorf("policy snapshot: %w", err)
-		}
-		return cfg, nil
-	}
-	cfg, err := config.Load(configPath)
-	if err != nil {
-		return nil, fmt.Errorf("config error: %w", err)
-	}
-	return cfg, nil
 }
 
 // commandFromArgs returns the command string: everything after `--` if present,
@@ -73,45 +41,30 @@ func commandFromArgs(cmd *cobra.Command, args []string) string {
 	return strings.Join(args, " ")
 }
 
-// runExecCore routes command and runs it, writing to stdout/stderr. It returns
-// the exit code. A command runner is built lazily, only when the routing
-// decision is "sandbox", so host/drop commands never touch the broker.
-func runExecCore(ctx context.Context, cfg *config.Config, command string, stdout, stderr io.Writer) int {
-	s := router.New(router.Config{
-		AllowPatterns: allowPatterns(cfg),
-		DropRules:     dropRules(cfg),
-	})
-
-	needs, err := s.NeedsSandbox(command)
+// runExecCore sends command to the broker and streams its output, returning the
+// exit code. There is no routing left to do: the command profile decides what
+// may run, and the broker's interpreter decides how the line is executed.
+func runExecCore(ctx context.Context, command string, stdout, stderr io.Writer) int {
+	client, err := broker.NewClientFromEnv()
 	if err != nil {
-		fmt.Fprintf(stderr, "%v\n", err)
-		return 1
-	}
-	if needs {
-		runner, cleanup, rerr := newBrokerCommandRunner(ctx, cfg)
-		if rerr != nil {
-			// The overwhelmingly common cause is running `agent-sandbox exec`
-			// outside a `claude` session, so the socket variable is unset. Print
-			// the actionable hint instead of the raw dial/lookup error.
-			if errors.Is(rerr, broker.ErrBrokerUnavailable) {
-				fmt.Fprintln(stderr, router.SandboxNotRunningHint)
-			} else {
-				fmt.Fprintf(stderr, "command broker setup: %v\n", rerr)
-			}
-			return 1
+		// The overwhelmingly common cause is running `agent-sandbox exec`
+		// outside a `claude` session, so the socket variable is unset. Print the
+		// actionable hint instead of the raw dial/lookup error.
+		if errors.Is(err, broker.ErrBrokerUnavailable) {
+			fmt.Fprintln(stderr, broker.SandboxNotRunningHint)
+		} else {
+			fmt.Fprintf(stderr, "command broker: %v\n", err)
 		}
-		defer cleanup()
-		s = router.New(router.Config{
-			AllowPatterns: allowPatterns(cfg),
-			DropRules:     dropRules(cfg),
-			CommandRunner: runner,
-		})
-	}
-
-	exitCode, runErr := s.Run(ctx, command, stdout, stderr)
-	if runErr != nil {
-		fmt.Fprintf(stderr, "%v\n", runErr)
 		return 1
 	}
-	return exitCode
+	code, runErr := client.RunCommand(ctx, command, nil, stdout, stderr)
+	if runErr != nil {
+		if errors.Is(runErr, broker.ErrBrokerUnavailable) {
+			fmt.Fprintln(stderr, broker.SandboxNotRunningHint)
+		} else {
+			fmt.Fprintf(stderr, "%v\n", runErr)
+		}
+		return 1
+	}
+	return code
 }

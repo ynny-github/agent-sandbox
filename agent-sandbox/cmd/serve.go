@@ -12,7 +12,6 @@ import (
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/broker"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/mcptool"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/router"
 )
 
 var serveCmd = &cobra.Command{
@@ -39,8 +38,6 @@ func newCommandRouterServer(cfg *config.Config, deps serveDependencies) *mcp.Ser
 
 	mcptool.Register(server, mcptool.HandlerConfig{
 		OutputDir:     cfg.MCP.CommandOutputDir,
-		AllowPatterns: allowPatterns(cfg),
-		DropRules:     dropRules(cfg),
 		CommandRunner: deps.commandRunner,
 	})
 
@@ -74,7 +71,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		if !errors.Is(err, broker.ErrBrokerUnavailable) {
 			return err
 		}
-		fmt.Fprintln(os.Stderr, router.SandboxNotRunningHint)
+		fmt.Fprintln(os.Stderr, broker.SandboxNotRunningHint)
 		runner, cleanup = unavailableRunner{err: err}, func() {}
 	}
 	defer cleanup()

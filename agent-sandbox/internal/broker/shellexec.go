@@ -275,6 +275,16 @@ func execEnv(hc interp.HandlerContext) []string {
 	return env
 }
 
+// Execute satisfies Executor so the server can run a request directly. The
+// server owns the transport; ShellExecutor owns the shell language.
+func (e *ShellExecutor) Execute(ctx context.Context, req Request,
+	stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	if strings.TrimSpace(req.Command) == "" {
+		return 0, fmt.Errorf("broker: empty command")
+	}
+	return e.Run(ctx, req.Command, req.Cwd, stdin, stdout, stderr)
+}
+
 // exitStatusOf maps a finished process to the status a shell user expects.
 // ExitCode() is -1 for a signal death, which would surface as 255; report the
 // conventional 128+signum instead.

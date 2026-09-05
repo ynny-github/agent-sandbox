@@ -9,19 +9,37 @@ import (
 	"testing"
 
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/broker"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/policysnapshot"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/router"
 )
 
-func TestRunExecCore_HostSuccess(t *testing.T) {
-	cfg := &config.Config{}
-	cfg.Sandbox.Agent.AllowCommands = []string{"echo *"}
+// startFakeBroker starts a real broker server (backed by ShellExecutor) on a
+// temp socket and points AGENT_SANDBOX_BROKER_SOCKET at it, so runExecCore can
+// be exercised end to end without a nono session.
+func startFakeBroker(t *testing.T) {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "brk")
+	if err != nil {
+		t.Fatalf("temp dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "b.sock")
+
+	srv, err := broker.NewServer(sock, broker.NewShellExecutor())
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	t.Cleanup(func() { srv.Close() })
+	go srv.Serve()
+
+	t.Setenv(broker.SocketEnvVar, sock)
+}
+
+func TestRunExecCore_Success(t *testing.T) {
+	startFakeBroker(t)
 
 	var out, errBuf bytes.Buffer
-	code := runExecCore(context.Background(), cfg, "echo hello", &out, &errBuf)
+	code := runExecCore(context.Background(), "echo hello", &out, &errBuf)
 	if code != 0 {
-		t.Errorf("exit code = %d, want 0", code)
+		t.Errorf("exit code = %d, want 0 (stderr=%q)", code, errBuf.String())
 	}
 	if !strings.Contains(out.String(), "hello") {
 		t.Errorf("stdout = %q, want it to contain hello", out.String())
@@ -29,118 +47,44 @@ func TestRunExecCore_HostSuccess(t *testing.T) {
 }
 
 // Running `agent-sandbox exec` outside a claude session leaves the broker
-// socket variable unset, so the runner cannot be built at all. That is the most
-// likely way a user meets this failure, and it must produce the actionable hint
-// rather than a raw setup error.
+// socket variable unset, so the client cannot be built at all. That is the
+// most likely way a user meets this failure, and it must produce the
+// actionable hint rather than a raw dial/lookup error.
 func TestRunExecCore_NoBrokerSocket_ShowsHint(t *testing.T) {
 	t.Setenv(broker.SocketEnvVar, "")
-	cfg := &config.Config{}
-	cfg.Sandbox.Agent.AllowCommands = []string{"echo *"} // "true" is not allowed → sandbox
 
 	var out, errBuf bytes.Buffer
-	code := runExecCore(context.Background(), cfg, "true", &out, &errBuf)
+	code := runExecCore(context.Background(), "true", &out, &errBuf)
 	if code != 1 {
 		t.Errorf("exit code = %d, want 1", code)
 	}
-	if !strings.Contains(errBuf.String(), router.SandboxNotRunningHint) {
+	if !strings.Contains(errBuf.String(), broker.SandboxNotRunningHint) {
 		t.Errorf("stderr = %q, want the actionable broker hint", errBuf.String())
 	}
-	if strings.Contains(errBuf.String(), "command broker setup:") {
+	if strings.Contains(errBuf.String(), "command broker:") {
 		t.Errorf("stderr = %q, want the hint instead of the raw setup error", errBuf.String())
 	}
 }
 
-func TestRunExecCore_DropPattern(t *testing.T) {
-	cfg := &config.Config{}
-	cfg.Sandbox.Agent.DropCommands = []config.DropRule{{Pattern: "rm -rf *"}}
+func TestRunExecCore_NonZeroExit(t *testing.T) {
+	startFakeBroker(t)
 
 	var out, errBuf bytes.Buffer
-	code := runExecCore(context.Background(), cfg, "rm -rf /tmp/x", &out, &errBuf)
-	if code != 1 {
-		t.Errorf("exit code = %d, want 1", code)
-	}
-	want := "dropped: command matches drop pattern \"rm -rf *\"\n"
-	if errBuf.String() != want {
-		t.Errorf("stderr = %q, want %q", errBuf.String(), want)
-	}
-}
-
-func TestRunExecCore_DropPattern_CustomMessage(t *testing.T) {
-	cfg := &config.Config{}
-	cfg.Sandbox.Agent.DropCommands = []config.DropRule{
-		{Pattern: "gh *", Message: "gh is disabled; use the GitHub MCP tools."},
-	}
-
-	var out, errBuf bytes.Buffer
-	code := runExecCore(context.Background(), cfg, "gh pr view 42", &out, &errBuf)
-	if code != 1 {
-		t.Errorf("exit code = %d, want 1", code)
-	}
-	want := "gh is disabled; use the GitHub MCP tools.\n"
-	if errBuf.String() != want {
-		t.Errorf("stderr = %q, want %q", errBuf.String(), want)
+	code := runExecCore(context.Background(), "exit 3", &out, &errBuf)
+	if code != 3 {
+		t.Errorf("exit code = %d, want 3", code)
 	}
 }
 
 func TestRunExecCore_ParseFailure(t *testing.T) {
-	// An unterminated quote is a parse error; NeedsSandbox returns the error
-	// and runExecCore writes it to stderr, returning exit code 1.
-	cfg := &config.Config{}
-	cfg.Sandbox.Agent.AllowCommands = []string{"echo *"}
+	startFakeBroker(t)
 
 	var out, errBuf bytes.Buffer
-	code := runExecCore(context.Background(), cfg, `echo "hi`, &out, &errBuf)
-	if code != 1 {
-		t.Errorf("exit code = %d, want 1", code)
+	code := runExecCore(context.Background(), `echo "hi`, &out, &errBuf)
+	if code != 2 {
+		t.Errorf("exit code = %d, want 2", code)
 	}
-	if !strings.Contains(errBuf.String(), "unterminated quote") {
-		t.Errorf("stderr = %q, want it to contain 'unterminated quote'", errBuf.String())
-	}
-}
-
-func TestResolveExecConfig_PolicyFileIgnoresConfig(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	snap := &config.Config{}
-	snap.Sandbox.Agent.AllowCommands = []string{"echo *"}
-	path, cleanup, err := policysnapshot.Write(snap)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cleanup()
-
-	// configPath points at a nonexistent file; if it were read, this errors.
-	cfg, err := resolveExecConfig(path, "/nonexistent/agent-sandbox.toml")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(cfg.Sandbox.Agent.AllowCommands) != 1 || cfg.Sandbox.Agent.AllowCommands[0] != "echo *" {
-		t.Errorf("allow = %v, want [echo *] from snapshot", cfg.Sandbox.Agent.AllowCommands)
-	}
-}
-
-func TestResolveExecConfig_MissingPolicyFile_FailsClosed(t *testing.T) {
-	if _, err := resolveExecConfig("/nonexistent/policy.json", "agent-sandbox.toml"); err == nil {
-		t.Fatal("expected fail-closed error for missing snapshot, got nil")
-	}
-}
-
-func TestResolveExecConfig_FallsBackToConfig(t *testing.T) {
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
-	body := "tool_mode=\"hook\"\n"
-	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	// validate requires a command profile on disk; write the default name
-	// beside the config so this fixture keeps exercising the default path.
-	if err := os.WriteFile(filepath.Join(dir, "command-profile.json"), []byte("{}"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := resolveExecConfig("", cfgPath)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.ToolMode != "hook" {
-		t.Errorf("tool_mode = %q, want hook (loaded from config)", cfg.ToolMode)
+	if errBuf.String() == "" {
+		t.Error("stderr should describe the parse error")
 	}
 }

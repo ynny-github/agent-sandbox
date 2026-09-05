@@ -25,7 +25,7 @@ type echoExecutor struct {
 func (e *echoExecutor) Execute(ctx context.Context, req broker.Request,
 	stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	e.gotReq = req
-	fmt.Fprintf(stdout, "ran %v in %s", req.Argv, req.Cwd)
+	fmt.Fprintf(stdout, "ran %s in %s", req.Command, req.Cwd)
 	fmt.Fprint(stderr, "warned")
 	if stdin != nil {
 		if b, _ := io.ReadAll(stdin); len(b) > 0 {
@@ -56,16 +56,37 @@ func startTestServer(t *testing.T, exec broker.Executor) string {
 	return sock
 }
 
+func TestClientSendsTheCommandLine(t *testing.T) {
+	exec := &echoExecutor{}
+	sock := startTestServer(t, exec)
+
+	var out, errb bytes.Buffer
+	code, err := broker.NewClient(sock).RunCommand(
+		context.Background(), "echo hi | cat", nil, &out, &errb)
+	if err != nil {
+		t.Fatalf("RunCommand: %v", err)
+	}
+	if code != 7 {
+		t.Errorf("exit = %d, want 7", code)
+	}
+	if exec.gotReq.Command != "echo hi | cat" {
+		t.Errorf("server saw Command = %q, want %q", exec.gotReq.Command, "echo hi | cat")
+	}
+	if !strings.Contains(out.String(), "echo hi | cat") {
+		t.Errorf("stdout = %q, want it to carry the command", out.String())
+	}
+}
+
 func TestServerRunsCommandAndReturnsExitCode(t *testing.T) {
 	exec := &echoExecutor{}
 	sock := startTestServer(t, exec)
 
 	c := broker.NewClient(sock)
 	var out, errb testBuffer
-	code, err := c.RunSandboxed(context.Background(),
-		[]string{"go", "test"}, nil, &out, &errb)
+	code, err := c.RunCommand(context.Background(),
+		"go test", nil, &out, &errb)
 	if err != nil {
-		t.Fatalf("RunSandboxed() error = %v", err)
+		t.Fatalf("RunCommand() error = %v", err)
 	}
 	if code != 7 {
 		t.Errorf("exit code = %d, want 7", code)
@@ -73,8 +94,8 @@ func TestServerRunsCommandAndReturnsExitCode(t *testing.T) {
 	if out.String() == "" || errb.String() != "warned" {
 		t.Errorf("stdout = %q, stderr = %q", out.String(), errb.String())
 	}
-	if len(exec.gotReq.Argv) != 2 || exec.gotReq.Argv[0] != "go" {
-		t.Errorf("server received argv %v, want [go test]", exec.gotReq.Argv)
+	if exec.gotReq.Command != "go test" {
+		t.Errorf("server received command %q, want %q", exec.gotReq.Command, "go test")
 	}
 }
 
@@ -99,7 +120,7 @@ func TestServerCancelsCommandOnClientDisconnect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dial() error = %v", err)
 	}
-	if err := broker.WriteRequest(conn, broker.Request{Argv: []string{"sleep"}, Cwd: "/"}); err != nil {
+	if err := broker.WriteRequest(conn, broker.Request{Command: "sleep", Cwd: "/"}); err != nil {
 		t.Fatalf("WriteRequest() error = %v", err)
 	}
 	conn.Close()
@@ -116,10 +137,10 @@ func TestServerForwardsStdin(t *testing.T) {
 
 	c := broker.NewClient(sock)
 	var out, errb testBuffer
-	_, err := c.RunSandboxed(context.Background(),
-		[]string{"cat"}, stringsReader("piped"), &out, &errb)
+	_, err := c.RunCommand(context.Background(),
+		"cat", stringsReader("piped"), &out, &errb)
 	if err != nil {
-		t.Fatalf("RunSandboxed() error = %v", err)
+		t.Fatalf("RunCommand() error = %v", err)
 	}
 	if !containsStr(out.String(), "stdin=piped") {
 		t.Errorf("stdout = %q, want it to contain stdin=piped", out.String())
@@ -138,21 +159,16 @@ func (b *blockingReader) Read([]byte) (int, error) {
 	return 0, io.EOF
 }
 
-// Regression test for the broker deadlock: a sandboxed command that exits
-// without draining stdin must still produce an exit frame. Before the fix,
-// os/exec's own stdin copier kept cmd.Wait blocked forever, so no exit frame
-// was written and every caller — up to Claude's Bash tool — hung.
+// Regression test for the broker deadlock: a command that exits without
+// draining stdin must still produce an exit frame. Before the fix, os/exec's
+// own stdin copier kept cmd.Wait blocked forever, so no exit frame was
+// written and every caller — up to Claude's Bash tool — hung. "exit 5" is a
+// shell builtin: the interpreter never touches stdin at all, which is exactly
+// the case that must not block on the still-open request stdin below.
 //
 // The deadline makes this fail fast instead of hanging the suite.
 func TestServerReportsExitWhenStdinNeverCloses(t *testing.T) {
-	// The client sends its own working directory, which the executor validates.
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	// A stub "nono" whose child exits immediately without reading stdin.
-	stub := writeStub(t, "#!/bin/sh\nexit 5\n")
-	sock := startTestServer(t, broker.NewNonoExecutor(stub, "/tmp/p.json", cwd, nil))
+	sock := startTestServer(t, broker.NewShellExecutor())
 
 	stdin := &blockingReader{release: make(chan struct{})}
 	t.Cleanup(func() { close(stdin.release) })
@@ -164,21 +180,21 @@ func TestServerReportsExitWhenStdinNeverCloses(t *testing.T) {
 	done := make(chan result, 1)
 	go func() {
 		var out, errb testBuffer
-		code, rerr := broker.NewClient(sock).RunSandboxed(
-			context.Background(), []string{"grep", "-m1", "ERROR"}, stdin, &out, &errb)
+		code, rerr := broker.NewClient(sock).RunCommand(
+			context.Background(), "exit 5", stdin, &out, &errb)
 		done <- result{code, rerr}
 	}()
 
 	select {
 	case r := <-done:
 		if r.err != nil {
-			t.Fatalf("RunSandboxed() error = %v", r.err)
+			t.Fatalf("RunCommand() error = %v", r.err)
 		}
 		if r.code != 5 {
 			t.Errorf("exit code = %d, want 5", r.code)
 		}
 	case <-time.After(15 * time.Second):
-		t.Fatal("RunSandboxed() did not return after the sandboxed command exited: " +
+		t.Fatal("RunCommand() did not return after the command exited: " +
 			"the broker is waiting on stdin that never ends")
 	}
 }

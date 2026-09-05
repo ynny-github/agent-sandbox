@@ -5,7 +5,7 @@
 - Command output is returned inline in the tool result.
 {{else}}- The Bash and Monitor tools are disabled; use the `run_command` MCP tool to run shell commands.
 - Command output is written to files; read the returned stdout/stderr paths.
-{{end}}- Every command runs through a host-side command broker, under the operator-written nono profile at `{{.ProfilePath}}`. Which commands that profile allows, and how each may be invoked, is not this file's concern — it is the profile's.
+{{end}}- Every command runs through a host-side command broker, under the operator-written nono profile at `{{.ProfilePath}}`. Which commands that profile allows, and how each may be invoked, is not `agent-sandbox.toml`'s concern — it is the profile's.
 {{if .Safe}}
 ## Safe command wrappers
 Prefer these validated wrappers over running the tool directly; each refuses known-dangerous invocations before running:

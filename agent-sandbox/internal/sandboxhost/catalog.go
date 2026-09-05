@@ -259,6 +259,16 @@ var baselineGroups = []string{"nix_runtime", "git_config"}
 // duplicated (rather than imported) to keep this package free of a dependency
 // on internal/broker. Without it, nono would strip the variable and Claude
 // could never reach the command broker.
+//
+// The command profile must not grant it either, whatever form that takes:
+// a command that could reach the broker socket could recurse into
+// broker.Server.Serve, which spawns handlers with no concurrency cap — a
+// host-side fork bomb, not a privilege escalation, but one worth foreclosing
+// structurally rather than trusting the socket to stay outside every path
+// the profile grants. This package no longer builds that profile (Task 5
+// deleted ResolveShell), so there is nothing here to enforce it in code —
+// this comment is the only place the hazard is written down for whoever
+// writes command-profile.json next.
 var agentOnlyEnv = []string{"AGENT_SANDBOX_BROKER_SOCKET"}
 
 // protectedPrefixes are paths nono denies by default. A raw read/allow grant

@@ -331,6 +331,12 @@ tool_mode = "hook"
 	}
 }
 
+// TestLoad_Compose_ListUnion exercises all six HostConfig list fields, not
+// just Allow/AllowEnv: cloneHost and unionHost enumerate them by hand, so a
+// field dropped from either would silently stop unioning across scopes while
+// every other field's test kept passing — the same "quietly stops having an
+// effect" failure this task exists to close off, aimed at the loader itself
+// rather than at a removed key.
 func TestLoad_Compose_ListUnion(t *testing.T) {
 	// The user lists are >= the project lists in length on purpose: TOML decode
 	// reuses the user snapshot's backing array in place when its cap suffices, so
@@ -339,23 +345,42 @@ func TestLoad_Compose_ListUnion(t *testing.T) {
 [mcp]
 command_output_dir = "/u/out"
 [sandbox.agent]
+capabilities = ["go", "ssh"]
 allow = ["/srv/a", "/srv/b"]
+read = ["/ro/a", "/ro/b"]
+allow_file = ["/f/a", "/f/b"]
+read_file = ["/rf/a", "/rf/b"]
 allow_env = ["HOME", "AWS_PROFILE"]
 `)
 	project := writeToml(t, `
 [sandbox.agent]
+capabilities = ["python", "ssh"]
 allow = ["/srv/b", "/srv/c"]
+read = ["/ro/b", "/ro/c"]
+allow_file = ["/f/b", "/f/c"]
+read_file = ["/rf/b", "/rf/c"]
 allow_env = ["CI"]
 `)
 	cfg, err := config.Load(project)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got := cfg.Sandbox.Agent.Allow; !slices.Equal(got, []string{"/srv/a", "/srv/b", "/srv/c"}) {
-		t.Errorf("Allow = %v, want [/srv/a /srv/b /srv/c]", got)
-	}
-	if got := cfg.Sandbox.Agent.AllowEnv; !slices.Equal(got, []string{"HOME", "AWS_PROFILE", "CI"}) {
-		t.Errorf("Agent.AllowEnv = %v, want [HOME AWS_PROFILE CI]", got)
+	for _, tc := range []struct {
+		name string
+		got  []string
+		want []string
+	}{
+		// user-first order, de-duped: go, ssh (user) then python (project).
+		{"Capabilities", cfg.Sandbox.Agent.Capabilities, []string{"go", "ssh", "python"}},
+		{"Allow", cfg.Sandbox.Agent.Allow, []string{"/srv/a", "/srv/b", "/srv/c"}},
+		{"Read", cfg.Sandbox.Agent.Read, []string{"/ro/a", "/ro/b", "/ro/c"}},
+		{"AllowFile", cfg.Sandbox.Agent.AllowFile, []string{"/f/a", "/f/b", "/f/c"}},
+		{"ReadFile", cfg.Sandbox.Agent.ReadFile, []string{"/rf/a", "/rf/b", "/rf/c"}},
+		{"AllowEnv", cfg.Sandbox.Agent.AllowEnv, []string{"HOME", "AWS_PROFILE", "CI"}},
+	} {
+		if !slices.Equal(tc.got, tc.want) {
+			t.Errorf("%s = %v, want %v", tc.name, tc.got, tc.want)
+		}
 	}
 }
 

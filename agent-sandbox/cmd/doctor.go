@@ -177,14 +177,27 @@ func checkCommandProfile(cfg *config.Config) checkResult {
 		return r
 	}
 	self, err := selfPath()
-	if err == nil {
-		writable, werr := profileGrantsWrite(path, self)
-		if werr == nil && writable {
-			r.details = append(r.details, "broker binary: "+self)
-			r.hint = "move the agent-sandbox binary outside every path the profile grants write access to; " +
-				"nono refuses a policy command binary it considers replaceable"
-			return r
-		}
+	if err != nil {
+		// Fail loudly rather than silently reporting OK: not knowing the
+		// broker's own binary path means the writability check below never
+		// ran, and that must not look like it passed.
+		r.details = append(r.details, fmt.Sprintf("error: could not determine the broker binary's own path: %v", err))
+		r.hint = "could not verify the broker binary is not writable through the profile; " +
+			"investigate why os.Executable() failed and re-run doctor"
+		return r
+	}
+	writable, werr := profileGrantsWrite(path, self)
+	if werr != nil {
+		r.details = append(r.details, fmt.Sprintf("error: could not check whether the profile grants write access to %s: %v", self, werr))
+		r.hint = "could not verify the broker binary is not writable through the profile; " +
+			"fix the error above and re-run doctor"
+		return r
+	}
+	if writable {
+		r.details = append(r.details, "broker binary: "+self)
+		r.hint = "move the agent-sandbox binary outside every path the profile grants write access to; " +
+			"nono refuses a policy command binary it considers replaceable"
+		return r
 	}
 	r.ok = true
 	return r
@@ -194,6 +207,12 @@ func checkCommandProfile(cfg *config.Config) checkResult {
 // filesystem.allow entries. It reads only that list: it is the grant that made
 // nono refuse to start during the design measurements, and a fuller model of
 // nono's own trust check belongs in nono, not here.
+//
+// Matching is by filepath.Clean, not symlink resolution: a granted directory
+// that is itself a symlink (e.g. macOS's /tmp -> /private/tmp) could hide a
+// binary this check should have flagged. That gap is a deliberate choice, in
+// keeping with reading only filesystem.allow at all (see above) rather than
+// building a fuller model of nono's own trust check — not an oversight.
 func profileGrantsWrite(profilePath, binPath string) (bool, error) {
 	data, err := os.ReadFile(profilePath)
 	if err != nil {
@@ -247,11 +266,14 @@ const toolSandboxProbeCommand = "true"
 // working NixOS host rather than only ever failing for lack of /nix/store
 // access; without it, tool-sandbox's outer-session PATH scan cannot even load
 // the shim nono generates for the probe command, regardless of how the probe
-// command's own sandbox is configured. See broker-probes.md's "profile10" for
-// the exact shape this mirrors, and its predecessors for what happens without
-// each piece: no groups.include -> the shim itself cannot execute (exit 127,
-// "execution still failed"); a raw "/" filesystem grant -> nono refuses it
-// outright as overlapping its own protected state root.
+// command's own sandbox is configured. See
+// docs/superpowers/specs/2026-09-05-broker-probes.md's "dp1" entry for this
+// exact profile shape (as committed) measured against a working nono, a
+// separately patched nono, and a build carrying the ELF-closure bug -- and
+// for what happens without each piece: no groups.include -> the shim itself
+// cannot execute (exit 127, "execution still failed"); a raw "/" filesystem
+// grant -> nono refuses it outright as overlapping its own protected state
+// root.
 func checkToolSandbox(ctx context.Context) checkResult {
 	r := checkResult{name: "tool-sandbox"}
 
@@ -300,9 +322,11 @@ func checkToolSandbox(ctx context.Context) checkResult {
 }
 
 // toolSandboxProbeProfile is the minimal nono profile checkToolSandbox runs
-// under. Field shapes mirror docs/superpowers/specs/2026-09-05-broker-probes.md
-// exactly (profile10), which is the profile that was actually measured to
-// succeed against a working nono and fail distinctly against a broken one.
+// under. Its field shapes are the "dp1" entry in
+// docs/superpowers/specs/2026-09-05-broker-probes.md, which records this exact
+// shape measured to succeed against a working nono and fail distinctly
+// (nono's own ELF-resolution error) against a build that cannot resolve its
+// dependency closure.
 type toolSandboxProbeProfile struct {
 	Meta struct {
 		Name string `json:"name"`

@@ -41,6 +41,7 @@ its argument on PATH and execs it (`b*`), or that parses a shell line with
 | `c3` | broker allow_all, curl child with no network key | pypi 000 |
 | `sh1` | broker interpreting the line with mvdan.cc/sh; git and rg both policy commands | shell language works; git deny enforced; policy-to-policy pipeline hangs |
 | `sh2` | same, but rg moved to the broker's exec_paths instead of being a policy command | pipeline works, git deny still unbypassable, bash still refused |
+| `dp1` | `cmd/doctor.go`'s `checkToolSandbox` probe profile, exactly as committed, run against a working nono, a separately patched nono, and a build with the ELF-closure bug still present | OK on both working builds; the broken build fails immediately with nono's own ELF-resolution error, before the probe command ever runs |
 
 ## Profiles
 
@@ -905,3 +906,112 @@ same, but rg moved to the broker's exec_paths instead of being a policy command 
   }
 }
 ```
+
+### dp1
+
+`cmd/doctor.go`'s `checkToolSandbox` probe profile, exactly as committed --
+OK on both working builds; the broken build fails immediately with nono's own
+ELF-resolution error, before the probe command ever runs.
+
+Added retroactively (task 7 review, ruling R19): `checkToolSandbox`'s job is
+to tell a broken nono from a working one, so its discrimination needs to be
+reproducible from this file the same way every other measurement here is, not
+resting on narrative in a code comment. This is the exact JSON
+`writeToolSandboxProbeProfile` emits (`agent-sandbox` substituted for the
+temp dir and the resolved `true` binary at write time); `$WORKDIR` above is
+literal in every other profile in this file, but here the field really does
+hold a concrete absolute path, because the probe never expects nono to
+expand anything — it grants exactly the one temp directory it just created.
+
+```json
+{
+  "meta": {
+    "name": "agent-sandbox doctor tool-sandbox probe"
+  },
+  "groups": {
+    "include": [
+      "nix_runtime"
+    ]
+  },
+  "filesystem": {
+    "allow": [
+      "<probe's own temp dir>"
+    ]
+  },
+  "environment": {
+    "allow_vars": [
+      "PATH"
+    ]
+  },
+  "command_policies": {
+    "commands": {
+      "true": {
+        "executable": "<resolved path of `true` on PATH>",
+        "from": {
+          "session": {
+            "sandbox": {
+              "fs_read_file": [
+                "<resolved path of `true` on PATH>"
+              ],
+              "environment": {
+                "allow_vars": [
+                  "PATH"
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Run as `nono run --silent --profile <file> --workdir <temp dir> -- true`
+(the bare command name, not the resolved absolute path — see below).
+
+**Why `groups.include: ["nix_runtime"]` and nothing else.** Before landing on
+this shape, the same profile with no `groups` key at all (only the command's
+own `fs_read_file` on the `true` binary) failed even against this host's
+*working* nono, with `exit code 127` and nono's own diagnostic *"'true'
+resolved to /tmp/nono-tool-sandbox-.../shims/true and is readable, but
+execution still failed"*. That failure happens in the *outer* session,
+before the probe's own per-command sandbox grants ever matter: whenever
+`command_policies` is non-empty, nono scans every non-writable `PATH`
+directory to decide what its generated shim may execute, and on NixOS that
+scan has no route to `/nix/store` without help. Granting `/nix/store` and
+`/run/current-system/sw` directly worked, but is NixOS-specific and would be
+silently useless on an FHS host or macOS. Granting `filesystem.allow: ["/"]`
+was refused outright: `nono: Sandbox initialization failed: Refusing to grant
+'/' (source: Profile) because it overlaps protected nono state root
+'~/.local/state/nono'`. `nix_runtime` is one of nono's own built-in policy
+groups (`nono profile groups nix_runtime`; "Platform: cross-platform",
+"Required: no") that grants `/nix/store`, `/run/current-system/sw`, and a few
+`~/.nix-*` paths for read, and is a documented no-op where those paths don't
+exist — which is what makes this profile portable rather than NixOS-only.
+
+**Why the bare command name (`-- true`), not an absolute path.** Invoking the
+same pinned policy command by its resolved absolute path instead of its bare
+name hits a *different* nono refusal: `nono: Command '<path>' is blocked:
+tool-sandbox direct exec bypass denied for policy-controlled command 'true'`.
+That is nono correctly treating a direct-path invocation of a policy command
+as bypassing its own shim, not a tool-sandbox startup failure — using it
+would have made the probe report NG against a perfectly working nono.
+
+**Measured 2026-09-05** with `nono run --silent --profile <file> --workdir
+<dir> -- true`, reproduced fresh for this entry (not only recalled from
+earlier exploration) against three builds:
+
+| build | provenance | result |
+| --- | --- | --- |
+| this host's real nono, `nono 0.74.0` at `~/.local/bin/nono` | the nono this whole branch has been developed and measured against | `exit 0` |
+| a separately built `nono 0.75.0` with `tmp/nono-nixos-elf-fix.patch` applied, built at `.../nono-src/target/release/nono` from a checked-out `always-further/nono` source tree (a prior session's scratchpad; not part of this repo) | patched per the fix this design already assumes is a prerequisite | `exit 0` |
+| a musl-statically-linked `nono 0.74.0` build, found already built in the same prior session's scratchpad (exact build flags/provenance not recorded — its own dependency-closure computation happens to hit the same unresolved-`libgcc_s.so.1`-symlink shape the NixOS ELF bug describes, whether or not it carries the fix) | build history not verified beyond what its own failure shows; treat "unpatched" as observed, not confirmed | `exit 1`, immediately, with `nono: Sandbox initialization failed: failed to resolve ELF dependency 'libc.so.6' for /nix/store/avld9cdn23zab2ssl30h2r6444rqh6ms-glibc-2.42-67/lib/libdl.so.2` — a session-startup failure, not specific to the probe command, matching what the design doc's own NixOS ELF section predicts for any dependency closure that runs through the affected symlink |
+
+The third build's failure is the shape `checkToolSandbox`'s hint names
+("the nono on PATH cannot start tool-sandbox on this host ... a common cause
+is an unpatched nono on NixOS, which cannot resolve its ELF dependency
+layout"): it fires before the profile's own `command_policies.commands.true`
+entry is ever reached, so it is a property of the nono binary itself, not of
+how the probe's own command is configured — which is exactly what the check
+needs to catch.

@@ -412,6 +412,68 @@ func TestCheckCommandProfileFailsWhenTheFileIsMissing(t *testing.T) {
 	}
 }
 
+// TestCheckCommandProfileFailsWhenSelfPathErrors pins ruling R20: not knowing
+// the broker's own binary path means the writability check never ran, and
+// that must be reported as NG with an explanatory detail, not silently
+// treated as "the binary is not writable".
+func TestCheckCommandProfileFailsWhenSelfPathErrors(t *testing.T) {
+	dir := t.TempDir()
+	profile := filepath.Join(dir, "command-profile.json")
+	if err := os.WriteFile(profile, []byte(`{"filesystem":{"allow":["$WORKDIR"]}}`), 0o600); err != nil {
+		t.Fatalf("write profile: %v", err)
+	}
+	restoreRun := stubRunCommand(func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("valid"), nil
+	})
+	defer restoreRun()
+	prevSelf := selfPath
+	selfPath = func() (string, error) { return "", fmt.Errorf("os.Executable: not implemented on this platform") }
+	defer func() { selfPath = prevSelf }()
+
+	got := checkCommandProfile(configWithProfile(t, dir, profile))
+	if got.ok {
+		t.Errorf("checkCommandProfile ok = true, want false when selfPath errors")
+	}
+	if got.hint == "" {
+		t.Errorf("a failing check must carry a hint")
+	}
+	if !strings.Contains(strings.Join(got.details, "\n"), "could not determine the broker binary's own path") {
+		t.Errorf("expected details to name what could not be determined, got %v", got.details)
+	}
+}
+
+// TestCheckCommandProfileFailsWhenProfileGrantsWriteErrors pins the same
+// ruling for profileGrantsWrite's own error return: an unreadable or
+// unparseable profile must not be silently treated as "not writable".
+func TestCheckCommandProfileFailsWhenProfileGrantsWriteErrors(t *testing.T) {
+	dir := t.TempDir()
+	profile := filepath.Join(dir, "command-profile.json")
+	// Malformed JSON: `nono profile validate` is stubbed to pass regardless
+	// (checkCommandProfile only calls the real nono for that step), so this
+	// exercises profileGrantsWrite's own json.Unmarshal failure specifically,
+	// independent of validate.
+	if err := os.WriteFile(profile, []byte("{ not json"), 0o600); err != nil {
+		t.Fatalf("write profile: %v", err)
+	}
+	restoreRun := stubRunCommand(func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("valid"), nil
+	})
+	defer restoreRun()
+	restoreSelf := stubSelfPath(filepath.Join(t.TempDir(), "agent-sandbox"))
+	defer restoreSelf()
+
+	got := checkCommandProfile(configWithProfile(t, dir, profile))
+	if got.ok {
+		t.Errorf("checkCommandProfile ok = true, want false when profileGrantsWrite errors")
+	}
+	if got.hint == "" {
+		t.Errorf("a failing check must carry a hint")
+	}
+	if !strings.Contains(strings.Join(got.details, "\n"), "could not check whether the profile grants write access") {
+		t.Errorf("expected details to name what could not be determined, got %v", got.details)
+	}
+}
+
 // stubLookPathByName returns a lookPath stub that answers only the given
 // names, so a test can distinguish checkToolSandbox's lookup of "nono" from
 // its lookup of the probe program without one stub masking the other.

@@ -27,8 +27,12 @@ launcher
 The two sessions are siblings, never nested. There is no shell in the loop:
 the broker parses the agent's command line itself (pipelines, `&&`/`||`/`;`,
 redirections, globbing, `$(…)`, `for`/`if`, `cd` and the other shell builtins
-all work) and execs each simple command directly. `bash` and `sh` are not
-runnable in this sandbox at all.
+all work) and execs each simple command directly. Neither `bash` nor `sh` is
+declared as a policy command or a floor command, so the broker never
+dispatches a shell, in either tier — a claim about dispatch, not about what a
+dispatched toolchain can go on to run once it starts; see
+[the command profile](#the-command-profile) for a measured case where a
+compiler reaches a real `bash` binary anyway.
 
 ## Contents
 

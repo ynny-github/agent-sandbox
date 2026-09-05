@@ -46,7 +46,13 @@ const maxPayload = 1 << 20
 // strips those variables long before they could be reported — and must not
 // work, because the request originates inside the sandbox it would configure.
 type Request struct {
-	Command   string `json:"command"`
+	Command string `json:"command"`
+	// Cwd is client-controlled: it comes straight from the sandboxed agent's
+	// own working directory (see Client.RunCommand's workingDir helper). It
+	// reaches the interpreter's Dir option and, through it, --workdir of the
+	// commands the interpreter execs, but nothing in this package bounds it to
+	// any particular root — see ShellExecutor.Execute for where that bound
+	// actually lives.
 	Cwd       string `json:"cwd"`
 	WithStdin bool   `json:"with_stdin"`
 }

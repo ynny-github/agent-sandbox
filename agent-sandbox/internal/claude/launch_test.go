@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -620,42 +621,70 @@ func TestRun_GithubMCPDisabled_SkipsConfig(t *testing.T) {
 	}
 }
 
-// startCommandBroker is disabled until the broker runs inside its own nono
-// session (a later change). This is a regression guard against silently
-// re-enabling an unsandboxed broker: it must keep failing closed rather than
-// serve, no matter what cfg is given.
-func TestStartCommandBroker_RefusesToServeUnsandboxed(t *testing.T) {
+// startCommandBroker now launches a real `nono run` session (see BrokerArgs),
+// so it can no longer be exercised end-to-end without a real nono binary and
+// a real sandbox — out of scope for this package's tests (see task-4-report.md
+// for why). What stays testable without spawning anything is its plumbing:
+// like BuildArgs, it must fail fast when nono is not on PATH rather than
+// attempting to start a session it cannot run.
+func TestStartCommandBroker_NonoNotInPath(t *testing.T) {
+	t.Setenv("PATH", "")
 	sock, cleanup, err := startCommandBroker(&config.Config{})
 	if err == nil {
-		t.Fatal("startCommandBroker() error = nil, want a refusal")
+		t.Fatal("startCommandBroker() error = nil, want error when nono is not in PATH")
 	}
-	if !strings.Contains(err.Error(), "not yet sandboxed") {
-		t.Errorf("error = %q, want it to explain the broker is not yet sandboxed", err.Error())
+	if !strings.Contains(err.Error(), "nono not found in PATH") {
+		t.Errorf("error = %q, want it to explain nono is missing", err.Error())
 	}
 	if sock != "" {
-		t.Errorf("socket = %q, want empty on refusal", sock)
+		t.Errorf("socket = %q, want empty on error", sock)
 	}
 	if cleanup != nil {
-		t.Error("cleanup should be nil on refusal")
+		t.Error("cleanup should be nil on error")
 	}
 }
 
-// Run's own startBroker dependency defaults to the production
-// startCommandBroker, so a real `agent-sandbox claude` invocation must fail
-// with the same refusal rather than proceeding to launch Claude at all.
-func TestRun_ProductionStartBroker_FailsClosed(t *testing.T) {
-	err := run(&config.Config{ToolMode: "mcp"}, Options{}, runDeps{
-		writeProfile: func(*config.Config) (string, []string, func(), error) {
-			return "/tmp/asb-profile-1.json", nil, func() {}, nil
-		},
-		startBroker: startCommandBroker,
-		supervise:   func(string, []string) int { t.Fatal("supervise should not run"); return 0 },
-		exit:        func(int) { t.Fatal("exit should not run") },
-	})
-	if err == nil {
-		t.Fatal("run() error = nil, want the broker refusal to propagate")
+func TestBrokerArgsRunsTheBrokerUnderTheCommandProfile(t *testing.T) {
+	dir := t.TempDir()
+	profile := filepath.Join(dir, "command-profile.json")
+	if err := os.WriteFile(profile, []byte("{}"), 0o600); err != nil {
+		t.Fatalf("write profile: %v", err)
 	}
-	if !strings.Contains(err.Error(), "not yet sandboxed") {
-		t.Errorf("run() error = %q, want it to carry the broker refusal", err.Error())
+	cfg := loadConfigWithCommandProfile(t, dir, profile)
+
+	args := BrokerArgs(cfg, "/usr/bin/nono", "/opt/agent-sandbox/bin/agent-sandbox",
+		"/run/b.sock", "/work/project")
+
+	joined := strings.Join(args, " ")
+	for _, want := range []string{
+		"run", "--silent",
+		"--profile " + profile,
+		"--workdir /work/project",
+		"--allow-unix-socket-bind /run/b.sock",
+		"-- /opt/agent-sandbox/bin/agent-sandbox broker --socket /run/b.sock",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("BrokerArgs() = %q\nmissing %q", joined, want)
+		}
 	}
+	if strings.Contains(joined, "--allow-cwd") {
+		t.Errorf("BrokerArgs() grants --allow-cwd; the working directory comes from the profile's $WORKDIR")
+	}
+}
+
+// loadConfigWithCommandProfile writes a minimal project config in dir pointing
+// at profile and loads it, so the test exercises the same resolution the
+// launcher uses rather than a hand-built Config.
+func loadConfigWithCommandProfile(t *testing.T, dir, profile string) *config.Config {
+	t.Helper()
+	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
+	body := "tool_mode = \"hook\"\ncommand_profile = " + strconv.Quote(profile) + "\n"
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	return cfg
 }

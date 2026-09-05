@@ -4,11 +4,14 @@
 package claude
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/agentconfig"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/broker"
@@ -272,20 +275,92 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 	return nil
 }
 
-// startCommandBroker is disabled until the broker runs inside its own nono
-// session (a later change). It exists so runDeps.startBroker still has a
-// production implementation to wire up, and so the refusal below has one
-// place to live.
+// startCommandBroker launches the broker in its own nono session and returns
+// the socket path plus a cleanup that stops it.
 //
-// cfg is currently unused: the refusal does not depend on anything in it.
-// It stays a parameter to match runDeps.startBroker.
+// The broker no longer runs in this process. It runs inside a sandbox whose
+// command policies govern everything it executes, which is the whole point: a
+// broker outside the sandbox would execute commands with the launcher's own
+// reach.
 func startCommandBroker(cfg *config.Config) (string, func(), error) {
-	// The broker must run inside its own nono session before it may serve: in
-	// this process it would execute the agent's commands with the launcher's
-	// own reach, which is the opposite of what this program is for. Wiring
-	// that session up is the next change; until it lands, refuse rather than
-	// serve unsandboxed.
-	return "", nil, fmt.Errorf("command broker is not yet sandboxed; `agent-sandbox claude` is disabled until the broker runs under its own nono session")
+	nonoPath, err := exec.LookPath("nono")
+	if err != nil {
+		return "", nil, fmt.Errorf("nono not found in PATH: %w", err)
+	}
+	selfPath, err := os.Executable()
+	if err != nil {
+		return "", nil, fmt.Errorf("locate agent-sandbox: %w", err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", nil, fmt.Errorf("getwd: %w", err)
+	}
+	sockPath, err := BrokerSocketPath()
+	if err != nil {
+		return "", nil, err
+	}
+	// A socket left by a killed run would make the broker's bind fail forever.
+	if rmErr := os.Remove(sockPath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+		return "", nil, fmt.Errorf("remove stale socket: %w", rmErr)
+	}
+
+	args := BrokerArgs(cfg, nonoPath, selfPath, sockPath, cwd)
+	cmd := exec.Command(nonoPath, args[1:]...)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	if err := cmd.Start(); err != nil {
+		return "", nil, fmt.Errorf("start command broker: %w", err)
+	}
+
+	if err := waitForSocket(sockPath, brokerStartTimeout); err != nil {
+		cmd.Process.Kill()
+		return "", nil, err
+	}
+
+	cleanup := func() {
+		if cmd.Process != nil {
+			cmd.Process.Signal(syscall.SIGTERM)
+			cmd.Wait()
+		}
+		os.Remove(sockPath)
+	}
+	return sockPath, cleanup, nil
+}
+
+// brokerStartTimeout bounds how long the launcher waits for the broker's socket
+// to appear. A sandbox that cannot start fails here rather than leaving Claude
+// running against a broker that will never answer.
+const brokerStartTimeout = 15 * time.Second
+
+// waitForSocket polls until path exists or the deadline passes. Polling is used
+// rather than a readiness handshake because the broker is behind a sandbox
+// boundary: there is no shared channel to signal on until the socket itself.
+func waitForSocket(path string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return nil
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	return fmt.Errorf("command broker did not start within %s; run `agent-sandbox doctor`", timeout)
+}
+
+// BrokerArgs builds the `nono run` argv for the command broker's session.
+//
+// The broker is a sibling of the agent's sandbox, not a child of it: nono
+// refuses to nest, and the broker must be the session entrypoint so its command
+// policies apply to everything it executes. It is deliberately not given
+// --allow-cwd; the working directory reaches the profile through --workdir,
+// which is what $WORKDIR expands to inside it.
+func BrokerArgs(cfg *config.Config, nonoPath, selfPath, sockPath, workdir string) []string {
+	return []string{
+		"nono", "run", "--silent",
+		"--profile", cfg.CommandProfilePath(),
+		"--workdir", workdir,
+		"--allow-unix-socket-bind", sockPath,
+		"--",
+		selfPath, "broker", "--socket", sockPath,
+	}
 }
 
 // BrokerSocketPath returns a per-process socket path under

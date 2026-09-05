@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -277,10 +278,27 @@ func execEnv(hc interp.HandlerContext) []string {
 
 // Execute satisfies Executor so the server can run a request directly. The
 // server owns the transport; ShellExecutor owns the shell language.
+//
+// req.Cwd is client-controlled and flows straight into interp.Dir, and from
+// there into every command's own working directory. The old router-based
+// design (NonoExecutor.checkCwd) rejected a relative path or one outside the
+// granted root itself; this executor does not reproduce that check, because
+// the bound it enforced now comes from the broker's own nono session instead:
+// the broker runs under --profile with no --allow-cwd (see BrokerArgs), so
+// every filesystem access the interpreter or a child process makes — cwd
+// included — is already confined to whatever that profile grants, whatever
+// req.Cwd claims. What is checked here is only the request's shape, not its
+// reach: a non-absolute Cwd (including the empty string a client sends when
+// its own os.Getwd fails) is refused rather than silently resolved against
+// this process's own working directory, which would not be the directory the
+// agent thinks it is running commands in.
 func (e *ShellExecutor) Execute(ctx context.Context, req Request,
 	stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	if strings.TrimSpace(req.Command) == "" {
 		return 0, fmt.Errorf("broker: empty command")
+	}
+	if !filepath.IsAbs(req.Cwd) {
+		return 0, fmt.Errorf("broker: cwd %q is not an absolute path", req.Cwd)
 	}
 	return e.Run(ctx, req.Command, req.Cwd, stdin, stdout, stderr)
 }

@@ -77,6 +77,18 @@ func runDebug(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Println(strings.Join(nonoArgs, " "))
 
+	selfPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate agent-sandbox: %w", err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("getwd: %w", err)
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), "command broker:")
+	fmt.Fprintln(cmd.OutOrStdout(), "  "+strings.Join(
+		claude.BrokerArgs(cfg, "nono", selfPath, brokerSocket, cwd), " "))
+
 	profileJSON, err := r.ProfileJSON()
 	if err != nil {
 		return err
@@ -90,11 +102,8 @@ func runDebug(cmd *cobra.Command, args []string) error {
 	// The shell profile is the other half of the policy: same expansion, fed by
 	// [sandbox.shared] + [sandbox.shell] instead of [sandbox.agent]. Printing
 	// both is what makes the split inspectable — the difference between them is
-	// exactly what the two sections declare.
-	cwd, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("getwd: %w", err)
-	}
+	// exactly what the two sections declare. cwd was already resolved above for
+	// the broker invocation; it is the same working directory here.
 	shellResolved, err := sandboxhost.ResolveShell(cfg, cwd)
 	if err != nil {
 		return err

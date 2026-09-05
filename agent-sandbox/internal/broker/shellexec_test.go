@@ -294,3 +294,42 @@ func TestShellExecutorLooksUpCommandsRelativeToCwd(t *testing.T) {
 		t.Errorf("stdout = %q, want %q", out, "scripted")
 	}
 }
+
+// TestExecuteAcceptsAnAbsoluteCwd is the positive case for the Execute-level
+// cwd check: a well-formed request from a real client runs normally.
+func TestExecuteAcceptsAnAbsoluteCwd(t *testing.T) {
+	e := broker.NewShellExecutor()
+	var out, errb bytes.Buffer
+	code, err := e.Execute(context.Background(),
+		broker.Request{Command: "echo hi", Cwd: t.TempDir()}, nil, &out, &errb)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if code != 0 {
+		t.Errorf("exit = %d, want 0; stderr = %q", code, errb.String())
+	}
+	if strings.TrimSpace(out.String()) != "hi" {
+		t.Errorf("stdout = %q, want %q", out.String(), "hi")
+	}
+}
+
+// TestExecuteRejectsANonAbsoluteCwd guards the fallback a client's own
+// workingDir() helper can produce: it returns "" when os.Getwd fails, and
+// silently running the command against this process's own working directory
+// in that case would run it somewhere the agent never asked for. A relative
+// path is refused for the same reason.
+func TestExecuteRejectsANonAbsoluteCwd(t *testing.T) {
+	e := broker.NewShellExecutor()
+	for _, cwd := range []string{"", "relative/path", "./here"} {
+		var out, errb bytes.Buffer
+		_, err := e.Execute(context.Background(),
+			broker.Request{Command: "echo hi", Cwd: cwd}, nil, &out, &errb)
+		if err == nil {
+			t.Errorf("Execute() with Cwd=%q: error = nil, want a rejection", cwd)
+			continue
+		}
+		if !strings.Contains(err.Error(), "not an absolute path") {
+			t.Errorf("Execute() with Cwd=%q: error = %q, want it to mention an absolute path", cwd, err.Error())
+		}
+	}
+}

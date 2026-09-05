@@ -25,8 +25,10 @@ type Executor interface {
 // own rather than borrowing the agent's, or worse, running with the
 // unsandboxed launcher's own reach.
 //
-// That boundary is not wired up yet: see internal/claude.startCommandBroker,
-// which refuses to start the broker until it does.
+// That session is started by internal/claude.startCommandBroker, which runs
+// `nono run --profile <command profile> -- agent-sandbox broker --socket
+// <path>` (see claude.BrokerArgs) as a sibling of the agent's own sandbox, not
+// a child of it — nono refuses to nest.
 type Server struct {
 	listener net.Listener
 	sockPath string

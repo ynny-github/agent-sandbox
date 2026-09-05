@@ -5,48 +5,21 @@
 - Command output is returned inline in the tool result.
 {{else}}- The Bash and Monitor tools are disabled; use the `run_command` MCP tool to run shell commands.
 - Command output is written to files; read the returned stdout/stderr paths.
-{{end}}- Allowed commands run directly on the host; all others run through a host-side command broker, each in its own `nono run` sandbox scoped to the working directory.
-
-## Filesystem: the same paths everywhere
-There is no container and no bind mount — sandboxed commands run directly on the host filesystem, restricted to the current working directory (read+write):
-- Host commands (the allow list below) run in the real project directory using real host absolute paths.
-- Sandboxed commands run in that same directory at that same absolute path — no translation needed. HOME keeps its real host value.
-- Paths outside the working directory are reachable only where the config grants them to the shell sandbox: `[sandbox.shared]` (shared with the agent) or `[sandbox.shell]`. Anything declared under `[sandbox.agent]` — typically the credential capabilities `docker` and `ssh` — belongs to the launched agent alone and is not reachable from a sandboxed command.
-{{if .Resolved}}{{if or .OutsideWrite .OutsideRead}}- Resolved from the active config, a sandboxed command also reaches:
-{{range .OutsideWrite}}  - `{{.}}` (read+write)
-{{end}}{{range .OutsideRead}}  - `{{.}}` (read-only)
-{{end}}{{else}}- Resolved from the active config: nothing outside the working directory. Anything else you need must be granted in `agent-sandbox.toml` by the operator.
-{{end}}{{end}}{{if .Safe}}
+{{end}}- Every command runs through a host-side command broker, under the operator-written nono profile at `{{.ProfilePath}}`. Which commands that profile allows, and how each may be invoked, is not this file's concern — it is the profile's.
+{{if .Safe}}
 ## Safe command wrappers
 Prefer these validated wrappers over running the tool directly; each refuses known-dangerous invocations before running:
 {{range .Safe}}- `agent-sandbox safe {{.Use}}` — {{.Short}}
 {{end}}{{end}}
-## Commands that run on the host (allow)
-{{range .Allow}}- {{.}}
-{{else}}- (none)
-{{end}}
-## Refused commands (drop)
-These run on neither host nor sandbox:
-{{range .Drop}}- {{.Pattern}}{{if .Message}} — {{.Message}}{{end}}
-{{else}}- (none)
-{{end}}
-## Sandboxed command network
-Every sandboxed command runs under nono's "developer" network profile (LLM APIs, package registries, GitHub, sigstore, documentation).
-{{if .AllowDomains}}Extra allowed domains:
-{{range .AllowDomains}}- {{.}}
-{{end}}{{else}}No extra domains beyond the developer profile.
-{{end}}
-
 ## Changing the config
 The sandbox is configured by `{{.ConfigPath}}`. You may edit it directly.
 
-Editing it **does not affect the current session**: in hook mode commands route
-through a policy snapshot frozen at launch, and the nono profiles are generated
-once when the session starts. An edit takes effect the next time the operator
-runs `agent-sandbox claude`.
+Editing it **does not affect the current session**: the agent's nono profile is
+generated once when the session starts. An edit takes effect the next time the
+operator runs `agent-sandbox claude`.
 
 After editing, run `agent-sandbox ai config-check` — it loads the config and
-resolves both profiles exactly as launch does, so a passing check means the
+resolves the agent profile exactly as launch does, so a passing check means the
 config will not be what breaks the next launch.
 
 Schema:
@@ -57,26 +30,16 @@ tool_mode = "hook"                    # "hook" | "mcp"
 [mcp]
 command_output_dir = "..."            # mcp tool_mode only: where command output is written
 
-# Host access. [sandbox.shared] reaches both the agent and sandboxed commands;
-# [sandbox.agent] and [sandbox.shell] reach exactly one. Nothing is inherited
-# between the two sides, so a grant reaches a side only if written where that
-# side can see it. All six keys below are valid in all three sections.
-[sandbox.shared]
+# Host access for the launched agent — the only profile agent-sandbox
+# generates. The sandbox a command runs in is the operator's command profile,
+# configured separately (see above).
+[sandbox.agent]
 capabilities = []                     # named bundles; see the list below
 allow        = []                     # directories, read+write
 read         = []                     # directories, read-only
 allow_file   = []                     # single files, read+write
 read_file    = []                     # single files, read-only
 allow_env    = []                     # environment variable names
-
-[sandbox.agent]
-allow_commands = ["go *"]             # glob patterns that run without the command sandbox
-drop_commands  = [                    # patterns refused on both host and sandbox
-  { pattern = "git *", message = "optional; replaces the default refusal line" },
-]
-
-[sandbox.shell]
-allow_domains = []                    # extra domains on top of the developer network profile
 ```
 
 Capability names: {{range $i, $c := .Capabilities}}{{if $i}}, {{end}}`{{$c}}`{{end}}.

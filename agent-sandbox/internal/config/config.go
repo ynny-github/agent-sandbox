@@ -57,61 +57,16 @@ type MCPConfig struct {
 	CommandOutputDir string `toml:"command_output_dir"`
 }
 
-// SandboxConfig spans the two sandboxes agent-sandbox generates a profile for:
-// the launched agent and the shell sandbox each brokered command runs in.
-// Shared is expanded into both; Agent and Shell add grants to exactly one of
-// them.
-//
-// Nothing is inherited between the two sides. A grant reaches a profile only if
-// it is written in that side's section or in the shared base, which is why
-// there is no subtraction axis: anything you do not want in a profile is simply
-// not written where that profile can see it.
+// SandboxConfig is the host access agent-sandbox generates a profile for: the
+// launched agent, and nothing else. Commands are governed by the operator's
+// command profile, which agent-sandbox does not generate and does not read.
 type SandboxConfig struct {
-	Shared HostConfig  `toml:"shared"`
-	Agent  AgentConfig `toml:"agent"`
-	Shell  ShellConfig `toml:"shell"`
+	Agent HostConfig `toml:"agent"`
 }
 
-// AgentConfig is the launched agent's own host access plus the routing policy
-// for the commands it runs. Routing lives here because it describes what the
-// agent may do — run a command on the host, or not at all — rather than what
-// the shell sandbox may touch. The keys are allow_commands / drop_commands so
-// they cannot be confused with the embedded HostConfig's allow, which grants a
-// host directory.
-type AgentConfig struct {
-	HostConfig
-	AllowCommands []string   `toml:"allow_commands"`
-	DropCommands  []DropRule `toml:"drop_commands"`
-}
-
-// ShellConfig is the host access and network reach of the sandbox a brokered
-// command runs in.
-type ShellConfig struct {
-	HostConfig
-	AllowDomains []string `toml:"allow_domains"`
-}
-
-// DropRule is one drop pattern with an optional custom refusal message. Every
-// drop_commands entry is written as a table so the shape is the same with or
-// without a message:
-//
-//	drop_commands = [
-//	  { pattern = "git *" },
-//	  { pattern = "gh *", message = "gh is disabled" },
-//	]
-//
-// An omitted message leaves Message empty, and the router falls back to the
-// default `dropped: command matches drop pattern "<pattern>"` line.
-type DropRule struct {
-	Pattern string `toml:"pattern"`
-	Message string `toml:"message"`
-}
-
-// HostConfig declares, in nono-agnostic terms, host-side access for one
-// sandbox. Capabilities are named bundles expanded by internal/sandboxhost; the
-// remaining lists are raw grants. It is embedded in AgentConfig and
-// ShellConfig, so these keys are written directly under [sandbox.agent] /
-// [sandbox.shell] with no intervening table.
+// HostConfig declares, in nono-agnostic terms, host-side access for the
+// launched agent's sandbox. Capabilities are named bundles expanded by
+// internal/sandboxhost; the remaining lists are raw grants.
 type HostConfig struct {
 	Capabilities []string `toml:"capabilities"`
 	Allow        []string `toml:"allow"`
@@ -123,21 +78,17 @@ type HostConfig struct {
 
 // Load composes the optional user-scope config
 // (~/.config/agent-sandbox/config.toml) with the project-scope config at path,
-// then validates the merged result. Scalars: project overrides user. Lists
-// (agent.allow_commands, agent.drop_commands, shell.allow_domains, and every
-// list in the three host sections): de-duplicated union.
+// then validates the merged result. Scalars: project overrides user. Lists (every
+// list in [sandbox.agent]): de-duplicated union.
 func Load(path string) (*Config, error) {
 	var cfg Config
 
 	// 1. User config is the base (optional). Snapshot its list fields before the
-	//    project decode can replace them. The snapshots must be *clones*: TOML
+	//    project decode can replace them. The snapshot must be a *clone*: TOML
 	//    decode reuses an existing slice's backing array in place when its cap is
 	//    large enough, so a plain header copy would be corrupted by the project
 	//    decode below.
-	var userAllowCommands []string
-	var userDropCommands []DropRule
-	var userAllowDomains []string
-	var userShared, userAgent, userShell HostConfig
+	var userAgent HostConfig
 	if up, err := userConfigPath(); err == nil {
 		if _, statErr := os.Stat(up); statErr == nil {
 			md, derr := decodeInto(up, &cfg)
@@ -147,12 +98,7 @@ func Load(path string) (*Config, error) {
 			if derr := checkDeprecated(md); derr != nil {
 				return nil, derr
 			}
-			userAllowCommands = slices.Clone(cfg.Sandbox.Agent.AllowCommands)
-			userDropCommands = slices.Clone(cfg.Sandbox.Agent.DropCommands)
-			userAllowDomains = slices.Clone(cfg.Sandbox.Shell.AllowDomains)
-			userShared = cloneHost(cfg.Sandbox.Shared)
-			userAgent = cloneHost(cfg.Sandbox.Agent.HostConfig)
-			userShell = cloneHost(cfg.Sandbox.Shell.HostConfig)
+			userAgent = cloneHost(cfg.Sandbox.Agent)
 		}
 	}
 
@@ -169,12 +115,7 @@ func Load(path string) (*Config, error) {
 
 	// 3. Union the list fields. When the project omits a list, cfg still holds the
 	//    user's, so the union de-dupes back to the user's list (no change).
-	cfg.Sandbox.Agent.AllowCommands = dedupUnion(userAllowCommands, cfg.Sandbox.Agent.AllowCommands)
-	cfg.Sandbox.Agent.DropCommands = dedupUnionDrop(userDropCommands, cfg.Sandbox.Agent.DropCommands)
-	cfg.Sandbox.Shell.AllowDomains = dedupUnion(userAllowDomains, cfg.Sandbox.Shell.AllowDomains)
-	cfg.Sandbox.Shared = unionHost(userShared, cfg.Sandbox.Shared)
-	cfg.Sandbox.Agent.HostConfig = unionHost(userAgent, cfg.Sandbox.Agent.HostConfig)
-	cfg.Sandbox.Shell.HostConfig = unionHost(userShell, cfg.Sandbox.Shell.HostConfig)
+	cfg.Sandbox.Agent = unionHost(userAgent, cfg.Sandbox.Agent)
 
 	// 4. Validate the merged config.
 	return validate(&cfg)
@@ -209,6 +150,15 @@ func checkDeprecated(md toml.MetaData) error {
 	if md.IsDefined("sandbox", "network") {
 		return ErrMovedNetworkSection
 	}
+	if md.IsDefined("sandbox", "agent", "allow_commands") || md.IsDefined("sandbox", "agent", "drop_commands") {
+		return ErrMovedCommandTiers
+	}
+	if md.IsDefined("sandbox", "shared") {
+		return ErrMovedSharedToAgent
+	}
+	if md.IsDefined("sandbox", "shell") {
+		return ErrMovedShellToProfile
+	}
 	if md.IsDefined("sandbox", "command", "env_passthrough") {
 		return ErrMovedEnvPassthrough
 	}
@@ -219,13 +169,19 @@ func checkDeprecated(md toml.MetaData) error {
 		return ErrMovedCommandHost
 	}
 	if md.IsDefined("sandbox", "command") {
-		return ErrMovedCommandRouting
+		// Bare [sandbox.command] predates even allow_commands/drop_commands: it
+		// was the routing table before routing was split into those two keys.
+		// Both are gone now too, so it points at the same sentinel they do.
+		return ErrMovedCommandTiers
 	}
 	if md.IsDefined("sandbox", "agent", "host") {
 		return ErrMovedAgentHost
 	}
 	if md.IsDefined("sandbox", "host") {
-		return ErrMovedSharedSection
+		// [sandbox.host] predates [sandbox.shared], which has itself since been
+		// folded into [sandbox.agent]; point straight at today's destination
+		// rather than a name that no longer exists either.
+		return ErrMovedSharedToAgent
 	}
 	if md.IsDefined("sandbox", "container") {
 		return ErrRemovedContainerSection
@@ -254,19 +210,13 @@ func validate(cfg *Config) (*Config, error) {
 	if cfg.ToolMode == "mcp" && strings.TrimSpace(cfg.MCP.CommandOutputDir) == "" {
 		return nil, ErrMissingMCPCommandOutputDir
 	}
-	for _, r := range cfg.Sandbox.Agent.DropCommands {
-		if strings.TrimSpace(r.Pattern) == "" {
-			return nil, ErrDropRuleMissingPattern
-		}
-	}
-	// NONO_* is rejected in every allow_env list, not just the shell's: the
-	// launched agent spawns the commands, so a NONO_* variable reaching either
-	// profile can reconfigure the shell sandbox.
-	for _, h := range []HostConfig{cfg.Sandbox.Shared, cfg.Sandbox.Agent.HostConfig, cfg.Sandbox.Shell.HostConfig} {
-		for _, name := range h.AllowEnv {
-			if strings.HasPrefix(strings.TrimSpace(name), "NONO_") {
-				return nil, fmt.Errorf("%w: %q", ErrAllowEnvNonoVar, name)
-			}
+	// NONO_* is rejected in the agent's allow_env: the agent's own nono profile
+	// is not the only one it can influence — it is what starts the command
+	// broker, which runs its own nono session — so a forwarded NONO_* variable
+	// could reconfigure that session from inside the sandbox meant to contain it.
+	for _, name := range cfg.Sandbox.Agent.AllowEnv {
+		if strings.HasPrefix(strings.TrimSpace(name), "NONO_") {
+			return nil, fmt.Errorf("%w: %q", ErrAllowEnvNonoVar, name)
 		}
 	}
 	return cfg, nil
@@ -314,28 +264,6 @@ func dedupUnion(a, b []string) []string {
 			}
 			seen[v] = struct{}{}
 			out = append(out, v)
-		}
-	}
-	return out
-}
-
-// dedupUnionDrop is dedupUnion for drop rules, de-duplicating by pattern with
-// first-occurrence order (a's rules first). When a pattern appears in both a and
-// b, a's rule — including its message — wins, matching the user-first union used
-// for the other list fields.
-func dedupUnionDrop(a, b []DropRule) []DropRule {
-	if len(a) == 0 && len(b) == 0 {
-		return nil
-	}
-	seen := make(map[string]struct{}, len(a)+len(b))
-	out := make([]DropRule, 0, len(a)+len(b))
-	for _, list := range [][]DropRule{a, b} {
-		for _, r := range list {
-			if _, ok := seen[r.Pattern]; ok {
-				continue
-			}
-			seen[r.Pattern] = struct{}{}
-			out = append(out, r)
 		}
 	}
 	return out

@@ -11,14 +11,14 @@ import (
 )
 
 // Pointer returns the short guidance injected into the agent's system prompt at
-// launch. It intentionally carries no allow/drop detail — only a pointer to the
-// live `agent-sandbox ai explain` command — to keep the system prompt small.
+// launch. It intentionally carries no detail about the command profile itself
+// — only a pointer to the live `agent-sandbox ai explain` command — to keep
+// the system prompt small.
 func Pointer() string {
 	return "## agent-sandbox environment\n\n" +
-		"This project routes your shell commands through the agent-sandbox " +
-		"sandbox. Run `agent-sandbox ai explain` to learn how to run commands, " +
-		"which commands run on the host, which are refused, and the sandbox " +
-		"network constraints.\n"
+		"This project routes your shell commands through a command broker. " +
+		"Run `agent-sandbox ai explain` to learn how commands run and where " +
+		"the sandbox is configured.\n"
 }
 
 //go:embed explain.tmpl
@@ -42,28 +42,15 @@ type explainView struct {
 	// ConfigPath is the config file actually loaded, not the default name: the
 	// agent is being told which file to edit, and --config can move it.
 	ConfigPath string
+	// ProfilePath is the command profile the broker runs commands under
+	// (cfg.CommandProfilePath()). agent-sandbox does not generate or read its
+	// contents, so this is a pointer, not a description of what it allows.
+	ProfilePath string
 	// Capabilities is the catalog's capability names, so the editing section
 	// lists what may actually be written rather than a prose sample that goes
 	// stale when a bundle is added.
 	Capabilities []string
-	Allow        []string
-	Drop         []config.DropRule
 	Safe         []SafeCommand
-	// AllowDomains is the resolved extra-domain list, not the raw
-	// [sandbox.shell] allow_domains: a capability can carry domains too, and an
-	// agent reading this needs the total.
-	AllowDomains []string
-	// OutsideWrite / OutsideRead are the paths a sandboxed command reaches
-	// beyond its working directory, resolved from the config rather than
-	// described in the abstract: which grants apply depends on which section
-	// they were written in, so only the resolved lists answer the question an
-	// agent actually has.
-	OutsideWrite []string
-	OutsideRead  []string
-	// Resolved reports whether the two lists above were resolved at all, so the
-	// template can distinguish "nothing outside the working directory" from
-	// "could not tell".
-	Resolved bool
 }
 
 // Explain renders a Markdown description of the sandbox environment from cfg,
@@ -76,24 +63,9 @@ func Explain(cfg *config.Config, configPath string, safe ...SafeCommand) string 
 	view := explainView{
 		Hook:         cfg.ToolMode == "hook",
 		ConfigPath:   configPath,
+		ProfilePath:  cfg.CommandProfilePath(),
 		Capabilities: sandboxhost.CapabilityNames(),
-		Allow:        cfg.Sandbox.Agent.AllowCommands,
-		Drop:         cfg.Sandbox.Agent.DropCommands,
 		Safe:         safe,
-		AllowDomains: cfg.Sandbox.Shell.AllowDomains,
-	}
-	if domains, err := sandboxhost.ShellAllowDomains(cfg); err == nil {
-		view.AllowDomains = domains
-	}
-	// A resolve error means an unknown capability name, which stops
-	// `agent-sandbox claude` at launch — no session can reach this code with
-	// such a config. Should one ever get here, fall back to what the config
-	// says literally (above, for the domains) or to the prose around the list
-	// rather than printing a wrong (empty) list as if it were resolved.
-	if grants, err := sandboxhost.ShellFilesystemGrants(cfg); err == nil {
-		view.OutsideWrite = grants.Write
-		view.OutsideRead = grants.Read
-		view.Resolved = true
 	}
 
 	var buf bytes.Buffer

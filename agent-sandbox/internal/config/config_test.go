@@ -4,7 +4,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"strconv"
 	"testing"
@@ -117,7 +116,7 @@ command_output_dir = "/tmp/out"
 func TestLoad_ValidConfig(t *testing.T) {
 	path := writeToml(t, validBase+`
 [sandbox.agent]
-allow_commands = ["git *", "make *"]
+allow = ["/srv/scratch", "/srv/cache"]
 `)
 	cfg, err := config.Load(path)
 	if err != nil {
@@ -126,15 +125,15 @@ allow_commands = ["git *", "make *"]
 	if cfg.MCP.CommandOutputDir != "/tmp/out" {
 		t.Errorf("CommandOutputDir = %q, want /tmp/out", cfg.MCP.CommandOutputDir)
 	}
-	if len(cfg.Sandbox.Agent.AllowCommands) != 2 {
-		t.Errorf("Allow len = %d, want 2", len(cfg.Sandbox.Agent.AllowCommands))
+	if len(cfg.Sandbox.Agent.Allow) != 2 {
+		t.Errorf("Allow len = %d, want 2", len(cfg.Sandbox.Agent.Allow))
 	}
 }
 
 func TestLoad_MissingMCPCommandOutputDir(t *testing.T) {
 	path := writeToml(t, `
 [sandbox.agent]
-allow_commands = ["git *"]
+allow = ["/srv/scratch"]
 `)
 	_, err := config.Load(path)
 	if !errors.Is(err, config.ErrMissingMCPCommandOutputDir) {
@@ -188,14 +187,14 @@ image = "mysandbox"
 func TestLoad_EmptyAllow(t *testing.T) {
 	path := writeToml(t, validBase+`
 [sandbox.agent]
-allow_commands = []
+allow = []
 `)
 	cfg, err := config.Load(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(cfg.Sandbox.Agent.AllowCommands) != 0 {
-		t.Errorf("Allow = %v, want empty slice", cfg.Sandbox.Agent.AllowCommands)
+	if len(cfg.Sandbox.Agent.Allow) != 0 {
+		t.Errorf("Allow = %v, want empty slice", cfg.Sandbox.Agent.Allow)
 	}
 }
 
@@ -215,69 +214,8 @@ func TestLoad_AllowOmitted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Sandbox.Agent.AllowCommands != nil && len(cfg.Sandbox.Agent.AllowCommands) != 0 {
-		t.Errorf("Allow = %v, want nil or empty", cfg.Sandbox.Agent.AllowCommands)
-	}
-}
-
-func TestLoad_Drop_Loaded(t *testing.T) {
-	path := writeToml(t, validBase+`
-[sandbox.agent]
-drop_commands = [{ pattern = "rm -rf *" }, { pattern = "sudo *" }]
-`)
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(cfg.Sandbox.Agent.DropCommands) != 2 {
-		t.Errorf("Drop len = %d, want 2", len(cfg.Sandbox.Agent.DropCommands))
-	}
-	if cfg.Sandbox.Agent.DropCommands[0].Pattern != "rm -rf *" {
-		t.Errorf("Drop[0].Pattern = %q, want \"rm -rf *\"", cfg.Sandbox.Agent.DropCommands[0].Pattern)
-	}
-}
-
-func TestLoad_DropRules_WithAndWithoutMessage(t *testing.T) {
-	path := writeToml(t, validBase+`
-[sandbox.agent]
-drop_commands = [
-  { pattern = "rm -rf *" },
-  { pattern = "gh *", message = "gh is disabled" },
-  { pattern = "sudo *" },
-]
-`)
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	want := []config.DropRule{
-		{Pattern: "rm -rf *"},
-		{Pattern: "gh *", Message: "gh is disabled"},
-		{Pattern: "sudo *"},
-	}
-	if !reflect.DeepEqual(cfg.Sandbox.Agent.DropCommands, want) {
-		t.Errorf("Drop = %+v, want %+v", cfg.Sandbox.Agent.DropCommands, want)
-	}
-}
-
-func TestLoad_DropRule_TableMissingPattern_Errors(t *testing.T) {
-	path := writeToml(t, validBase+`
-[sandbox.agent]
-drop_commands = [{ message = "no pattern here" }]
-`)
-	if _, err := config.Load(path); err == nil {
-		t.Fatal("expected an error for a drop table without a pattern, got nil")
-	}
-}
-
-func TestLoad_DropOmitted_IsEmpty(t *testing.T) {
-	path := writeToml(t, validBase)
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(cfg.Sandbox.Agent.DropCommands) != 0 {
-		t.Errorf("Drop = %v, want empty", cfg.Sandbox.Agent.DropCommands)
+	if cfg.Sandbox.Agent.Allow != nil && len(cfg.Sandbox.Agent.Allow) != 0 {
+		t.Errorf("Allow = %v, want nil or empty", cfg.Sandbox.Agent.Allow)
 	}
 }
 
@@ -401,34 +339,23 @@ func TestLoad_Compose_ListUnion(t *testing.T) {
 [mcp]
 command_output_dir = "/u/out"
 [sandbox.agent]
-allow_commands = ["git *", "make *"]
-drop_commands = [{ pattern = "rm *" }]
-[sandbox.shell]
+allow = ["/srv/a", "/srv/b"]
 allow_env = ["HOME", "AWS_PROFILE"]
 `)
 	project := writeToml(t, `
 [sandbox.agent]
-allow_commands = ["make *", "npm *"]
-drop_commands = [{ pattern = "sudo *" }]
-[sandbox.shell]
+allow = ["/srv/b", "/srv/c"]
 allow_env = ["CI"]
 `)
 	cfg, err := config.Load(project)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got := cfg.Sandbox.Agent.AllowCommands; !slices.Equal(got, []string{"git *", "make *", "npm *"}) {
-		t.Errorf("Allow = %v, want [git * make * npm *]", got)
+	if got := cfg.Sandbox.Agent.Allow; !slices.Equal(got, []string{"/srv/a", "/srv/b", "/srv/c"}) {
+		t.Errorf("Allow = %v, want [/srv/a /srv/b /srv/c]", got)
 	}
-	gotDrop := make([]string, len(cfg.Sandbox.Agent.DropCommands))
-	for i, r := range cfg.Sandbox.Agent.DropCommands {
-		gotDrop[i] = r.Pattern
-	}
-	if !slices.Equal(gotDrop, []string{"rm *", "sudo *"}) {
-		t.Errorf("Drop = %v, want [rm * sudo *]", gotDrop)
-	}
-	if got := cfg.Sandbox.Shell.AllowEnv; !slices.Equal(got, []string{"HOME", "AWS_PROFILE", "CI"}) {
-		t.Errorf("Shell.AllowEnv = %v, want [HOME AWS_PROFILE CI]", got)
+	if got := cfg.Sandbox.Agent.AllowEnv; !slices.Equal(got, []string{"HOME", "AWS_PROFILE", "CI"}) {
+		t.Errorf("Agent.AllowEnv = %v, want [HOME AWS_PROFILE CI]", got)
 	}
 }
 
@@ -483,28 +410,11 @@ tool_mode = "mcp"
 	}
 }
 
-func TestLoad_ShellAllowDomains(t *testing.T) {
+func TestLoad_AgentAllowEnv(t *testing.T) {
 	path := writeToml(t, `
 tool_mode = "hook"
 
-[sandbox.shell]
-allow_domains = ["proxy.golang.org", "sum.golang.org"]
-`)
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	want := []string{"proxy.golang.org", "sum.golang.org"}
-	if !slices.Equal(cfg.Sandbox.Shell.AllowDomains, want) {
-		t.Errorf("AllowDomains = %v, want %v", cfg.Sandbox.Shell.AllowDomains, want)
-	}
-}
-
-func TestLoad_ShellAllowEnv(t *testing.T) {
-	path := writeToml(t, `
-tool_mode = "hook"
-
-[sandbox.shell]
+[sandbox.agent]
 allow_env = ["AWS_PROFILE", "MISE_SHELL"]
 `)
 	cfg, err := config.Load(path)
@@ -512,23 +422,18 @@ allow_env = ["AWS_PROFILE", "MISE_SHELL"]
 		t.Fatalf("Load() error = %v", err)
 	}
 	want := []string{"AWS_PROFILE", "MISE_SHELL"}
-	if !slices.Equal(cfg.Sandbox.Shell.AllowEnv, want) {
-		t.Errorf("Shell.AllowEnv = %v, want %v", cfg.Sandbox.Shell.AllowEnv, want)
+	if !slices.Equal(cfg.Sandbox.Agent.AllowEnv, want) {
+		t.Errorf("Agent.AllowEnv = %v, want %v", cfg.Sandbox.Agent.AllowEnv, want)
 	}
 }
 
-// NONO_* reconfigures the shell sandbox, so it is refused in every allow_env
-// list — the shared base and both sides — not just the shell section.
-func TestLoad_RejectsNonoAllowEnv_InEverySection(t *testing.T) {
-	sections := []string{"sandbox.shared", "sandbox.agent", "sandbox.shell"}
-	for _, section := range sections {
-		t.Run(section, func(t *testing.T) {
-			path := writeToml(t, "tool_mode = \"hook\"\n\n["+section+"]\nallow_env = [\"AWS_PROFILE\", \"NONO_ALLOW_DOMAIN\"]\n")
-			_, err := config.Load(path)
-			if !errors.Is(err, config.ErrAllowEnvNonoVar) {
-				t.Fatalf("Load() error = %v, want ErrAllowEnvNonoVar", err)
-			}
-		})
+// NONO_* reconfigures the sandbox the broker runs commands in, so it is
+// refused in the agent's allow_env — the only host section left.
+func TestLoad_RejectsNonoAllowEnv(t *testing.T) {
+	path := writeToml(t, "tool_mode = \"hook\"\n\n[sandbox.agent]\nallow_env = [\"AWS_PROFILE\", \"NONO_ALLOW_DOMAIN\"]\n")
+	_, err := config.Load(path)
+	if !errors.Is(err, config.ErrAllowEnvNonoVar) {
+		t.Fatalf("Load() error = %v, want ErrAllowEnvNonoVar", err)
 	}
 }
 
@@ -569,7 +474,7 @@ tool_mode = "hook"
 [sandbox.host]
 capabilities = ["go"]
 `,
-			want: config.ErrMovedSharedSection,
+			want: config.ErrMovedSharedToAgent,
 		},
 		{
 			name: "agent host sub-table",
@@ -609,7 +514,7 @@ tool_mode = "hook"
 [sandbox.command]
 allow = ["go *"]
 `,
-			want: config.ErrMovedCommandRouting,
+			want: config.ErrMovedCommandTiers,
 		},
 	}
 	for _, tt := range tests {
@@ -660,5 +565,53 @@ image = "sandbox:0.1.0"
 	project := writeToml(t, validBase)
 	if _, err := config.Load(project); !errors.Is(err, config.ErrRemovedContainerSection) {
 		t.Errorf("err = %v, want ErrRemovedContainerSection", err)
+	}
+}
+
+func TestLoadRejectsAllowCommands(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "command-profile.json"), "{}")
+	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
+	writeFile(t, cfgPath, "tool_mode = \"hook\"\n[sandbox.agent]\nallow_commands = [\"go *\"]\n")
+
+	_, err := config.Load(cfgPath)
+	if !errors.Is(err, config.ErrMovedCommandTiers) {
+		t.Fatalf("Load error = %v, want ErrMovedCommandTiers", err)
+	}
+}
+
+func TestLoadRejectsDropCommands(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "command-profile.json"), "{}")
+	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
+	writeFile(t, cfgPath, "tool_mode = \"hook\"\n[sandbox.agent]\ndrop_commands = [{ pattern = \"git *\" }]\n")
+
+	_, err := config.Load(cfgPath)
+	if !errors.Is(err, config.ErrMovedCommandTiers) {
+		t.Fatalf("Load error = %v, want ErrMovedCommandTiers", err)
+	}
+}
+
+func TestLoadRejectsSharedSection(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "command-profile.json"), "{}")
+	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
+	writeFile(t, cfgPath, "tool_mode = \"hook\"\n[sandbox.shared]\ncapabilities = [\"go\"]\n")
+
+	_, err := config.Load(cfgPath)
+	if !errors.Is(err, config.ErrMovedSharedToAgent) {
+		t.Fatalf("Load error = %v, want ErrMovedSharedToAgent", err)
+	}
+}
+
+func TestLoadRejectsShellSection(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "command-profile.json"), "{}")
+	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
+	writeFile(t, cfgPath, "tool_mode = \"hook\"\n[sandbox.shell]\nallow_domains = [\"example.com\"]\n")
+
+	_, err := config.Load(cfgPath)
+	if !errors.Is(err, config.ErrMovedShellToProfile) {
+		t.Fatalf("Load error = %v, want ErrMovedShellToProfile", err)
 	}
 }

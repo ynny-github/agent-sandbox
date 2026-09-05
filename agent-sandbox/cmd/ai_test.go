@@ -30,12 +30,8 @@ tool_mode = "hook"
 [mcp]
 command_output_dir = "./tmp"
 
-[sandbox.shell]
-allow_domains = ["proxy.golang.org"]
-
 [sandbox.agent]
-allow_commands = ["git *", "go *"]
-drop_commands = [{ pattern = "git push --force*" }]
+capabilities = ["go"]
 `)
 	orig := configPath
 	configPath = cfgPath
@@ -48,10 +44,8 @@ drop_commands = [{ pattern = "git push --force*" }]
 	}
 	for _, want := range []string{
 		"# agent-sandbox environment",
-		"- git *",
-		"- go *",
-		"- git push --force*",
-		"proxy.golang.org",
+		cfgPath,
+		"`go`",
 	} {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("output missing %q\n%s", want, buf.String())
@@ -84,17 +78,14 @@ func TestRunConfigCheck_ValidConfig(t *testing.T) {
 	out, err := runConfigCheckWith(t, `
 tool_mode = "hook"
 
-[sandbox.shared]
-capabilities = ["go"]
-
 [sandbox.agent]
-allow_commands = ["go *"]
+capabilities = ["go"]
 `)
 	if err != nil {
 		t.Fatalf("runConfigCheck: %v", err)
 	}
-	if !strings.Contains(out, "proxy.golang.org") {
-		t.Errorf("output does not summarise the resolved domains:\n%s", out)
+	if !strings.Contains(out, "ok:") {
+		t.Errorf("output does not confirm the config resolves:\n%s", out)
 	}
 }
 
@@ -111,7 +102,7 @@ func TestRunConfigCheck_UnknownCapability(t *testing.T) {
 	_, err := runConfigCheckWith(t, `
 tool_mode = "hook"
 
-[sandbox.shared]
+[sandbox.agent]
 capabilities = ["gooo"]
 `)
 	if err == nil {

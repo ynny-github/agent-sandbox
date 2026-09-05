@@ -30,15 +30,8 @@ var hostHome = func() string {
 var hostOS = runtime.GOOS
 
 // capability is a named bundle that expands into nono grants (groups, reads,
-// bypass exemptions, allow-files, env vars, network domains) plus the Claude
-// permission-deny rules for any credential path it exposes.
-//
-// Two fields reach only one of the two profiles, because only one of them has
-// somewhere to put them: deny constrains the agent's own file tools, and
-// domains widen the network of the shell sandbox brokered commands run in (the
-// agent's own network comes from its nono base profile, which agent-sandbox
-// does not configure). Both are still declared per capability rather than per
-// side, so a bundle stays one entry no matter which section names it.
+// bypass exemptions, allow-files, env vars) plus the Claude permission-deny
+// rules for any credential path it exposes.
 type capability struct {
 	groups []string
 	// allow is read+write, for a bundle that has no nono group to lean on. The
@@ -55,7 +48,6 @@ type capability struct {
 	bypass     []string
 	allowFile  []string
 	allowVars  []string
-	domains    []string
 	// denyRead and denyEdit are paths Claude's own file tools are refused. They
 	// constrain nothing else — not a brokered command, not a subprocess.
 	//
@@ -73,15 +65,11 @@ type capability struct {
 // catalog is the fixed, built-in set of capabilities. Unknown names are errors.
 //
 // The credential-exposing bundles ("docker", "ssh") carry no special handling:
-// like every other capability they apply to whichever side declares them, so
-// keeping host keys away from brokered commands is a matter of declaring them
-// under [sandbox.agent] rather than the shared [sandbox.shared].
+// like every other capability they expand the same way regardless of which
+// section names them. Nothing stops an operator from writing one under
+// [sandbox.agent] — that is in fact the only section left, and where those two
+// belong: the agent may need the credential, a brokered command should not.
 var catalog = map[string]capability{
-	// Each runtime names its own registry rather than leaning on the developer
-	// network profile, which covers most of them today: a preset that changes
-	// under us must not silently take a toolchain's package fetches with it.
-	// Listing a domain the preset already grants is harmless — the two are
-	// unioned.
 	// Every nono runtime group is read-only, so on its own none of these four
 	// can build anything: the toolchain fails on its own cache before it reaches
 	// a package. Each bundle therefore adds the directories its tool writes to
@@ -99,7 +87,6 @@ var catalog = map[string]capability{
 			"linux":  {"$XDG_CACHE_HOME/go-build"},
 			"darwin": {"$HOME/Library/Caches/go-build"},
 		},
-		domains: []string{"proxy.golang.org", "sum.golang.org"},
 	},
 	"python": {
 		groups: []string{"python_runtime"},
@@ -112,9 +99,6 @@ var catalog = map[string]capability{
 			"linux":  {"$XDG_CACHE_HOME/pip"},
 			"darwin": {"$HOME/Library/Caches/pip"},
 		},
-		// pypi.org resolves the package; files.pythonhosted.org serves the
-		// sdists and wheels themselves. The index alone cannot install.
-		domains: []string{"pypi.org", "files.pythonhosted.org"},
 	},
 	"node": {
 		groups: []string{"node_runtime"},
@@ -125,7 +109,6 @@ var catalog = map[string]capability{
 		perOSAllow: map[string][]string{
 			"darwin": {"~/Library/pnpm"},
 		},
-		domains: []string{"registry.npmjs.org"},
 	},
 	"rust": {
 		groups: []string{"rust_runtime"},
@@ -137,12 +120,9 @@ var catalog = map[string]capability{
 		// from it: a profile-level denial is not available, because Landlock
 		// has no deny-overlap on Linux and nono refuses to start when a deny
 		// sits under a granted parent. Keeping the token away from brokered
-		// commands means declaring "rust" under [sandbox.agent], the lever
-		// docker and ssh already use.
+		// commands means declaring "rust" under [sandbox.agent] rather than in
+		// the command profile — the lever docker and ssh already use.
 		denyRead: []string{"~/.cargo/credentials.toml", "~/.cargo/credentials"},
-		// index.crates.io is cargo's sparse index (the default protocol);
-		// static.crates.io serves the .crate files.
-		domains: []string{"crates.io", "index.crates.io", "static.crates.io"},
 	},
 	// dart and flutter are two bundles rather than one because flutter is a
 	// Dart tool: a Flutter project declares ["dart", "flutter"], and everything
@@ -167,9 +147,6 @@ var catalog = map[string]capability{
 		allow:     []string{"~/.pub-cache", "~/.dart", "~/.dart-tool"},
 		denyRead:  []string{"~/.dart-tool/pub-tokens.json"},
 		allowVars: []string{"PUB_CACHE", "PUB_HOSTED_URL"},
-		// pub.dev resolves a package; the archives are served from Google Cloud
-		// Storage, so the index alone cannot install.
-		domains: []string{"pub.dev", "storage.googleapis.com"},
 	},
 	"flutter": {
 		// ~/.config/flutter is the tool's state directory, and a directory is
@@ -194,41 +171,24 @@ var catalog = map[string]capability{
 		// handing out a read-only tree.
 		allow:     []string{"~/.config/flutter", "~/.local/share/mise/http-tarballs"},
 		allowVars: []string{"FLUTTER_ROOT", "FLUTTER_STORAGE_BASE_URL"},
-		// Engine artifacts and the bundled Dart SDK come from the same Google
-		// Cloud Storage bucket the pub archives do.
-		domains: []string{"storage.googleapis.com"},
 		// A git checkout of the SDK is not covered: no fixed path is right for
 		// everyone, so wherever it lives is a raw allow in the config.
 	},
 	"docker": {
-		read:   []string{"~/.docker", "~/.orbstack"},
-		bypass: []string{"~/.docker"},
-		// A pull needs all four: index/registry for the manifest, auth for the
-		// bearer token, and the Cloudflare host for the layer blobs.
-		domains: []string{
-			"auth.docker.io",
-			"index.docker.io",
-			"production.cloudflare.docker.com",
-			"registry-1.docker.io",
-		},
+		read:     []string{"~/.docker", "~/.orbstack"},
+		bypass:   []string{"~/.docker"},
 		denyRead: []string{"~/.docker/**"},
 	},
 	"ssh": {
 		read:      []string{"~/.ssh"},
 		bypass:    []string{"~/.ssh"},
 		allowFile: []string{"~/.ssh/known_hosts"},
-		denyRead: []string{"~/.ssh/**"},
-		denyEdit: []string{"~/.ssh/known_hosts"},
+		denyRead:  []string{"~/.ssh/**"},
+		denyEdit:  []string{"~/.ssh/known_hosts"},
 	},
 	"mise": {
 		read:      []string{"~/.local/share/mise", "~/.config/mise"},
 		allowVars: []string{"MISE*", "__MISE*"},
-		// mise's own hosts: self-update and the version listings. Where it
-		// fetches a tool *from* is per-tool (GitHub releases, nodejs.org,
-		// python-build-standalone, ...) and cannot be enumerated here, so a
-		// project that runs `mise install` sandboxed adds those to
-		// [sandbox.shell] allow_domains itself.
-		domains: []string{"mise.jdx.dev", "mise-versions.jdx.dev"},
 	},
 	"bashrc": {
 		readFile: []string{"~/.bashrc", "/etc/bashrc", "/etc/bash.bashrc"},
@@ -254,10 +214,6 @@ func CapabilityNames() []string {
 	return names
 }
 
-// shellNetworkProfile is the nono network profile every brokered command runs
-// under. Fixed by design; not configurable.
-const shellNetworkProfile = "developer"
-
 // agentBase maps a launch agent to its nono base profile and profile name.
 type agentBase struct {
 	extends  string
@@ -271,17 +227,6 @@ var agentBases = map[string]agentBase{
 // baselineEnv / baselineAllowFile are granted for every agent regardless of the
 // selected capabilities, so common shell/locale env and generic files never
 // have to be repeated per project.
-//
-// baselineEnv is shared by Resolve (the launched agent's profile) and
-// ResolveShell (the per-command shell profile). Deliberately NOT included
-// here: "AGENT_SANDBOX_BROKER_SOCKET" (the literal value of
-// broker.SocketEnvVar). It is added only in Resolve, via agentOnlyEnv below,
-// so the per-command sandbox never allow-lists it. A brokered command that
-// could reach the broker socket would let it recurse into
-// broker.Server.Serve, which spawns handlers with no concurrency cap — a
-// host-side nono fork bomb outside the sandbox, not a privilege escalation,
-// but worth foreclosing structurally rather than relying on the socket
-// happening to live outside every path the command profile grants.
 var baselineEnv = []string{"PATH", "HOME", "TERM", "LANG", "LC_ALL", "USER"}
 var baselineAllowFile = []string{"/dev/null"}
 
@@ -309,13 +254,11 @@ var baselineAllowFile = []string{"/dev/null"}
 // so this hands out no credential.
 var baselineGroups = []string{"nix_runtime", "git_config"}
 
-// agentOnlyEnv is granted only to the launched agent's own profile (Resolve),
-// never to the per-command shell profile (ResolveShell). See baselineEnv's
-// comment for why "AGENT_SANDBOX_BROKER_SOCKET" belongs here instead of
-// there: it is the literal value of broker.SocketEnvVar, duplicated (rather
-// than imported) to keep this package free of a dependency on internal/broker.
-// Without it, nono would strip the variable and Claude could never reach the
-// command broker.
+// agentOnlyEnv is granted only to the launched agent's own profile (Resolve).
+// "AGENT_SANDBOX_BROKER_SOCKET" is the literal value of broker.SocketEnvVar,
+// duplicated (rather than imported) to keep this package free of a dependency
+// on internal/broker. Without it, nono would strip the variable and Claude
+// could never reach the command broker.
 var agentOnlyEnv = []string{"AGENT_SANDBOX_BROKER_SOCKET"}
 
 // protectedPrefixes are paths nono denies by default. A raw read/allow grant

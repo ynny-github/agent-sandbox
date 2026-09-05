@@ -1,19 +1,17 @@
 // Package sandboxhost is the single source of truth for host-access
-// capabilities. It expands the config's host sections into the two nono
-// profiles agent-sandbox needs — one for the launched agent (Resolve), one for
-// the shell sandbox each brokered command runs in (ResolveShell) — plus the
-// coordinated permission-deny rules for the agent's own file tools. Both profiles come from
-// the same expansion and differ only in which config sections feed them, so a
-// grant's scope is decided by where it is written, not by a rule in here. The
-// nono-specific JSON rendering lives here; nothing about nono leaks into the
-// user-facing config.
+// capabilities. It expands the config's [sandbox.agent] section into the one
+// nono profile agent-sandbox generates — the launched agent's (Resolve) —
+// plus the coordinated permission-deny rules for the agent's own file tools.
+// The sandbox each brokered command runs in is the operator-written command
+// profile; this package neither generates nor reads it. The nono-specific
+// JSON rendering lives here; nothing about nono leaks into the user-facing
+// config.
 package sandboxhost
 
 import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"slices"
 	"sort"
 	"strings"
 
@@ -33,12 +31,6 @@ type nonoProfile struct {
 	Groups      *profileGroups     `json:"groups,omitempty"`
 	Filesystem  profileFilesystem  `json:"filesystem"`
 	Environment profileEnvironment `json:"environment"`
-	Network     *profileNetwork    `json:"network,omitempty"`
-}
-
-type profileNetwork struct {
-	NetworkProfile string   `json:"network_profile,omitempty"`
-	AllowDomain    []string `json:"allow_domain,omitempty"`
 }
 
 type profileMeta struct {
@@ -61,44 +53,36 @@ type profileEnvironment struct {
 	AllowVars []string `json:"allow_vars,omitempty"`
 }
 
-// sideOptions carries what differs between the two profiles agent-sandbox
-// generates. The grants themselves never differ by side — those come from the
-// config sections expand is handed — so everything here is structural: how the
-// profile is framed, and which built-ins only one side may have.
+// sideOptions carries how the agent's profile is framed: its nono base
+// profile and any env granted on top of the baseline. There used to be a
+// second side (the shell sandbox's) with its own structural differences —
+// a working directory grant, a network section, whether deny rules were
+// emitted — but that profile is gone, so only what the agent side ever
+// used remains.
 type sideOptions struct {
 	extends  string
 	metaName string
-	// extraEnv is granted on top of baselineEnv. Only the agent side passes
-	// anything (agentOnlyEnv, the broker socket); see catalog.go for why.
+	// extraEnv is granted on top of baselineEnv (agentOnlyEnv, the broker
+	// socket).
 	extraEnv []string
-	// workdir, when set, is granted read+write. Only the shell side sets it:
-	// the agent's own working directory comes from its nono base profile.
-	workdir string
-	// network, when set, is the profile's network section. Only the shell side
-	// sets one, so it is also the only side where a capability's domains land;
-	// see catalog.go's capability comment.
-	network *profileNetwork
 	// emitDeny renders the capabilities' Claude permission-deny rules. They
-	// constrain the agent's own file tools, so only the agent side wants them.
+	// constrain the agent's own file tools.
 	emitDeny bool
 }
 
 // expand turns host sections into one nono profile. Sections are unioned in
-// order, so a grant reaches the profile if any of them declares it — the shared
-// [sandbox.shared] base plus that side's own section. Nothing is subtracted:
-// whatever a side must not have is simply not among the sections it is given.
+// order, so a grant reaches the profile if any of them declares it. Nothing is
+// subtracted: whatever must not be granted is simply not among the sections
+// handed in.
 //
 // All output lists are sorted and de-duplicated so the result is deterministic.
 func expand(sections []config.HostConfig, opts sideOptions) (*Resolved, error) {
-	var groups, read, bypass, allowFile, allowVars, allow, readFile, domains, deny []string
+	var groups, read, bypass, allowFile, allowVars, allow, readFile, deny []string
 
 	groups = append(groups, baselineGroups...)
 	allowVars = append(allowVars, baselineEnv...)
 	allowVars = append(allowVars, opts.extraEnv...)
 	allowFile = append(allowFile, baselineAllowFile...)
-	if opts.workdir != "" {
-		allow = append(allow, opts.workdir)
-	}
 
 	for _, h := range sections {
 		for _, name := range h.Capabilities {
@@ -114,7 +98,6 @@ func expand(sections []config.HostConfig, opts sideOptions) (*Resolved, error) {
 			bypass = append(bypass, c.bypass...)
 			allowFile = append(allowFile, c.allowFile...)
 			allowVars = append(allowVars, c.allowVars...)
-			domains = append(domains, c.domains...)
 			for tool, paths := range map[string][]string{"Read": c.denyRead, "Edit": c.denyEdit} {
 				for _, p := range paths {
 					rule, rerr := denyRule(tool, p)
@@ -156,7 +139,6 @@ func expand(sections []config.HostConfig, opts sideOptions) (*Resolved, error) {
 				BypassProtection: sortDedup(bypass),
 			},
 			Environment: profileEnvironment{AllowVars: sortDedup(allowVars)},
-			Network:     withDomains(opts.network, domains),
 		},
 	}
 	if opts.emitDeny {
@@ -190,17 +172,16 @@ func denyRule(tool, path string) (string, error) {
 	return tool + "(/" + path + ")", nil
 }
 
-// Resolve builds the profile for the launched agent: the shared
-// [sandbox.shared] base plus [sandbox.agent], on the given agent's nono base
-// profile. agentOnlyEnv (the broker socket path) is granted here and never in
-// ResolveShell's profile — see baselineEnv's comment in catalog.go.
+// Resolve builds the profile for the launched agent from [sandbox.agent], on
+// the given agent's nono base profile. It is the only profile agent-sandbox
+// generates: the sandbox commands run in is the operator's command profile.
 func Resolve(cfg *config.Config, agent string) (*Resolved, error) {
 	base, ok := agentBases[agent]
 	if !ok {
 		return nil, fmt.Errorf("sandboxhost: unknown agent %q", agent)
 	}
 	return expand(
-		[]config.HostConfig{cfg.Sandbox.Shared, cfg.Sandbox.Agent.HostConfig},
+		[]config.HostConfig{cfg.Sandbox.Agent},
 		sideOptions{
 			extends:  base.extends,
 			metaName: base.metaName,
@@ -210,121 +191,10 @@ func Resolve(cfg *config.Config, agent string) (*Resolved, error) {
 	)
 }
 
-// ResolveShell builds the profile for the shell sandbox a single brokered
-// command runs in: the working directory read+write, the shared
-// [sandbox.shared] base plus [sandbox.shell], and the fixed developer network
-// profile plus the extra domains ShellAllowDomains resolves.
-//
-// It shares expand with Resolve because the two profiles differ only in which
-// config sections feed them: a grant the shell sandbox must not have belongs
-// under [sandbox.agent], where this call never looks.
-func ResolveShell(cfg *config.Config, workdir string) (*Resolved, error) {
-	if strings.TrimSpace(workdir) == "" {
-		return nil, fmt.Errorf("sandboxhost: empty workdir for shell profile")
-	}
-	return expand(
-		[]config.HostConfig{cfg.Sandbox.Shared, cfg.Sandbox.Shell.HostConfig},
-		sideOptions{
-			metaName: "agent-sandbox shell",
-			workdir:  workdir,
-			network:  shellNetwork(cfg),
-		},
-	)
-}
-
-// shellNetwork is the network section every shell profile starts from: the
-// fixed developer profile plus the domains written in [sandbox.shell]. expand
-// adds whatever the declared capabilities bring on top.
-func shellNetwork(cfg *config.Config) *profileNetwork {
-	return &profileNetwork{
-		NetworkProfile: shellNetworkProfile,
-		AllowDomain:    cfg.Sandbox.Shell.AllowDomains,
-	}
-}
-
-// withDomains returns n with domains merged into its allow list, leaving the
-// caller's struct untouched. A nil n stays nil: a side with no network section
-// has nowhere to put them, and inventing one would silently reconfigure the
-// network of a profile that means to inherit it.
-func withDomains(n *profileNetwork, domains []string) *profileNetwork {
-	if n == nil {
-		return nil
-	}
-	merged := *n
-	merged.AllowDomain = sortDedup(concat(n.AllowDomain, domains))
-	return &merged
-}
-
-// ShellGrants are the filesystem paths the shell sandbox can reach outside its
-// working directory — the shared [sandbox.shared] base plus [sandbox.shell],
-// expanded. The working directory and the built-in baseline files are excluded:
-// they are true of every command and say nothing about this config.
-type ShellGrants struct {
-	Write []string // read+write
-	Read  []string // read-only
-}
-
-// ShellFilesystemGrants resolves ShellGrants for cfg. It exists so agent-facing
-// documentation can state what a sandboxed command actually reaches instead of
-// describing the config sections and leaving the agent to work it out — the
-// answer depends entirely on where grants were written.
-func ShellFilesystemGrants(cfg *config.Config) (ShellGrants, error) {
-	r, err := expand([]config.HostConfig{cfg.Sandbox.Shared, cfg.Sandbox.Shell.HostConfig}, sideOptions{})
-	if err != nil {
-		return ShellGrants{}, err
-	}
-	fs := r.profile.Filesystem
-	return ShellGrants{
-		Write: sortDedup(exclude(concat(fs.Allow, fs.AllowFile), baselineAllowFile)),
-		Read:  sortDedup(concat(fs.Read, fs.ReadFile)),
-	}, nil
-}
-
-// ShellAllowDomains are the domains a brokered command may reach on top of the
-// fixed developer network profile: what [sandbox.shell] writes as
-// allow_domains, plus what the capabilities declared for that side bring with
-// them. Like ShellFilesystemGrants it exists so agent-facing documentation can
-// state the resolved answer instead of the config sections it came from.
-func ShellAllowDomains(cfg *config.Config) ([]string, error) {
-	r, err := expand(
-		[]config.HostConfig{cfg.Sandbox.Shared, cfg.Sandbox.Shell.HostConfig},
-		sideOptions{network: shellNetwork(cfg)},
-	)
-	if err != nil {
-		return nil, err
-	}
-	return slices.Clone(r.profile.Network.AllowDomain), nil
-}
-
-func concat(lists ...[]string) []string {
-	var out []string
-	for _, l := range lists {
-		out = append(out, l...)
-	}
-	return out
-}
-
-// exclude drops every entry of in that appears in drop.
-func exclude(in, drop []string) []string {
-	skip := make(map[string]struct{}, len(drop))
-	for _, d := range drop {
-		skip[d] = struct{}{}
-	}
-	out := make([]string, 0, len(in))
-	for _, v := range in {
-		if _, ok := skip[v]; ok {
-			continue
-		}
-		out = append(out, v)
-	}
-	return out
-}
-
 // ProtectedGrants returns the profile's filesystem grants that fall under
 // protectedPrefixes, sorted. Raw grants can never produce one (expand rejects
-// them), so a non-empty result means a capability carrying host credentials was
-// declared for this side — worth surfacing on the shell profile, where it is
-// usually a mistake.
+// them), so a non-empty result means a credential capability (docker, ssh, ...)
+// was declared in one of the sections handed to expand.
 func (r *Resolved) ProtectedGrants() []string {
 	var out []string
 	fs := r.profile.Filesystem

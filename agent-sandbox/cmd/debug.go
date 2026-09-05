@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -87,7 +88,7 @@ func runDebug(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Fprintln(cmd.OutOrStdout(), "command broker:")
 	fmt.Fprintln(cmd.OutOrStdout(), "  "+strings.Join(
-		claude.BrokerArgs(cfg, "nono", selfPath, brokerSocket, cwd), " "))
+		claude.BrokerArgs(cfg, nonoPathForDisplay(), selfPath, brokerSocket, cwd), " "))
 
 	profileJSON, err := r.ProfileJSON()
 	if err != nil {
@@ -98,39 +99,18 @@ func runDebug(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	fmt.Print(formatGeneratedConfigs(profilePath, profileJSON, claude.GithubMCPEnabled(), mcpJSON))
-
-	// The shell profile is the other half of the policy: same expansion, fed by
-	// [sandbox.shared] + [sandbox.shell] instead of [sandbox.agent]. Printing
-	// both is what makes the split inspectable — the difference between them is
-	// exactly what the two sections declare. cwd was already resolved above for
-	// the broker invocation; it is the same working directory here.
-	shellResolved, err := sandboxhost.ResolveShell(cfg, cwd)
-	if err != nil {
-		return err
-	}
-	shellJSON, err := shellResolved.ProfileJSON()
-	if err != nil {
-		return err
-	}
-	fmt.Print(formatShellProfile(shellJSON, shellResolved.ProtectedGrants()))
 	return nil
 }
 
-// formatShellProfile renders the shell sandbox's nono profile, warning when it
-// grants a protected path. Raw grants cannot produce one, so such a path always
-// comes from a credential capability (docker/ssh) declared in the shared
-// [sandbox.shared] instead of [sandbox.agent] — host keys reachable from any
-// sandboxed command, which is rarely what the author meant.
-func formatShellProfile(profileJSON []byte, protected []string) string {
-	var b strings.Builder
-	b.WriteString("\n# generated nono profile for the shell sandbox:\n")
-	b.WriteString(indentJSON(profileJSON))
-	b.WriteString("\n")
-	if len(protected) > 0 {
-		fmt.Fprintf(&b, "\n# warning: brokered commands can read %s\n", strings.Join(protected, ", "))
-		b.WriteString("#          move the capability granting it to [sandbox.agent]\n")
+// nonoPathForDisplay resolves nono the same way the launcher does, so debug
+// prints the binary that will actually run rather than an unresolved literal.
+// It falls back to "nono" when lookup fails: debug must still print something
+// useful when nono is missing, which is itself worth being able to see here.
+func nonoPathForDisplay() string {
+	if path, err := exec.LookPath("nono"); err == nil {
+		return path
 	}
-	return b.String()
+	return "nono"
 }
 
 // formatGeneratedConfigs renders the generated nono profile (no secrets) and

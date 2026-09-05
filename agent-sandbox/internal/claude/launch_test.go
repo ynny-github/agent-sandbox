@@ -432,7 +432,7 @@ func hasFlagValue(args []string, flag, value string) bool {
 
 func TestEnvKeys_ReachProfileAllowVars(t *testing.T) {
 	cfg := &config.Config{ToolMode: "hook"}
-	cfg.Sandbox.Shared.AllowEnv = append(cfg.Sandbox.Shared.AllowEnv, "MY_SECRET_KEY")
+	cfg.Sandbox.Agent.AllowEnv = append(cfg.Sandbox.Agent.AllowEnv, "MY_SECRET_KEY")
 	r, err := sandboxhost.Resolve(cfg, "claude")
 	if err != nil {
 		t.Fatalf("resolve: %v", err)

@@ -1,0 +1,5 @@
+{
+  "meta": { "name": "agent-sandbox commands" },
+  "filesystem": { "allow": ["$WORKDIR"] },
+  "environment": { "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM"] }
+}

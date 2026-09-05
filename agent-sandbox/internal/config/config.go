@@ -11,9 +11,46 @@ import (
 )
 
 type Config struct {
-	ToolMode string        `toml:"tool_mode"`
-	MCP      MCPConfig     `toml:"mcp"`
-	Sandbox  SandboxConfig `toml:"sandbox"`
+	ToolMode string `toml:"tool_mode"`
+	// CommandProfile names the nono profile the command broker runs under. It
+	// is written by the operator in nono's own schema, not generated: every
+	// decision about commands — which may run, what each may touch, which
+	// invocations are refused — lives there. An empty value means the default
+	// name beside this config file.
+	CommandProfile string        `toml:"command_profile"`
+	MCP            MCPConfig     `toml:"mcp"`
+	Sandbox        SandboxConfig `toml:"sandbox"`
+
+	// dir is the directory the project config was loaded from. A relative
+	// command_profile resolves against it rather than the process working
+	// directory, so the same config behaves identically however it is invoked.
+	dir string
+}
+
+// defaultCommandProfileName is the file the broker's profile is read from when
+// command_profile is not set.
+const defaultCommandProfileName = "command-profile.json"
+
+// CommandProfilePath is the absolute path of the nono profile the command
+// broker runs under.
+func (c *Config) CommandProfilePath() string {
+	name := strings.TrimSpace(c.CommandProfile)
+	if name == "" {
+		name = defaultCommandProfileName
+	}
+	if filepath.IsAbs(name) {
+		return name
+	}
+	return filepath.Join(c.dir, name)
+}
+
+// absPath makes p absolute, falling back to p when the working directory
+// cannot be read — a path that stays relative is still better than none.
+func absPath(p string) string {
+	if abs, err := filepath.Abs(p); err == nil {
+		return abs
+	}
+	return p
 }
 
 type MCPConfig struct {
@@ -128,6 +165,7 @@ func Load(path string) (*Config, error) {
 	if derr := checkDeprecated(md); derr != nil {
 		return nil, derr
 	}
+	cfg.dir = filepath.Dir(absPath(path))
 
 	// 3. Union the list fields. When the project omits a list, cfg still holds the
 	//    user's, so the union de-dupes back to the user's list (no change).
@@ -205,6 +243,10 @@ func validate(cfg *Config) (*Config, error) {
 		// valid
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrInvalidToolMode, cfg.ToolMode)
+	}
+
+	if _, err := os.Stat(cfg.CommandProfilePath()); err != nil {
+		return nil, fmt.Errorf("%w: %s", ErrCommandProfileMissing, cfg.CommandProfilePath())
 	}
 
 	// command_output_dir is only consumed by the MCP server path, so require it

@@ -36,6 +36,11 @@ func TestRunDebug_PrintsBrokerSocketGrant(t *testing.T) {
 	if err := os.WriteFile(cfgPath, []byte(cfgBody), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
+	// validate requires a command profile on disk; write the default name
+	// beside the config so this fixture keeps exercising the default path.
+	if err := os.WriteFile(filepath.Join(dir, "command-profile.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatalf("write command profile: %v", err)
+	}
 	orig := configPath
 	configPath = cfgPath
 	t.Cleanup(func() { configPath = orig })

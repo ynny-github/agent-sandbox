@@ -16,3 +16,10 @@ var ErrMovedCommandHost = errors.New("sandbox.command.host has moved: the shell 
 var ErrMovedCommandRouting = errors.New("sandbox.command has moved: command routing is now allow_commands / drop_commands in [sandbox.agent]")
 var ErrMovedAgentHost = errors.New("sandbox.agent.host has moved: write its keys directly under [sandbox.agent]")
 var ErrMovedSharedSection = errors.New("sandbox.host has moved: the base shared by both sandboxes is now [sandbox.shared]")
+
+// ErrCommandProfileMissing fires when the nono profile the broker runs under is
+// not on disk. There is deliberately no built-in fallback: a static default
+// cannot absorb the host differences the capability catalog handles for the
+// agent profile (/nix/store versus /usr/bin), and a profile that looks present
+// but refuses every command is the worst failure mode available.
+var ErrCommandProfileMissing = errors.New("command profile not found; write it, or point command_profile at it")

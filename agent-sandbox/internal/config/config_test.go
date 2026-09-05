@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"testing"
 
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
@@ -31,7 +32,81 @@ func writeToml(t *testing.T, content string) string {
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
+	// Every fixture needs a command profile to satisfy validate's
+	// ErrCommandProfileMissing check; writing the default name beside the
+	// config keeps these fixtures exercising the default-path resolution
+	// instead of pointing command_profile somewhere else.
+	writeFile(t, filepath.Join(filepath.Dir(path), "command-profile.json"), "{}")
 	return path
+}
+
+func writeFile(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+func TestCommandProfilePathDefaultsBesideConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
+	writeFile(t, cfgPath, "tool_mode = \"hook\"\n")
+	writeFile(t, filepath.Join(dir, "command-profile.json"), "{}")
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := filepath.Join(dir, "command-profile.json")
+	if got := cfg.CommandProfilePath(); got != want {
+		t.Errorf("CommandProfilePath() = %q, want %q", got, want)
+	}
+}
+
+func TestCommandProfilePathHonoursRelativeOverride(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
+	writeFile(t, cfgPath, "tool_mode = \"hook\"\ncommand_profile = \"profiles/cmd.json\"\n")
+	writeFile(t, filepath.Join(dir, "profiles", "cmd.json"), "{}")
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := filepath.Join(dir, "profiles", "cmd.json")
+	if got := cfg.CommandProfilePath(); got != want {
+		t.Errorf("CommandProfilePath() = %q, want %q", got, want)
+	}
+}
+
+func TestCommandProfilePathKeepsAbsoluteOverride(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
+	abs := filepath.Join(t.TempDir(), "elsewhere.json")
+	writeFile(t, cfgPath, "tool_mode = \"hook\"\ncommand_profile = "+strconv.Quote(abs)+"\n")
+	writeFile(t, abs, "{}")
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.CommandProfilePath(); got != abs {
+		t.Errorf("CommandProfilePath() = %q, want %q", got, abs)
+	}
+}
+
+func TestValidateRejectsMissingCommandProfile(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
+	writeFile(t, cfgPath, "tool_mode = \"hook\"\n")
+
+	_, err := config.Load(cfgPath)
+	if !errors.Is(err, config.ErrCommandProfileMissing) {
+		t.Fatalf("Load error = %v, want ErrCommandProfileMissing", err)
+	}
 }
 
 const validBase = `

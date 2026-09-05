@@ -131,6 +131,11 @@ func TestResolveExecConfig_FallsBackToConfig(t *testing.T) {
 	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// validate requires a command profile on disk; write the default name
+	// beside the config so this fixture keeps exercising the default path.
+	if err := os.WriteFile(filepath.Join(dir, "command-profile.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	cfg, err := resolveExecConfig("", cfgPath)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

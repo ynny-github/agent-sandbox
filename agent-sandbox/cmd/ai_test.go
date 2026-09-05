@@ -15,6 +15,11 @@ func writeTempConfig(t *testing.T, body string) string {
 	if err := os.WriteFile(p, []byte(body), 0644); err != nil {
 		t.Fatal(err)
 	}
+	// validate requires a command profile on disk; write the default name
+	// beside the config so these fixtures keep exercising the default path.
+	if err := os.WriteFile(filepath.Join(dir, "command-profile.json"), []byte("{}"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	return p
 }
 

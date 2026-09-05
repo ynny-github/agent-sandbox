@@ -22,9 +22,10 @@ import (
 // into whatever the caller supplied independently of the others — a plain
 // bytes.Buffer's internal bookkeeping is not safe for that, and a race there
 // can silently truncate or lose one side's output (measured while chasing
-// Finding B: the refusal message from TestShellExecutorRefusesTwoPolicyCommandsPipedTogether
-// vanished under a bare bytes.Buffer, racing against the writer command's own
-// concurrent, empty stderr drain). The real broker never has this problem:
+// Finding B, task-8-report.md: a message written by one command's own exec
+// handler vanished under a bare bytes.Buffer, racing against a different
+// concurrent command's own, empty stderr drain). The real broker never has
+// this problem:
 // internal/broker/server.go's frameWriter already serializes every write
 // with its own mutex, for the same reason.
 type syncBuffer struct {
@@ -364,12 +365,17 @@ func TestExecuteRejectsANonAbsoluteCwd(t *testing.T) {
 }
 
 // fakePolicyShim creates a real, executable file at
-// <dir>/nono-tool-sandbox-<id>/shims/<name>, symlinked to a real host binary
-// (cat, chosen because it is a plain stdin-to-stdout passthrough, which is
-// exactly what these tests need to build a pipeline out of). This is the
-// directory shape isPolicyControlledPath matches: it lets these tests drive
-// refusePolicyToPolicyPipe through the executor's public API, without a real
-// nono session — the shape of the path is all the heuristic ever looks at.
+// <dir>/nono-tool-sandbox-<id>/shims/<name>, a script that execs "cat" by
+// name. This is the directory shape isPolicyControlledPath matches, which
+// lets these tests drive refusePolicyPipeChains through the executor's
+// public API without a real nono session — the shape of the resolved path is
+// all the check ever looks at. cat, not a symlink straight to its own
+// resolved binary, because on a host where coreutils are one combined
+// multi-call binary dispatching on argv[0] (NixOS, notably — see
+// task-8-report.md), a symlink named anything other than "cat" would exec
+// that binary with the wrong argv[0] and fail outright. Shelling out here is
+// fine: this file drives the executor under test from the host, unsandboxed,
+// same as every other fixture in this file.
 func fakePolicyShim(t *testing.T, dir, id, name string) string {
 	t.Helper()
 	if _, err := exec.LookPath("cat"); err != nil {
@@ -379,13 +385,6 @@ func fakePolicyShim(t *testing.T, dir, id, name string) string {
 	if err := os.MkdirAll(shimsDir, 0o755); err != nil {
 		t.Fatalf("mkdir shims dir: %v", err)
 	}
-	// A real script that execs "cat" by name, not a symlink straight to cat's
-	// own resolved binary: on a host where coreutils are one combined
-	// multi-call binary dispatching on argv[0] (NixOS, notably — see
-	// task-8-report.md), a symlink named anything other than "cat" would
-	// exec that binary with the wrong argv[0] and fail outright. Shelling out
-	// here is fine: this file drives the executor under test from the host,
-	// unsandboxed, same as every other fixture in this file.
 	script := filepath.Join(shimsDir, name)
 	if err := os.WriteFile(script, []byte("#!/bin/sh\nexec cat\n"), 0o755); err != nil {
 		t.Fatalf("write fake shim script: %v", err)
@@ -393,15 +392,13 @@ func fakePolicyShim(t *testing.T, dir, id, name string) string {
 	return shimsDir
 }
 
-// TestShellExecutorRefusesTwoPolicyCommandsPipedTogether covers Finding B
+// TestShellExecutorRefusesTwoPolicyCommandsInOnePipe covers Finding B
 // (task-8-report.md): a pipe with a policy-controlled command on both ends is
 // measured to hang against a real nono session, for a reason entirely inside
 // nono's own process-spawning machinery — outside anything this package
-// controls. Rather than let it hang, execHandler refuses it up front. This
-// test cannot reproduce the hang itself (a host binary has no shim to leak a
-// descriptor from), but it can and does verify the refusal actually fires
-// for a resolved path shaped like a real nono shim.
-func TestShellExecutorRefusesTwoPolicyCommandsPipedTogether(t *testing.T) {
+// controls. refusePolicyPipeChains catches this statically, before either
+// side of the pipe ever runs.
+func TestShellExecutorRefusesTwoPolicyCommandsInOnePipe(t *testing.T) {
 	dir := t.TempDir()
 	shimsDir := fakePolicyShim(t, dir, "refuse-test", "fakepolicy")
 	t.Setenv("PATH", shimsDir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -418,11 +415,38 @@ func TestShellExecutorRefusesTwoPolicyCommandsPipedTogether(t *testing.T) {
 	}
 }
 
-// TestShellExecutorAllowsAPolicyCommandPipedToAFloorCommand is the control
-// case in both directions: only a policy command on *both* ends is refused.
-// A policy command paired with an ordinary floor command must keep working —
-// this is the overwhelmingly common shape in practice (git piped into rg,
-// head, ...), and must not pay any real latency for the check either.
+// TestShellExecutorRefusesAFloorCommandBetweenTwoPolicyCommands widens the
+// detection past a direct 2-stage pipe, per the ruling on Finding B: a
+// policy command feeding a policy command through an intermediate floor
+// command (`policy | floor | policy`) is exposed to the identical hazard,
+// since all three stages still run concurrently and the leaked reference
+// this refusal exists to route around does not care which stage is adjacent
+// to which.
+func TestShellExecutorRefusesAFloorCommandBetweenTwoPolicyCommands(t *testing.T) {
+	dir := t.TempDir()
+	shimsDir := fakePolicyShim(t, dir, "widen-test", "fakepolicy")
+	t.Setenv("PATH", shimsDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	code, out, errOut := runShell(t, dir, "fakepolicy | cat | fakepolicy", "hello\n")
+	if code != 126 {
+		t.Errorf("exit = %d, want 126 (refused)", code)
+	}
+	if out != "" {
+		t.Errorf("stdout = %q, want empty: the pipeline should be refused before any stage runs", out)
+	}
+	if !strings.Contains(errOut, "refused") {
+		t.Errorf("stderr = %q, want it to explain the refusal", errOut)
+	}
+}
+
+// TestShellExecutorAllowsAPolicyCommandPipedToAFloorCommand and
+// TestShellExecutorAllowsABuiltinPipedToAPolicyCommand are the control cases:
+// only two-or-more policy commands in the same pipe chain are refused. A
+// policy command paired with an ordinary floor command, or with a shell
+// builtin (which never reaches LookPathDir/execve at all — mvdan.cc/sh
+// dispatches it internally), must keep working. This is the overwhelmingly
+// common shape in practice (git piped into rg, head, or fed by echo, ...),
+// and must not pay any real latency for the check either.
 func TestShellExecutorAllowsAPolicyCommandPipedToAFloorCommand(t *testing.T) {
 	dir := t.TempDir()
 	shimsDir := fakePolicyShim(t, dir, "allow-test", "fakepolicy")
@@ -444,5 +468,19 @@ func TestShellExecutorAllowsAPolicyCommandPipedToAFloorCommand(t *testing.T) {
 				t.Errorf("stdout = %q, want %q", out, "hello")
 			}
 		})
+	}
+}
+
+func TestShellExecutorAllowsABuiltinPipedToAPolicyCommand(t *testing.T) {
+	dir := t.TempDir()
+	shimsDir := fakePolicyShim(t, dir, "builtin-test", "fakepolicy")
+	t.Setenv("PATH", shimsDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	code, out, errOut := runShell(t, dir, "echo hello | fakepolicy", "")
+	if code != 0 {
+		t.Errorf("exit = %d, want 0; stderr = %q", code, errOut)
+	}
+	if strings.TrimSpace(out) != "hello" {
+		t.Errorf("stdout = %q, want %q", out, "hello")
 	}
 }

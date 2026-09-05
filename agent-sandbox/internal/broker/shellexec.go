@@ -9,9 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
-	"time"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
@@ -48,6 +46,20 @@ func (e *ShellExecutor) Run(ctx context.Context, command, cwd string,
 		return 2, nil
 	}
 
+	// See refusePolicyPipeChains: a pipe stage with a policy-controlled
+	// command on both ends is measured to hang against a real nono session,
+	// for a reason entirely inside nono's own process-spawning machinery —
+	// outside anything this package controls (task-8-report.md's Finding B).
+	// Detecting and refusing it statically, before any command in the line
+	// has run, is deterministic and side-effect-free in a way that trying to
+	// detect and recover from the hang at runtime was not.
+	if names, refuse := refusePolicyPipeChains(file, cwd, expand.ListEnviron(os.Environ()...)); refuse {
+		fmt.Fprintf(stderr,
+			"agent-sandbox: refused: this pipeline pipes two or more policy-controlled commands together (%s), a combination measured to hang and strand a process rather than exit cleanly. Run them as separate commands instead of piping them directly together.\n",
+			strings.Join(names, ", "))
+		return 126, nil
+	}
+
 	runner, err := interp.New(
 		interp.Dir(cwd),
 		interp.StdIO(stdin, stdout, stderr),
@@ -67,6 +79,103 @@ func (e *ShellExecutor) Run(ctx context.Context, command, cwd string,
 	return 0, nil
 }
 
+// isPolicyControlledPath reports whether path is a nono-generated shim for a
+// policy-controlled command, rather than a floor command's real binary,
+// judging only by the resolved path's own shape. This is a heuristic over
+// nono's own directory naming ("<TMPDIR>/nono-tool-sandbox-<id>/shims/<name>",
+// measured directly), not a documented API: nono gives this process no other
+// signal that distinguishes the two tiers from a resolved path alone. A
+// future nono that renames this directory would make this heuristic stop
+// matching — the failure mode is a return to the hang refusePolicyPipeChains
+// exists to prevent, not a false refusal, since that function only acts when
+// this matches.
+func isPolicyControlledPath(path string) bool {
+	shimsDir := filepath.Dir(path)
+	return filepath.Base(shimsDir) == "shims" &&
+		strings.Contains(filepath.Base(filepath.Dir(shimsDir)), "nono-tool-sandbox-")
+}
+
+// refusePolicyPipeChains reports whether file's parsed command line contains
+// a pipe (`|` or `|&`) with two or more stages that resolve, before anything
+// runs, to a policy-controlled command — the shape measured to hang a real
+// nono session and strand a process rather than exit (task-8-report.md's
+// Finding B). names lists which resolved command names triggered the
+// refusal, for the caller's error message.
+//
+// This is a static, parse-time check: LookPathDir is used only to learn
+// where a literal command name would resolve, never to run anything, so
+// there is no race and no side effect to get wrong — the two properties a
+// runtime detection attempt (tried and abandoned; see the doc comment on the
+// old execHandler ordering this replaced) could not deliver.
+//
+// Deliberately narrow, not a general "two policy commands running
+// concurrently in one request" detector: it inspects only a literal pipe
+// chain's own immediate stages (`a | b | c`, flattened through nested
+// Pipe/PipeAll operators), each stage's command name only when it is a
+// simple, unexpanded literal. It does not follow into a stage that is itself
+// a compound command (a `{ }` group, `if`, `while`, a subshell, ...) to find
+// a pipe buried inside it, and it has no way to see a policy command reached
+// through backgrounding (`policy & policy`) or command substitution
+// (`$(policy) | policy`) — both are exposed to the same underlying hazard,
+// by the same reasoning, but neither is a literal pipe stage this function
+// can resolve without simulating expansion or execution, which is exactly
+// what staying static rules out. A profile author relying on this as a
+// complete guarantee against the hang, rather than the specific shape it
+// covers, would be relying on more than it delivers.
+func refusePolicyPipeChains(file *syntax.File, cwd string, env expand.Environ) (names []string, refuse bool) {
+	var found []string
+	syntax.Walk(file, func(n syntax.Node) bool {
+		bc, ok := n.(*syntax.BinaryCmd)
+		if !ok || (bc.Op != syntax.Pipe && bc.Op != syntax.PipeAll) {
+			return true
+		}
+		var policyNames []string
+		for _, stage := range flattenPipeStages(bc) {
+			call, ok := stage.Cmd.(*syntax.CallExpr)
+			if !ok || len(call.Args) == 0 {
+				continue
+			}
+			name := call.Args[0].Lit()
+			if name == "" {
+				continue // not a simple literal; cannot resolve statically
+			}
+			path, err := interp.LookPathDir(cwd, env, name)
+			if err != nil {
+				continue
+			}
+			if isPolicyControlledPath(path) {
+				policyNames = append(policyNames, name)
+			}
+		}
+		if len(policyNames) >= 2 {
+			found = append(found, policyNames...)
+		}
+		return false // this chain is fully inspected; do not also revisit its nested Pipe/PipeAll nodes
+	})
+	return found, len(found) > 0
+}
+
+// flattenPipeStages returns bc's pipe chain as an ordered list of stages,
+// flattening through any nested Pipe/PipeAll operator (`a | b | c` parses as
+// nested BinaryCmd nodes) so a 3-or-more-stage pipe is inspected as a whole
+// rather than as two independent 2-stage checks that would each see only
+// half of it.
+func flattenPipeStages(bc *syntax.BinaryCmd) []*syntax.Stmt {
+	var stages []*syntax.Stmt
+	var collect func(s *syntax.Stmt)
+	collect = func(s *syntax.Stmt) {
+		if inner, ok := s.Cmd.(*syntax.BinaryCmd); ok && (inner.Op == syntax.Pipe || inner.Op == syntax.PipeAll) {
+			collect(inner.X)
+			collect(inner.Y)
+			return
+		}
+		stages = append(stages, s)
+	}
+	collect(bc.X)
+	collect(bc.Y)
+	return stages
+}
+
 // execHandler is the only place this process performs an execve. Everything the
 // interpreter treats as a simple command — and nothing else — arrives here.
 func execHandler(ctx context.Context, args []string) error {
@@ -80,13 +189,6 @@ func execHandler(ctx context.Context, args []string) error {
 	if err != nil {
 		fmt.Fprintf(hc.Stderr, "agent-sandbox: %s: command not found\n", args[0])
 		return interp.NewExitStatus(127)
-	}
-
-	// See refusePolicyToPolicyPipe: a pipe with a policy-controlled command on
-	// both ends is measured to hang, for a reason outside this file's own
-	// control, so it is refused rather than attempted.
-	if err := refusePolicyToPolicyPipe(hc, path, args[0]); err != nil {
-		return err
 	}
 
 	cmd := exec.CommandContext(ctx, path, args[1:]...)
@@ -133,7 +235,19 @@ func execHandler(ctx context.Context, args []string) error {
 	// Wait closes the parent's read end of every StdoutPipe/StderrPipe pipe as
 	// soon as the process exits ("it is incorrect to call Wait before all reads
 	// from the pipe have completed"); calling it before every drain has
-	// finished risks truncating output that was still in flight.
+	// finished risks truncating output that was still in flight. A prior
+	// version of this function tried waiting for process exit concurrently
+	// with draining, to unblock a drain left waiting on a leaked fd it has no
+	// other way to detect (see ShellExecutor.Run's pipe pre-check for the
+	// hazard this refers to). Measured against a real nono session, that did
+	// not reliably work: racing cmd.Wait() itself against an in-flight drain
+	// truncates output that had not been read yet (Go's own Cmd.Wait
+	// unconditionally closes every tracked pipe the instant it reaps the
+	// process), and reading process state from /proc instead to avoid that
+	// still left the hang reproducing in most runs, for reasons inside nono's
+	// own process-spawning machinery that a read ordering fix on this side of
+	// the boundary cannot address. See task-8-report.md's Finding B fix
+	// report for what was tried and measured.
 	if err := cmd.Start(); err != nil {
 		for _, d := range drains {
 			d.abort()
@@ -155,136 +269,6 @@ func execHandler(ctx context.Context, args []string) error {
 	}
 	fmt.Fprintf(hc.Stderr, "agent-sandbox: %s: %v\n", args[0], err)
 	return interp.NewExitStatus(126)
-}
-
-// policyPipeWriters records, by a pipe's kernel inode number, that a
-// policy-controlled command's exec handler is currently writing into it. See
-// refusePolicyToPolicyPipe.
-var policyPipeWriters sync.Map // map[uint64]struct{}
-
-// policyPipePollWindow bounds how long a policy-controlled reader waits to
-// discover whether its own upstream pipe is fed by a policy-controlled
-// writer, before concluding it is not (an ordinary floor command, or nothing
-// at all). mvdan.cc/sh runs a pipe's two sides concurrently with no ordering
-// guarantee, so a reader that finds no registration on its first check cannot
-// yet tell "the writer is a floor command" from "the writer is a policy
-// command whose goroutine has not run yet" — polling briefly resolves the
-// ambiguity without either side ever blocking indefinitely.
-//
-// The window is short deliberately: it is paid only by a policy-controlled
-// reader (a floor command reading from anything, or any writer into a floor
-// command, costs nothing here), and only for as long as it takes the
-// concurrent writer goroutine to reach its own registration point, which
-// measured in practice is on the order of microseconds, not milliseconds.
-const policyPipePollWindow = 30 * time.Millisecond
-const policyPipePollInterval = 2 * time.Millisecond
-
-// isPolicyControlledPath reports whether path is a nono-generated shim for a
-// policy-controlled command, rather than a floor command's real binary,
-// judging only by the resolved path's own shape. This is a heuristic over
-// nono's own directory naming ("<TMPDIR>/nono-tool-sandbox-<id>/shims/<name>",
-// measured directly), not a documented API: nono gives the process it execs no
-// other signal that distinguishes the two tiers from the resolved path alone.
-// A future nono that renames this directory would make this heuristic stop
-// matching — the failure mode is a return to today's hang, not a false
-// refusal, since refusePolicyToPolicyPipe only acts when it matches.
-func isPolicyControlledPath(path string) bool {
-	shimsDir := filepath.Dir(path)
-	return filepath.Base(shimsDir) == "shims" &&
-		strings.Contains(filepath.Base(filepath.Dir(shimsDir)), "nono-tool-sandbox-")
-}
-
-// pipeInode reports the kernel inode number identifying rw's underlying
-// anonymous pipe, and whether rw is in fact a pipe-backed *os.File at all —
-// interp.HandlerContext.Stdout is only sometimes one (mvdan.cc/sh assigns a
-// real *os.File specifically for a syntax.Pipe/PipeAll operator's ends; a
-// caller-supplied stream, a real file redirect, or the top-level request's own
-// stdout/stderr are not). Both ends of one os.Pipe() report the same inode
-// number, which is what lets a writer and a reader on the same pipeline stage
-// recognize each other without sharing any Go-level reference.
-func pipeInode(rw any) (uint64, bool) {
-	f, ok := rw.(*os.File)
-	if !ok {
-		return 0, false
-	}
-	fi, err := f.Stat()
-	if err != nil || fi.Mode()&os.ModeNamedPipe == 0 {
-		return 0, false
-	}
-	st, ok := fi.Sys().(*syscall.Stat_t)
-	if !ok {
-		return 0, false
-	}
-	return st.Ino, true
-}
-
-// refusePolicyToPolicyPipe detects a pipeline stage with a policy-controlled
-// command on both ends and refuses it before either side starts, rather than
-// let it hang.
-//
-// Measured directly: a pipe stage with a policy-controlled command on both
-// ends produces its complete, correct output and then never exits, stranding
-// the reader's shim process permanently in a blocking read (confirmed via
-// /proc: the reader's shim sits in anon_pipe_read; the broker's own stdin
-// pipe to it is still open on the broker's side, because the broker's write
-// end of the *writer's* own interposed stdout/stderr pipes is — in turn —
-// still held open by the reader's shim/worker process, which inherited it
-// purely through fork, unrelated to anything it is actually doing). The
-// leaked reference lives entirely inside nono's own process-spawning
-// machinery — its supervisor process retains file descriptors handed to it
-// while servicing one exec request past that request's own completion, and
-// those descriptors leak via ordinary fork inheritance into the next
-// concurrently (or subsequently) spawned worker process within the same
-// session. No amount of care in interposeOutputs changes what a *separate,
-// external* nono process does with fds it was handed for a different,
-// concurrent request; there is nothing left to fix on this side of the
-// process boundary. Full detail: task-8-report.md's Finding B fix report.
-//
-// See policyPipeWriters and policyPipePollWindow for how the race between a
-// pipe's two concurrently-running sides is resolved without either side
-// blocking indefinitely.
-func refusePolicyToPolicyPipe(hc interp.HandlerContext, path, name string) error {
-	if !isPolicyControlledPath(path) {
-		return nil
-	}
-
-	if inode, ok := pipeInode(hc.Stdout); ok {
-		// A policy-controlled writer. Register and proceed immediately —
-		// polling here would delay every policy-command pipe whose reader is
-		// an ordinary floor command, which is the common case.
-		policyPipeWriters.Store(inode, struct{}{})
-		go func() {
-			// Bounded past every reader's own poll window, so a reader on
-			// this exact pipe can never miss the registration; short enough
-			// that a later, unrelated pipe reusing the same kernel inode
-			// number (possible, if unlikely, once this pipe is fully closed)
-			// is not mistaken for this one.
-			time.Sleep(policyPipePollWindow + 20*time.Millisecond)
-			policyPipeWriters.Delete(inode)
-		}()
-		return nil
-	}
-
-	inode, ok := pipeInode(hc.Stdin)
-	if !ok {
-		return nil
-	}
-	// A policy-controlled reader. The writer may not have registered yet
-	// purely from goroutine scheduling, not because it is a floor command —
-	// poll briefly before concluding the latter.
-	deadline := time.Now().Add(policyPipePollWindow)
-	for {
-		if _, found := policyPipeWriters.Load(inode); found {
-			fmt.Fprintf(hc.Stderr,
-				"agent-sandbox: %s: refused: this pipeline pipes one policy-controlled command into another, a combination measured to hang and strand a process rather than exit or refuse cleanly. Run them as separate commands (through a temp file, or two agent-sandbox exec calls) instead of piping one directly into the other.\n",
-				name)
-			return interp.NewExitStatus(126)
-		}
-		if time.Now().After(deadline) {
-			return nil
-		}
-		time.Sleep(policyPipePollInterval)
-	}
 }
 
 // outputDrain copies one command's output pipe into the interpreter's writer.

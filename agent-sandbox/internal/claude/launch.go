@@ -98,12 +98,10 @@ func ValidatePassthrough(claudeOpts []string, githubMCPEnabled bool) error {
 // BuildArgs constructs the nono executable path and the argv used to launch
 // Claude under the sandbox for cfg. It injects the generated profile at
 // profilePath via `--profile` (no user nono options are forwarded) and, in
-// hook mode, grants read-only access to the frozen policy snapshot at
-// snapshotPath and injects the PreToolUse hook via `claude --settings`,
-// routing it through that snapshot; otherwise it disables the Bash and
-// Monitor tools. denyRules are folded into the injected settings as
-// additional capability denies.
-func BuildArgs(cfg *config.Config, opts Options, snapshotPath, mcpConfigPath,
+// hook mode, injects the PreToolUse hook via `claude --settings`; otherwise it
+// disables the Bash and Monitor tools. denyRules are folded into the injected
+// settings as additional capability denies.
+func BuildArgs(cfg *config.Config, opts Options, mcpConfigPath,
 	profilePath string, denyRules []string, brokerSocket string) (string, []string, error) {
 	nonoPath, err := exec.LookPath("nono")
 	if err != nil {
@@ -118,9 +116,6 @@ func BuildArgs(cfg *config.Config, opts Options, snapshotPath, mcpConfigPath,
 		}
 	}
 
-	if cfg.ToolMode == "hook" && snapshotPath != "" {
-		args = append(args, "--read-file", snapshotPath)
-	}
 	if mcpConfigPath != "" {
 		args = append(args, "--read-file", mcpConfigPath)
 	}
@@ -155,7 +150,6 @@ func BuildArgs(cfg *config.Config, opts Options, snapshotPath, mcpConfigPath,
 // runDeps holds the launcher's collaborators so run can be tested without
 // touching the command broker, the real process, or os.Exit.
 type runDeps struct {
-	writeSnapshot  func(*config.Config) (string, func(), error)
 	writeMCPConfig func(*config.Config) (string, func(), error)
 	writeProfile   func(*config.Config) (path string, deny []string, cleanup func(), err error)
 	startBroker    func(*config.Config) (socket string, cleanup func(), err error)
@@ -169,7 +163,6 @@ type runDeps struct {
 // teardown.
 func Run(cfg *config.Config, opts Options) error {
 	return run(cfg, opts, runDeps{
-		writeSnapshot:  policysnapshot.Write,
 		writeMCPConfig: writeGithubMCPConfig,
 		writeProfile: func(c *config.Config) (string, []string, func(), error) {
 			r, err := sandboxhost.Resolve(c, agentName)
@@ -189,25 +182,6 @@ func Run(cfg *config.Config, opts Options) error {
 }
 
 func run(cfg *config.Config, opts Options, d runDeps) error {
-	var snapshotPath string
-	var cleanupSnapshot func()
-	if cfg.ToolMode == "hook" {
-		path, cleanup, err := d.writeSnapshot(cfg)
-		if err != nil {
-			return fmt.Errorf("policy snapshot: %w", err)
-		}
-		cleanupSnapshot = cleanup
-		snapshotPath = path
-	}
-	// The deferred cleanup covers early error returns. On the success path we
-	// call cleanupSnapshot explicitly before d.exit and nil it out, because
-	// d.exit is os.Exit in production and os.Exit skips deferred functions.
-	defer func() {
-		if cleanupSnapshot != nil {
-			cleanupSnapshot()
-		}
-	}()
-
 	var mcpConfigPath string
 	var cleanupMCP func()
 	if GithubMCPEnabled() {
@@ -244,7 +218,7 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 		}
 	}()
 
-	nonoPath, nonoArgs, err := BuildArgs(cfg, opts, snapshotPath, mcpConfigPath, profilePath, denyRules, brokerSocket)
+	nonoPath, nonoArgs, err := BuildArgs(cfg, opts, mcpConfigPath, profilePath, denyRules, brokerSocket)
 	if err != nil {
 		return err
 	}
@@ -255,10 +229,6 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 
 	code := d.supervise(nonoPath, nonoArgs)
 
-	if cleanupSnapshot != nil {
-		cleanupSnapshot()
-		cleanupSnapshot = nil
-	}
 	if cleanupMCP != nil {
 		cleanupMCP()
 		cleanupMCP = nil

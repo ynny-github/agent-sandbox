@@ -28,14 +28,6 @@ var explainTmplText string
 // template cannot fail, so template.Must is safe.
 var explainTmpl = template.Must(template.New("explain").Parse(explainTmplText))
 
-// SafeCommand describes one `agent-sandbox safe <tool>` wrapper for the explain
-// output. Use is the subcommand's usage (e.g. "git [args...]"); Short is its
-// one-line description.
-type SafeCommand struct {
-	Use   string
-	Short string
-}
-
 // explainView is the data handed to explain.tmpl.
 type explainView struct {
 	Hook bool
@@ -50,22 +42,19 @@ type explainView struct {
 	// lists what may actually be written rather than a prose sample that goes
 	// stale when a bundle is added.
 	Capabilities []string
-	Safe         []SafeCommand
 }
 
 // Explain renders a Markdown description of the sandbox environment from cfg,
 // for the AI agent to read on demand via `agent-sandbox ai explain`. The prose
 // lives in explain.tmpl; this function only prepares the view data. The caller
-// passes the config path it loaded cfg from (so the editing section names the
-// file the agent must actually edit) and the available `safe` wrappers (from
-// the live command tree) so the explain output points agents at them.
-func Explain(cfg *config.Config, configPath string, safe ...SafeCommand) string {
+// passes the config path it loaded cfg from, so the editing section names the
+// file the agent must actually edit.
+func Explain(cfg *config.Config, configPath string) string {
 	view := explainView{
 		Hook:         cfg.ToolMode == "hook",
 		ConfigPath:   configPath,
 		ProfilePath:  cfg.CommandProfilePath(),
 		Capabilities: sandboxhost.CapabilityNames(),
-		Safe:         safe,
 	}
 
 	var buf bytes.Buffer

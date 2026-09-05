@@ -13,7 +13,6 @@ import (
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/claude"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/envflag"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/policysnapshot"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandboxhost"
 )
 
@@ -44,16 +43,6 @@ func runDebug(cmd *cobra.Command, args []string) error {
 	// Agent section, matching cmd/claude.go: --env is for the launched agent.
 	cfg.Sandbox.Agent.AllowEnv = append(cfg.Sandbox.Agent.AllowEnv, envKeys...)
 
-	var snapshotPath string
-	if cfg.ToolMode == "hook" {
-		path, cleanup, werr := policysnapshot.Write(cfg)
-		if werr != nil {
-			return fmt.Errorf("policy snapshot: %w", werr)
-		}
-		defer cleanup()
-		snapshotPath = path
-	}
-
 	r, err := sandboxhost.Resolve(cfg, "claude")
 	if err != nil {
 		return err
@@ -72,7 +61,7 @@ func runDebug(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	_, nonoArgs, err := claude.BuildArgs(cfg, opts, snapshotPath, "", profilePath, r.DenyRules, brokerSocket)
+	_, nonoArgs, err := claude.BuildArgs(cfg, opts, "", profilePath, r.DenyRules, brokerSocket)
 	if err != nil {
 		return err
 	}

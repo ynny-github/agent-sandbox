@@ -6,11 +6,7 @@
 {{else}}- The Bash and Monitor tools are disabled; use the `run_command` MCP tool to run shell commands.
 - Command output is written to files; read the returned stdout/stderr paths.
 {{end}}- Every command runs through a host-side command broker, under the operator-written nono profile at `{{.ProfilePath}}`. Which commands that profile allows, and how each may be invoked, is not `agent-sandbox.toml`'s concern — it is the profile's.
-{{if .Safe}}
-## Safe command wrappers
-Prefer these validated wrappers over running the tool directly; each refuses known-dangerous invocations before running:
-{{range .Safe}}- `agent-sandbox safe {{.Use}}` — {{.Short}}
-{{end}}{{end}}
+
 ## Changing the config
 The sandbox is configured by `{{.ConfigPath}}`. You may edit it directly.
 

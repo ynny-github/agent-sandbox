@@ -68,7 +68,7 @@ func TestValidatePassthrough_MCPConfigAllowedWhenDisabled(t *testing.T) {
 func TestBuildArgs_NonoNotInPath(t *testing.T) {
 	t.Setenv("PATH", "")
 	cfg := &config.Config{}
-	if _, _, err := BuildArgs(cfg, Options{}, "", "", "", nil, ""); err == nil {
+	if _, _, err := BuildArgs(cfg, Options{}, "", "", nil, ""); err == nil {
 		t.Fatal("expected error when nono not in PATH, got nil")
 	}
 }
@@ -137,7 +137,7 @@ func argsIndex(args []string, target string) int {
 func TestBuildArgs_AlwaysUsesWrap(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{}
-	_, args, err := BuildArgs(cfg, Options{}, "", "", "", nil, "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "", nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestBuildArgs_AlwaysUsesWrap(t *testing.T) {
 func TestBuildArgs_McpMode_DisablesTools(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{}, "", "", "", nil, "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "", nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestBuildArgs_McpMode_DisablesTools(t *testing.T) {
 func TestBuildArgs_HookMode_InjectsSettings(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "hook"}
-	_, args, err := BuildArgs(cfg, Options{}, "/state/policy-1.json", "", "", nil, "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "", nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -176,14 +176,6 @@ func TestBuildArgs_HookMode_InjectsSettings(t *testing.T) {
 	}
 
 	ci := argsIndex(args, "claude")
-
-	ri := argsIndex(args, "--read-file")
-	if ri < 0 || ri+1 >= len(args) || args[ri+1] != "/state/policy-1.json" {
-		t.Fatalf("hook mode should grant --read-file for the snapshot; got %v", args)
-	}
-	if ri > ci {
-		t.Errorf("--read-file must appear before claude; got %v", args)
-	}
 
 	si := argsIndex(args, "--settings")
 	if si < 0 || si+1 >= len(args) {
@@ -202,7 +194,7 @@ func TestBuildArgs_HookMode_InjectsSettings(t *testing.T) {
 func TestBuildArgs_McpMode_NoReadFile(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{}, "", "", "", nil, "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "", nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -214,7 +206,7 @@ func TestBuildArgs_McpMode_NoReadFile(t *testing.T) {
 func TestBuildArgs_InjectsProfileBeforeClaude(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{}, "", "", "/tmp/asb-profile-1.json", nil, "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "/tmp/asb-profile-1.json", nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -231,7 +223,7 @@ func TestBuildArgs_InjectsProfileBeforeClaude(t *testing.T) {
 func TestBuildArgs_InjectsCapabilityDeny(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{}, "", "", "/tmp/p.json", []string{"Read(~/.ssh/**)"}, "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "/tmp/p.json", []string{"Read(~/.ssh/**)"}, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -244,7 +236,7 @@ func TestBuildArgs_InjectsCapabilityDeny(t *testing.T) {
 func TestBuildArgs_ClaudeOptsAfterClaude(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{ClaudeOpts: []string{"--model", "opus"}}, "", "", "", nil, "")
+	_, args, err := BuildArgs(cfg, Options{ClaudeOpts: []string{"--model", "opus"}}, "", "", nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -261,7 +253,7 @@ func TestBuildArgs_ClaudeOptsAfterClaude(t *testing.T) {
 func TestBuildArgs_InjectsSystemPrompt(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{}, "", "", "", nil, "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "", nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -280,7 +272,7 @@ func TestBuildArgs_InjectsSystemPrompt(t *testing.T) {
 func TestBuildArgs_InjectsMCPConfig(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{}, "", "/tmp/asb-mcp-1.json", "", nil, "")
+	_, args, err := BuildArgs(cfg, Options{}, "/tmp/asb-mcp-1.json", "", nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -306,7 +298,7 @@ func TestBuildArgs_InjectsMCPConfig(t *testing.T) {
 func TestBuildArgs_HookMode_MCPConfig_DenyAndHooks(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "hook"}
-	_, args, err := BuildArgs(cfg, Options{}, "/state/p.json", "/tmp/asb-mcp-1.json", "", nil, "")
+	_, args, err := BuildArgs(cfg, Options{}, "/tmp/asb-mcp-1.json", "", nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -323,7 +315,7 @@ func TestBuildArgs_HookMode_MCPConfig_DenyAndHooks(t *testing.T) {
 func TestBuildArgs_NoMCPConfig_Unchanged(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{}, "", "", "", nil, "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "", nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -407,7 +399,7 @@ func TestParseArgs_EnvRefs(t *testing.T) {
 func TestBuildArgs_GrantsBrokerSocket(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "hook"}
-	_, args, err := BuildArgs(cfg, Options{}, "", "", "", nil, "/tmp/b.sock")
+	_, args, err := BuildArgs(cfg, Options{}, "", "", nil, "/tmp/b.sock")
 	if err != nil {
 		t.Fatalf("BuildArgs() error = %v", err)
 	}
@@ -553,55 +545,6 @@ func TestRun_SetsBrokerSocketEnvBeforeSupervise(t *testing.T) {
 	if gotEnv != wantSocket {
 		t.Errorf("%s at supervise time = %q, want %q (the broker socket, set before supervise runs)",
 			broker.SocketEnvVar, gotEnv, wantSocket)
-	}
-}
-
-func TestRun_HookMode_WritesAndCleansSnapshot(t *testing.T) {
-	makeFakeNono(t)
-	wrote, cleaned := 0, 0
-	err := run(&config.Config{ToolMode: "hook"}, Options{}, runDeps{
-		writeSnapshot: func(*config.Config) (string, func(), error) {
-			wrote++
-			return "/state/policy-1.json", func() { cleaned++ }, nil
-		},
-		writeProfile: func(*config.Config) (string, []string, func(), error) {
-			return "/tmp/asb-profile-1.json", nil, func() {}, nil
-		},
-		startBroker: testBrokerStart("/tmp/test.sock", nil),
-		supervise:   func(string, []string) int { return 0 },
-		exit:        func(int) {},
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if wrote != 1 {
-		t.Errorf("writeSnapshot called %d times, want 1", wrote)
-	}
-	if cleaned != 1 {
-		t.Errorf("cleanup called %d times, want 1", cleaned)
-	}
-}
-
-func TestRun_HookMode_CleansSnapshotBeforeExit(t *testing.T) {
-	makeFakeNono(t)
-	cleaned := 0
-	cleanedBeforeExit := false
-	err := run(&config.Config{ToolMode: "hook"}, Options{}, runDeps{
-		writeSnapshot: func(*config.Config) (string, func(), error) {
-			return "/state/policy-1.json", func() { cleaned++ }, nil
-		},
-		writeProfile: func(*config.Config) (string, []string, func(), error) {
-			return "/tmp/asb-profile-1.json", nil, func() {}, nil
-		},
-		startBroker: testBrokerStart("/tmp/test.sock", nil),
-		supervise:   func(string, []string) int { return 0 },
-		exit:        func(int) { cleanedBeforeExit = cleaned == 1 },
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !cleanedBeforeExit {
-		t.Error("snapshot cleanup must run before exit; os.Exit skips deferred cleanup in production")
 	}
 }
 

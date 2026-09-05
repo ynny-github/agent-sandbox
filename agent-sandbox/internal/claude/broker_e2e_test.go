@@ -15,6 +15,7 @@ package claude_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,7 +27,6 @@ import (
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/broker"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/claude"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandboxhost"
 )
 
 // buildAgentSandbox compiles the real CLI binary into dir and returns its
@@ -41,9 +41,9 @@ import (
 // exec a binary out of a directory it has not been told to trust, and unlike
 // a real install (under e.g. /usr/local/bin or ~/.local/bin, which nono's own
 // baseline already trusts) a throwaway test binary has no such standing grant
-// of its own. Passing workdir — already granted by the profile ResolveShell
-// builds — sidesteps that without this test inventing a grant it does not
-// otherwise need.
+// of its own. Passing workdir — already granted by writeFixtureProfile's
+// filesystem.allow — sidesteps that without this test inventing a grant it
+// does not otherwise need.
 func buildAgentSandbox(t *testing.T, dir string) string {
 	t.Helper()
 	root, err := filepath.Abs(filepath.Join("..", "..", ".."))
@@ -102,6 +102,83 @@ func startBrokerSession(t *testing.T, nonoPath, selfPath string, cfg *config.Con
 	return ""
 }
 
+// fixtureProfile is the subset of nono's own profile schema this suite needs:
+// a filesystem grant for the working directory, the env baseline every
+// agent-sandbox-generated profile also carries, and a network section. It is
+// defined here, independently of internal/sandboxhost, because that package
+// no longer builds a profile for the sandbox commands run in at all (Task 5
+// deleted ResolveShell along with [sandbox.shell] — agent-sandbox now only
+// generates the launched agent's own profile). This suite hand-writes its
+// fixture command profile the same way a real operator would, rather than
+// asking a since-deleted generator to do it.
+type fixtureProfile struct {
+	Meta        fixtureMeta        `json:"meta"`
+	Groups      *fixtureGroups     `json:"groups,omitempty"`
+	Filesystem  fixtureFilesystem  `json:"filesystem"`
+	Environment fixtureEnvironment `json:"environment"`
+	Network     *fixtureNetwork    `json:"network,omitempty"`
+}
+
+type fixtureMeta struct {
+	Name string `json:"name"`
+}
+
+type fixtureGroups struct {
+	Include []string `json:"include,omitempty"`
+}
+
+type fixtureFilesystem struct {
+	Allow     []string `json:"allow,omitempty"`
+	AllowFile []string `json:"allow_file,omitempty"`
+}
+
+type fixtureEnvironment struct {
+	AllowVars []string `json:"allow_vars,omitempty"`
+}
+
+type fixtureNetwork struct {
+	NetworkProfile string   `json:"network_profile,omitempty"`
+	AllowDomain    []string `json:"allow_domain,omitempty"`
+}
+
+// writeFixtureProfile writes the nono profile this suite's broker session
+// runs under to a temp file and returns its path (removed via t.Cleanup):
+// workdir read+write, "/dev/null" allow-listed (agent-sandbox's own generator
+// grants it to every profile as a baseline), nix_runtime/git_config
+// (harmless where their paths do not exist, required where they do — see
+// internal/sandboxhost/catalog.go's baselineGroups comment), and the fixed
+// "developer" network preset plus allowDomains.
+func writeFixtureProfile(t *testing.T, workdir string, allowDomains []string) string {
+	t.Helper()
+	p := fixtureProfile{
+		Meta:       fixtureMeta{Name: "broker e2e"},
+		Groups:     &fixtureGroups{Include: []string{"git_config", "nix_runtime"}},
+		Filesystem: fixtureFilesystem{Allow: []string{workdir}, AllowFile: []string{"/dev/null"}},
+		Environment: fixtureEnvironment{
+			AllowVars: []string{"HOME", "LANG", "LC_ALL", "PATH", "TERM", "USER"},
+		},
+		Network: &fixtureNetwork{NetworkProfile: "developer", AllowDomain: allowDomains},
+	}
+	data, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("marshal fixture profile: %v", err)
+	}
+	f, err := os.CreateTemp("", "broker-e2e-profile-*.json")
+	if err != nil {
+		t.Fatalf("create profile temp file: %v", err)
+	}
+	path := f.Name()
+	t.Cleanup(func() { os.Remove(path) })
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		t.Fatalf("write fixture profile: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close fixture profile: %v", err)
+	}
+	return path
+}
+
 // runBrokered starts a broker session whose command profile grants
 // allowDomains, sends command to it, and returns the exit code.
 func runBrokered(t *testing.T, allowDomains []string, command string) int {
@@ -113,23 +190,7 @@ func runBrokered(t *testing.T, allowDomains []string, command string) int {
 
 	workdir := t.TempDir()
 	selfPath := buildAgentSandbox(t, workdir)
-	cfg := &config.Config{}
-	cfg.Sandbox.Shell.AllowDomains = allowDomains
-	// sandboxhost.ResolveShell builds the same profile shape an operator would
-	// hand-write for the command profile (Task 1's CommandProfilePath): a
-	// developer network policy plus whatever domains this case adds. Reusing
-	// it here is just a convenient way to produce a valid profile; production
-	// profiles are operator-authored, not generated.
-	resolved, rerr := sandboxhost.ResolveShell(cfg, workdir)
-	if rerr != nil {
-		t.Fatalf("ResolveShell: %v", rerr)
-	}
-	profilePath, cleanupProfile, werr := resolved.WriteProfile()
-	if werr != nil {
-		t.Fatalf("WriteProfile: %v", werr)
-	}
-	t.Cleanup(cleanupProfile)
-	cfg.CommandProfile = profilePath
+	cfg := &config.Config{CommandProfile: writeFixtureProfile(t, workdir, allowDomains)}
 
 	sock := startBrokerSession(t, nonoPath, selfPath, cfg, workdir)
 

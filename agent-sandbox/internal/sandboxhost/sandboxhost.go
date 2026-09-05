@@ -53,35 +53,25 @@ type profileEnvironment struct {
 	AllowVars []string `json:"allow_vars,omitempty"`
 }
 
-// sideOptions carries how the agent's profile is framed: its nono base
-// profile and any env granted on top of the baseline. There used to be a
-// second side (the shell sandbox's) with its own structural differences —
-// a working directory grant, a network section, whether deny rules were
-// emitted — but that profile is gone, so only what the agent side ever
-// used remains.
-type sideOptions struct {
-	extends  string
-	metaName string
-	// extraEnv is granted on top of baselineEnv (agentOnlyEnv, the broker
-	// socket).
-	extraEnv []string
-	// emitDeny renders the capabilities' Claude permission-deny rules. They
-	// constrain the agent's own file tools.
-	emitDeny bool
-}
-
 // expand turns host sections into one nono profile. Sections are unioned in
 // order, so a grant reaches the profile if any of them declares it. Nothing is
 // subtracted: whatever must not be granted is simply not among the sections
 // handed in.
 //
+// extends and metaName frame the profile (its nono base profile and its
+// meta.name); extraEnv is granted on top of baselineEnv (agentOnlyEnv, the
+// broker socket, for Resolve's one caller). expand always emits the
+// capabilities' Claude permission-deny rules — there used to be a second
+// caller (the shell sandbox's ResolveShell) that suppressed them, but that
+// profile is gone, so nothing suppresses them anymore.
+//
 // All output lists are sorted and de-duplicated so the result is deterministic.
-func expand(sections []config.HostConfig, opts sideOptions) (*Resolved, error) {
+func expand(sections []config.HostConfig, extends, metaName string, extraEnv []string) (*Resolved, error) {
 	var groups, read, bypass, allowFile, allowVars, allow, readFile, deny []string
 
 	groups = append(groups, baselineGroups...)
 	allowVars = append(allowVars, baselineEnv...)
-	allowVars = append(allowVars, opts.extraEnv...)
+	allowVars = append(allowVars, extraEnv...)
 	allowFile = append(allowFile, baselineAllowFile...)
 
 	for _, h := range sections {
@@ -129,8 +119,8 @@ func expand(sections []config.HostConfig, opts sideOptions) (*Resolved, error) {
 
 	r := &Resolved{
 		profile: nonoProfile{
-			Extends: opts.extends,
-			Meta:    profileMeta{Name: opts.metaName},
+			Extends: extends,
+			Meta:    profileMeta{Name: metaName},
 			Filesystem: profileFilesystem{
 				Allow:            sortDedup(allow),
 				Read:             sortDedup(read),
@@ -140,9 +130,7 @@ func expand(sections []config.HostConfig, opts sideOptions) (*Resolved, error) {
 			},
 			Environment: profileEnvironment{AllowVars: sortDedup(allowVars)},
 		},
-	}
-	if opts.emitDeny {
-		r.DenyRules = sortDedup(deny)
+		DenyRules: sortDedup(deny),
 	}
 	if g := sortDedup(groups); len(g) > 0 {
 		r.profile.Groups = &profileGroups{Include: g}
@@ -182,46 +170,53 @@ func Resolve(cfg *config.Config, agent string) (*Resolved, error) {
 	}
 	return expand(
 		[]config.HostConfig{cfg.Sandbox.Agent},
-		sideOptions{
-			extends:  base.extends,
-			metaName: base.metaName,
-			extraEnv: agentOnlyEnv,
-			emitDeny: true,
-		},
+		base.extends, base.metaName, agentOnlyEnv,
 	)
 }
 
-// ProtectedGrants returns the profile's filesystem grants that fall under
-// protectedPrefixes, sorted. Raw grants can never produce one (expand rejects
-// them), so a non-empty result means a credential capability (docker, ssh, ...)
-// was declared in one of the sections handed to expand.
-func (r *Resolved) ProtectedGrants() []string {
-	var out []string
-	fs := r.profile.Filesystem
-	for _, list := range [][]string{fs.Allow, fs.Read, fs.AllowFile, fs.ReadFile} {
-		for _, p := range list {
-			if isProtected(p) {
-				out = append(out, p)
-			}
-		}
-	}
-	return sortDedup(out)
+// Grants describes what a resolved profile reaches beyond its baseline: the
+// read+write filesystem paths and the read-only ones.
+type Grants struct {
+	Write []string
+	Read  []string
 }
 
-// EnvAllowVars returns the profile's environment allow_vars patterns.
-//
-// The command broker uses it to build the nono supervisor's own environment:
-// it forwards exactly those of the launcher's variables that this list already
-// permits inside the sandbox. Sharing the list keeps the two in step — in
-// particular baselineEnv and the capability allowVars (the mise capability's
-// "MISE*" / "__MISE*") are declared in exactly one place, this package, rather
-// than being restated by the broker where they could silently drift.
-//
-// Entries are patterns, not plain names; see broker's envAllowlist for the
-// supported syntax.
-func (r *Resolved) EnvAllowVars() []string {
-	out := make([]string, len(r.profile.Environment.AllowVars))
-	copy(out, r.profile.Environment.AllowVars)
+// FilesystemGrants resolves the profile's filesystem grants into read+write and
+// read-only lists, excluding baselineAllowFile (granted to every profile
+// regardless of what was declared, so listing it would crowd out what an
+// operator actually wrote). It exists so agent-facing documentation — and
+// `agent-sandbox ai config-check` — can state what the launched agent's own
+// sandbox reaches instead of describing config sections and leaving the reader
+// to work it out.
+func (r *Resolved) FilesystemGrants() Grants {
+	fs := r.profile.Filesystem
+	return Grants{
+		Write: sortDedup(exclude(concat(fs.Allow, fs.AllowFile), baselineAllowFile)),
+		Read:  sortDedup(concat(fs.Read, fs.ReadFile)),
+	}
+}
+
+func concat(lists ...[]string) []string {
+	var out []string
+	for _, l := range lists {
+		out = append(out, l...)
+	}
+	return out
+}
+
+// exclude drops every entry of in that appears in drop.
+func exclude(in, drop []string) []string {
+	skip := make(map[string]struct{}, len(drop))
+	for _, d := range drop {
+		skip[d] = struct{}{}
+	}
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		if _, ok := skip[v]; ok {
+			continue
+		}
+		out = append(out, v)
+	}
 	return out
 }
 

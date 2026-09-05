@@ -432,24 +432,12 @@ func toStrings(v any) []string {
 }
 
 // docker/ssh carry no built-in exclusion: declaring one under [sandbox.agent]
-// grants it there, and ProtectedGrants reports it so a caller can warn. Without
-// this, removing that reporting could regress into a silent re-exclusion and
-// nobody would notice.
+// grants it there.
 func TestResolve_CredentialCapabilityIsGrantedWhenDeclared(t *testing.T) {
 	r := resolve(t, config.HostConfig{Capabilities: []string{"ssh"}}, "claude")
 	read := toStrings(profileMap(t, r)["filesystem"].(map[string]any)["read"])
 	if !slices.Contains(read, "~/.ssh") {
 		t.Errorf("read = %v, want to contain ~/.ssh (declared under [sandbox.agent])", read)
-	}
-	if got := r.ProtectedGrants(); !slices.Equal(got, []string{"~/.ssh", "~/.ssh/known_hosts"}) {
-		t.Errorf("ProtectedGrants() = %v, want [~/.ssh ~/.ssh/known_hosts]", got)
-	}
-}
-
-func TestProtectedGrants_EmptyWithoutCredentialCapability(t *testing.T) {
-	r := resolve(t, config.HostConfig{Capabilities: []string{"go", "mise"}}, "claude")
-	if got := r.ProtectedGrants(); len(got) != 0 {
-		t.Errorf("ProtectedGrants() = %v, want none", got)
 	}
 }
 

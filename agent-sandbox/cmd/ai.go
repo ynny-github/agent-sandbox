@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 
 	"github.com/spf13/cobra"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/agentconfig"
@@ -49,13 +50,34 @@ func runConfigCheck(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("config error: %w", err)
 	}
-	if _, err := sandboxhost.Resolve(cfg, "claude"); err != nil {
+	resolved, err := sandboxhost.Resolve(cfg, "claude")
+	if err != nil {
 		return fmt.Errorf("agent profile: %w", err)
 	}
 
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "ok: %s resolves; it takes effect at the next `agent-sandbox claude` launch\n", configPath)
+
+	grants := resolved.FilesystemGrants()
+	fmt.Fprintln(out, "\nThe launched agent's own sandbox additionally reaches:")
+	printList(out, "read+write", grants.Write)
+	printList(out, "read-only", grants.Read)
 	return nil
+}
+
+// printList writes one indented line per entry, or "(none)" when empty, so the
+// output distinguishes an empty grant list from a missing section.
+func printList(out io.Writer, label string, items []string) {
+	if label != "" {
+		label += ": "
+	}
+	if len(items) == 0 {
+		fmt.Fprintf(out, "  %s(none)\n", label)
+		return
+	}
+	for _, item := range items {
+		fmt.Fprintf(out, "  %s%s\n", label, item)
+	}
 }
 
 func runExplain(cmd *cobra.Command, args []string) error {

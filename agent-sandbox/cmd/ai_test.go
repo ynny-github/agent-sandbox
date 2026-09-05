@@ -89,6 +89,28 @@ capabilities = ["go"]
 	}
 }
 
+// config-check must print what the launched agent's own sandbox reaches
+// beyond the baseline: several places in the READMEs and explain.tmpl promise
+// this, so a config-check that only prints "ok:" would make those promises
+// false.
+func TestRunConfigCheck_PrintsFilesystemGrants(t *testing.T) {
+	out, err := runConfigCheckWith(t, `
+tool_mode = "hook"
+
+[sandbox.agent]
+allow = ["/opt/writable"]
+read = ["/opt/readonly"]
+`)
+	if err != nil {
+		t.Fatalf("runConfigCheck: %v", err)
+	}
+	for _, want := range []string{"read+write: /opt/writable", "read-only: /opt/readonly"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q\n%s", want, out)
+		}
+	}
+}
+
 func TestRunConfigCheck_BrokenToml(t *testing.T) {
 	if _, err := runConfigCheckWith(t, "tool_mode = \n"); err == nil {
 		t.Fatal("expected an error for unparseable TOML, got nil")

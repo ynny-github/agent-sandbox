@@ -6,7 +6,7 @@
 
 **Architecture:** The launcher starts two sibling sandboxes — `nono wrap … claude` for the agent and `nono run … agent-sandbox broker` for commands. The broker is a policy-controlled command with no `exec_paths` for anything it must not reach directly. It parses the agent's command line with `mvdan.cc/sh/v3` and routes every simple command through `interp.ExecHandler`, which is the only place an `execve` happens. Commands split into a policy tier (own child sandbox plus argv rules, reached only through nono's shim) and a floor tier (named in the broker's `exec_paths`, running in the broker's own sandbox).
 
-**Tech Stack:** Go 1.25, `mvdan.cc/sh/v3` v3.14.0, `spf13/cobra`, `BurntSushi/toml`, nono 0.74.0.
+**Tech Stack:** Go 1.25, `mvdan.cc/sh/v3` v3.13.1, `spf13/cobra`, `BurntSushi/toml`, nono 0.74.0.
 
 **Spec:** [docs/superpowers/specs/2026-09-05-broker-runs-commands-inside-the-sandbox.md](../specs/2026-09-05-broker-runs-commands-inside-the-sandbox.md)
 
@@ -17,7 +17,7 @@ Supporting evidence for every measured claim the spec makes: [docs/superpowers/s
 - Output language for all deliverables — code comments, doc comments, docs, commit messages — is **English** (`.claude/CLAUDE.md`).
 - Commits follow Conventional Commits per `.claude/rules/git-commit.md`: `<type>(<scope>): <subject>`, imperative subject under 72 characters, body explaining *What* and *Why* when the change is non-trivial. `lefthook` validates the title on commit.
 - Go module is `github.com/ynny-github/agent-sandbox`; package source lives under `agent-sandbox/`. Tests run from the repo root with `go test ./...`.
-- New dependency: `mvdan.cc/sh/v3` at `v3.14.0`. No other dependency is added.
+- New dependency: `mvdan.cc/sh/v3` at `v3.13.1`. No other dependency is added. v3.14.0 declares `go 1.26.0`, which would raise this project's toolchain floor above the `go = "1.25"` pinned in `.mise.toml`; `go.mod`'s `go` directive stays `1.25.5`.
 - `bin/agent-sandbox` is on PATH via `.mise.toml`, built by `mise run build`. It is **not** a valid location for the broker binary in a real deployment — nono refuses a policy command binary whose parent directory the sandbox can write. Tests must never depend on the broker binary's location.
 - The command profile must never declare a shell (`bash`, `sh`) in either tier.
 - Existing public behaviour that must keep working: `agent-sandbox claude`, `agent-sandbox exec`, `agent-sandbox command-router` (MCP mode), `agent-sandbox doctor`, `agent-sandbox debug`.
@@ -258,6 +258,15 @@ that silently refuses every command."
 ---
 
 ### Task 2: The shell-interpreting executor
+
+> **As built, this task's code differs from the listing below.** Three of its
+> instructions were wrong and were corrected during review: the wait func must
+> NOT close the interpreter's writer (the interpreter owns it and closes it when
+> the stage ends); aliased stdout/stderr need a single shared pipe rather than
+> two racing goroutines; and lookup must use `interp.LookPathDir(hc.Dir, hc.Env,
+> args[0])` rather than `exec.LookPath`. The command sequence is
+> `Start` → drain → `Wait`, and `execWaitDelay` does not exist. Read
+> `agent-sandbox/internal/broker/shellexec.go` for the real shape.
 
 **Files:**
 - Create: `agent-sandbox/internal/broker/shellexec.go`

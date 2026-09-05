@@ -120,8 +120,8 @@ argv. Measured, passing the line as a single argument fails with
 shell is what the previous section rules out.
 
 So the broker parses and evaluates the line in-process with
-[`mvdan.cc/sh/v3`](https://pkg.go.dev/mvdan.cc/sh/v3) (BSD-3, the engine behind
-`shfmt`). `interp.ExecHandler` is called for every simple command that is
+[`mvdan.cc/sh/v3`](https://pkg.go.dev/mvdan.cc/sh/v3) at v3.13.1 (BSD-3, the
+engine behind `shfmt`; v3.14 raises the Go floor to 1.26 and is not taken). `interp.ExecHandler` is called for every simple command that is
 neither a builtin nor a shell function, and that handler is the only place an
 `execve` happens.
 
@@ -271,25 +271,50 @@ shim in `anon_pipe_read` — a leaked process that never exits. Closing the
 broker's own copy of that writer does not help; the shim holds another.
 
 The handler interposes an os/exec pipe on every stream the interpreter supplies
-that is not already a real file:
+that is not already a real file, and hands the child *that* pipe:
 
-- `cmd.StdoutPipe()` / `cmd.StderrPipe()`, copied into the interpreter's writer,
-  and that writer closed once the copy finishes. The shim then only ever
-  duplicates the os/exec pipe, and this process alone holds the interpreter's
-  end, so closing it is what ends the stage.
+- `cmd.StdoutPipe()` / `cmd.StderrPipe()`, copied into the interpreter's writer.
+  The shim then only ever duplicates the os/exec pipe, so the child's exit
+  closes every copy of it, the copy drains, and the interpreter closes its own
+  writer when the *stage* ends. The handler must **not** close the
+  interpreter's writer itself: the interpreter owns it and closes it at the
+  right time, and closing it per command silently truncates any stage holding
+  more than one command — `{ a; b; } | c` loses `b`'s output entirely — as well
+  as closing a caller-supplied stream after the first command.
+- When the interpreter hands the same writer as both stdout and stderr — what
+  `2>&1` produces — a **single** pipe, with the same `*os.File` write end
+  assigned to both. Two pipes means two unsynchronized copy goroutines writing
+  one `io.Writer`, which loses output; os/exec makes the same guarantee
+  internally for exactly this reason.
 - The os/exec end closed when a copy fails, which is what delivers `EPIPE` to a
-  writer whose reader has already exited. Without it, `rg . big \| rg -m 1 …`
-  hangs and the upstream shim reports
-  `failed to read tool-sandbox IPC length`.
+  writer whose reader has already exited (`seq … | head -n 1`).
+- `cmd.Start()`, then drain, then `cmd.Wait()`. `Wait` closes the parent pipes
+  as soon as the process exits, so draining after it is the wrong order.
 - `cmd.StdinPipe()` with a pump goroutine rather than `cmd.Stdin`, for the
   reason the current `NonoExecutor` documents: with `cmd.Stdin` set, `Wait`
   blocks on os/exec's copier, which sits in `Read()`.
 
-Measured with all three in place: policy-to-policy pipelines, three-stage
-pipelines, an early-exiting reader, `2>&1 |`, and exit-status propagation all
-behave, with no process left behind over repeated runs. This is the same
-pipe-ownership problem `router.runMixedPipeline` documents today, in a new
-place; the existing comment there is worth carrying over.
+Command lookup goes through `interp.LookPathDir(hc.Dir, hc.Env, args[0])`, not
+`exec.LookPath`: the latter resolves against the broker process's own `PATH`
+and working directory, so an agent could not run a script in the directory it
+is working in.
+
+Measured with all of this in place: policy-to-policy pipelines, three-stage
+pipelines, an early-exiting reader, `2>&1 |`, multiple commands in one stage,
+and exit-status propagation all behave, with no process left behind over
+repeated runs. This is the same pipe-ownership problem
+`router.runMixedPipeline` documents today, in a new place.
+
+### The interpreter's builtins run at the floor
+
+`mvdan.cc/sh` dispatches its own builtins — `echo`, `printf`, `test`, `cd`,
+`read`, `eval`, `source` among them — inside the interpreter, so they never
+reach the exec handler and never reach a command policy. They execute with the
+broker's own grants, which is the same place globbing, redirection and command
+substitution already run, and the floor bounds them exactly as it bounds those.
+It is not an escape, but it does mean the floor's filesystem grants govern more
+than the two tiers alone suggest: a profile that expects `command_policies` to
+mediate *everything* is mistaken about these.
 
 ## What is deleted
 

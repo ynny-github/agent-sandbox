@@ -619,3 +619,43 @@ func TestRun_GithubMCPDisabled_SkipsConfig(t *testing.T) {
 		t.Errorf("writeMCPConfig called %d times, want 0 when disabled", wrote)
 	}
 }
+
+// startCommandBroker is disabled until the broker runs inside its own nono
+// session (a later change). This is a regression guard against silently
+// re-enabling an unsandboxed broker: it must keep failing closed rather than
+// serve, no matter what cfg is given.
+func TestStartCommandBroker_RefusesToServeUnsandboxed(t *testing.T) {
+	sock, cleanup, err := startCommandBroker(&config.Config{})
+	if err == nil {
+		t.Fatal("startCommandBroker() error = nil, want a refusal")
+	}
+	if !strings.Contains(err.Error(), "not yet sandboxed") {
+		t.Errorf("error = %q, want it to explain the broker is not yet sandboxed", err.Error())
+	}
+	if sock != "" {
+		t.Errorf("socket = %q, want empty on refusal", sock)
+	}
+	if cleanup != nil {
+		t.Error("cleanup should be nil on refusal")
+	}
+}
+
+// Run's own startBroker dependency defaults to the production
+// startCommandBroker, so a real `agent-sandbox claude` invocation must fail
+// with the same refusal rather than proceeding to launch Claude at all.
+func TestRun_ProductionStartBroker_FailsClosed(t *testing.T) {
+	err := run(&config.Config{ToolMode: "mcp"}, Options{}, runDeps{
+		writeProfile: func(*config.Config) (string, []string, func(), error) {
+			return "/tmp/asb-profile-1.json", nil, func() {}, nil
+		},
+		startBroker: startCommandBroker,
+		supervise:   func(string, []string) int { t.Fatal("supervise should not run"); return 0 },
+		exit:        func(int) { t.Fatal("exit should not run") },
+	})
+	if err == nil {
+		t.Fatal("run() error = nil, want the broker refusal to propagate")
+	}
+	if !strings.Contains(err.Error(), "not yet sandboxed") {
+		t.Errorf("run() error = %q, want it to carry the broker refusal", err.Error())
+	}
+}

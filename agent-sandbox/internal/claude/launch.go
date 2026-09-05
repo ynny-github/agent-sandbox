@@ -272,30 +272,20 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 	return nil
 }
 
-// startCommandBroker opens the broker socket and starts serving requests
-// through the in-process shell interpreter. The returned cleanup closes the
-// socket.
+// startCommandBroker is disabled until the broker runs inside its own nono
+// session (a later change). It exists so runDeps.startBroker still has a
+// production implementation to wire up, and so the refusal below has one
+// place to live.
 //
-// cfg is currently unused: nothing about the interpreter itself is
-// configurable, and what a command may do is now a property of the command
-// profile the broker process runs under rather than of anything decided here.
+// cfg is currently unused: the refusal does not depend on anything in it.
 // It stays a parameter to match runDeps.startBroker.
 func startCommandBroker(cfg *config.Config) (string, func(), error) {
-	sockPath, err := BrokerSocketPath()
-	if err != nil {
-		return "", nil, err
-	}
-
-	srv, err := broker.NewServer(sockPath, broker.NewShellExecutor())
-	if err != nil {
-		return "", nil, err
-	}
-	go srv.Serve()
-
-	cleanup := func() {
-		srv.Close()
-	}
-	return srv.SocketPath(), cleanup, nil
+	// The broker must run inside its own nono session before it may serve: in
+	// this process it would execute the agent's commands with the launcher's
+	// own reach, which is the opposite of what this program is for. Wiring
+	// that session up is the next change; until it lands, refuse rather than
+	// serve unsandboxed.
+	return "", nil, fmt.Errorf("command broker is not yet sandboxed; `agent-sandbox claude` is disabled until the broker runs under its own nono session")
 }
 
 // BrokerSocketPath returns a per-process socket path under

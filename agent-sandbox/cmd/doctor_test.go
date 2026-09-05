@@ -4,11 +4,17 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 )
 
 // shortStateDir returns a fresh, short-named temp directory suitable for
@@ -37,6 +43,15 @@ func stubNonoSeams(t *testing.T, lp func(string) (string, error), rc func(contex
 		lookPath = origLookPath
 		runCommand = origRun
 	})
+}
+
+// stubRunCommand overrides only runCommand, leaving lookPath untouched. It
+// returns a restore function rather than registering a t.Cleanup so it can
+// match the brief's `defer restore()` call sites.
+func stubRunCommand(rc func(context.Context, string, ...string) ([]byte, error)) func() {
+	orig := runCommand
+	runCommand = rc
+	return func() { runCommand = orig }
 }
 
 func TestCheckNono_NotInPath(t *testing.T) {
@@ -89,12 +104,26 @@ func TestDoctorCmd_Registered(t *testing.T) {
 func TestRunDoctor_AllOK(t *testing.T) {
 	stubAllSeamsOK(t)
 
+	dir := t.TempDir()
+	profile := filepath.Join(dir, "command-profile.json")
+	if err := os.WriteFile(profile, []byte(`{"filesystem":{"allow":["$WORKDIR"]}}`), 0o600); err != nil {
+		t.Fatalf("write profile: %v", err)
+	}
+	configWithProfile(t, dir, profile) // writes dir/agent-sandbox.toml
+	origConfigPath := configPath
+	configPath = filepath.Join(dir, "agent-sandbox.toml")
+	t.Cleanup(func() { configPath = origConfigPath })
+	// The broker binary in a `go test` run is a temp binary outside dir, so it
+	// is never covered by the profile's filesystem.allow above.
+	restoreSelf := stubSelfPath(filepath.Join(t.TempDir(), "agent-sandbox"))
+	defer restoreSelf()
+
 	var buf bytes.Buffer
 	doctorCmd.SetOut(&buf)
 	t.Cleanup(func() { doctorCmd.SetOut(nil) })
 
 	if err := runDoctor(doctorCmd, nil); err != nil {
-		t.Fatalf("expected nil error, got %v", err)
+		t.Fatalf("expected nil error, got %v: output:\n%s", err, buf.String())
 	}
 	if !strings.Contains(buf.String(), "doctor: all checks passed") {
 		t.Errorf("missing summary in output:\n%s", buf.String())
@@ -264,6 +293,301 @@ func TestRenderResults_Mixed(t *testing.T) {
 		"doctor: 2 of 3 checks failed\n"
 	if got := buf.String(); got != want {
 		t.Errorf("output mismatch\nwant:\n%q\ngot:\n%q", want, got)
+	}
+}
+
+func configWithProfile(t *testing.T, dir, profile string) *config.Config {
+	t.Helper()
+	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
+	body := "tool_mode = \"hook\"\ncommand_profile = " + strconv.Quote(profile) + "\n"
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	return cfg
+}
+
+func stubSelfPath(path string) func() {
+	prev := selfPath
+	selfPath = func() (string, error) { return path, nil }
+	return func() { selfPath = prev }
+}
+
+func TestCheckCommandProfileFailsWhenValidateRejects(t *testing.T) {
+	dir := t.TempDir()
+	profile := filepath.Join(dir, "command-profile.json")
+	if err := os.WriteFile(profile, []byte("{ not json"), 0o600); err != nil {
+		t.Fatalf("write profile: %v", err)
+	}
+	restore := stubRunCommand(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return []byte("JSON syntax invalid"), fmt.Errorf("exit status 1")
+	})
+	defer restore()
+
+	got := checkCommandProfile(configWithProfile(t, dir, profile))
+	if got.ok {
+		t.Errorf("checkCommandProfile ok = true, want false for a profile nono rejects")
+	}
+	if got.hint == "" {
+		t.Errorf("a failing check must carry a hint")
+	}
+}
+
+func TestCheckCommandProfileFailsWhenTheBinaryIsWritable(t *testing.T) {
+	dir := t.TempDir()
+	profile := filepath.Join(dir, "command-profile.json")
+	// The broker binary sitting inside the directory the profile grants
+	// read+write is exactly what nono refuses at startup, with a message the
+	// operator will not see until every command has already failed.
+	body := `{"filesystem":{"allow":["` + dir + `"]}}`
+	if err := os.WriteFile(profile, []byte(body), 0o600); err != nil {
+		t.Fatalf("write profile: %v", err)
+	}
+	// Stub validate to pass so this test fails for the reason it names (the
+	// writable-binary check) rather than merely because no real nono is on
+	// the test machine's PATH — both would report NG, but only one exercises
+	// profileGrantsWrite.
+	restoreRun := stubRunCommand(func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("valid"), nil
+	})
+	defer restoreRun()
+	restore := stubSelfPath(filepath.Join(dir, "agent-sandbox"))
+	defer restore()
+
+	got := checkCommandProfile(configWithProfile(t, dir, profile))
+	if got.ok {
+		t.Errorf("checkCommandProfile ok = true, want false when the binary is writable through the profile")
+	}
+	if got.hint == "" {
+		t.Errorf("a failing check must carry a hint")
+	}
+}
+
+func TestCheckCommandProfileOK(t *testing.T) {
+	dir := t.TempDir()
+	profile := filepath.Join(dir, "command-profile.json")
+	if err := os.WriteFile(profile, []byte(`{"filesystem":{"allow":["$WORKDIR"]}}`), 0o600); err != nil {
+		t.Fatalf("write profile: %v", err)
+	}
+	restore := stubRunCommand(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return []byte("valid"), nil
+	})
+	defer restore()
+	restoreSelf := stubSelfPath(filepath.Join(t.TempDir(), "agent-sandbox"))
+	defer restoreSelf()
+
+	got := checkCommandProfile(configWithProfile(t, dir, profile))
+	if !got.ok {
+		t.Errorf("checkCommandProfile ok = false, want true: details=%v hint=%q", got.details, got.hint)
+	}
+}
+
+func TestCheckCommandProfileFailsWhenTheFileIsMissing(t *testing.T) {
+	dir := t.TempDir()
+	present := filepath.Join(dir, "command-profile.json")
+	if err := os.WriteFile(present, []byte("{}"), 0o600); err != nil {
+		t.Fatalf("write profile: %v", err)
+	}
+	// config.Load itself already refuses a missing profile (validate's
+	// ErrCommandProfileMissing), which is exactly why runDoctor never reaches
+	// checkCommandProfile in that case (see its cfgErr branch). Build the
+	// *Config while the file still exists, then remove it, to exercise
+	// checkCommandProfile's own defensive os.Stat directly — covering the
+	// window between Load succeeding and the profile disappearing before
+	// launch.
+	cfg := configWithProfile(t, dir, present)
+	if err := os.Remove(present); err != nil {
+		t.Fatalf("remove profile: %v", err)
+	}
+
+	got := checkCommandProfile(cfg)
+	if got.ok {
+		t.Errorf("checkCommandProfile ok = true, want false when the profile file is missing")
+	}
+	if got.hint == "" {
+		t.Errorf("a failing check must carry a hint")
+	}
+}
+
+// stubLookPathByName returns a lookPath stub that answers only the given
+// names, so a test can distinguish checkToolSandbox's lookup of "nono" from
+// its lookup of the probe program without one stub masking the other.
+func stubLookPathByName(paths map[string]string) func(string) (string, error) {
+	return func(name string) (string, error) {
+		if p, ok := paths[name]; ok {
+			return p, nil
+		}
+		return "", fmt.Errorf("not found: %s", name)
+	}
+}
+
+func TestCheckToolSandbox_NonoMissing(t *testing.T) {
+	stubNonoSeams(t,
+		stubLookPathByName(nil),
+		func(context.Context, string, ...string) ([]byte, error) {
+			t.Fatal("runCommand must not be called when nono is not on PATH")
+			return nil, nil
+		},
+	)
+
+	got := checkToolSandbox(context.Background())
+	if got.ok {
+		t.Error("checkToolSandbox ok = true, want false when nono is not on PATH")
+	}
+	if got.hint == "" {
+		t.Error("a failing check must carry a hint")
+	}
+}
+
+// TestCheckToolSandbox_ProbeBinaryMissing pins ruling R18's "fail loudly ...
+// when the probe cannot run" requirement: finding no program to probe with
+// must not be silently treated as success.
+func TestCheckToolSandbox_ProbeBinaryMissing(t *testing.T) {
+	stubNonoSeams(t,
+		stubLookPathByName(map[string]string{"nono": "/usr/bin/nono"}),
+		func(context.Context, string, ...string) ([]byte, error) {
+			t.Fatal("runCommand must not be called when the probe binary cannot be found")
+			return nil, nil
+		},
+	)
+
+	got := checkToolSandbox(context.Background())
+	if got.ok {
+		t.Error("checkToolSandbox ok = true, want false when the probe binary is not on PATH")
+	}
+	if got.hint == "" {
+		t.Error("a failing check must carry a hint")
+	}
+}
+
+func TestCheckToolSandbox_NonoRunFails(t *testing.T) {
+	stubNonoSeams(t,
+		stubLookPathByName(map[string]string{"nono": "/usr/bin/nono", toolSandboxProbeCommand: "/usr/bin/true"}),
+		func(context.Context, string, ...string) ([]byte, error) {
+			return []byte("nono: Sandbox initialization failed: failed to resolve ELF dependency 'libc.so.6'"),
+				fmt.Errorf("exit status 1")
+		},
+	)
+
+	got := checkToolSandbox(context.Background())
+	if got.ok {
+		t.Error("checkToolSandbox ok = true, want false when nono cannot start tool-sandbox")
+	}
+	if got.hint == "" {
+		t.Error("a failing check must carry a hint")
+	}
+	if !strings.Contains(strings.Join(got.details, "\n"), "ELF dependency") {
+		t.Errorf("expected nono's own diagnostic in details, got %v", got.details)
+	}
+}
+
+func TestCheckToolSandbox_OK(t *testing.T) {
+	stubNonoSeams(t,
+		stubLookPathByName(map[string]string{"nono": "/usr/bin/nono", toolSandboxProbeCommand: "/usr/bin/true"}),
+		func(context.Context, string, ...string) ([]byte, error) { return nil, nil },
+	)
+
+	got := checkToolSandbox(context.Background())
+	if !got.ok {
+		t.Errorf("checkToolSandbox ok = false, want true: details=%v hint=%q", got.details, got.hint)
+	}
+}
+
+// TestCheckToolSandbox_WritesPolicyProbeProfile inspects the actual profile
+// checkToolSandbox hands to nono, rather than only its ok/NG verdict: this is
+// what proves the probe truly exercises tool-sandbox (a policy-controlled
+// command declared under command_policies) instead of merely running the
+// probe binary unsandboxed and reporting success no matter what.
+func TestCheckToolSandbox_WritesPolicyProbeProfile(t *testing.T) {
+	const nonoPath = "/usr/bin/nono"
+	const trueBin = "/usr/bin/true"
+	var gotArgs []string
+	var profilePath, workdir string
+	var profileData []byte
+
+	stubNonoSeams(t,
+		stubLookPathByName(map[string]string{"nono": nonoPath, toolSandboxProbeCommand: trueBin}),
+		func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			gotArgs = append([]string{name}, args...)
+			for i, a := range args {
+				switch a {
+				case "--profile":
+					if i+1 < len(args) {
+						profilePath = args[i+1]
+					}
+				case "--workdir":
+					if i+1 < len(args) {
+						workdir = args[i+1]
+					}
+				}
+			}
+			// checkToolSandbox removes its temp dir (holding the profile) once
+			// this call returns, so read it now, from inside the stub, while it
+			// still exists.
+			if profilePath != "" {
+				data, err := os.ReadFile(profilePath)
+				if err != nil {
+					t.Fatalf("read generated profile: %v", err)
+				}
+				profileData = data
+			}
+			return nil, nil
+		},
+	)
+
+	got := checkToolSandbox(context.Background())
+	if !got.ok {
+		t.Fatalf("checkToolSandbox ok = false, want true: details=%v hint=%q", got.details, got.hint)
+	}
+	if len(gotArgs) == 0 || gotArgs[0] != "nono" {
+		t.Fatalf("expected runCommand to be called with nono, got %v", gotArgs)
+	}
+	if gotArgs[len(gotArgs)-1] != toolSandboxProbeCommand {
+		t.Errorf("expected the probe command name as the final argv entry, got %q", gotArgs[len(gotArgs)-1])
+	}
+	if profilePath == "" || workdir == "" {
+		t.Fatalf("expected --profile and --workdir to be passed, got args %v", gotArgs)
+	}
+
+	var parsed struct {
+		Groups struct {
+			Include []string `json:"include"`
+		} `json:"groups"`
+		Filesystem struct {
+			Allow []string `json:"allow"`
+		} `json:"filesystem"`
+		CommandPolicies struct {
+			Commands map[string]struct {
+				Executable string `json:"executable"`
+			} `json:"commands"`
+		} `json:"command_policies"`
+	}
+	if err := json.Unmarshal(profileData, &parsed); err != nil {
+		t.Fatalf("generated profile is not valid JSON: %v\n%s", err, profileData)
+	}
+	if !slices.Contains(parsed.Groups.Include, "nix_runtime") {
+		t.Errorf("profile groups.include = %v, want it to contain %q (needed for /nix/store on NixOS)",
+			parsed.Groups.Include, "nix_runtime")
+	}
+	if !slices.Contains(parsed.Filesystem.Allow, workdir) {
+		t.Errorf("profile filesystem.allow = %v, want it to contain the --workdir value %q",
+			parsed.Filesystem.Allow, workdir)
+	}
+	cmd, ok := parsed.CommandPolicies.Commands[toolSandboxProbeCommand]
+	if !ok {
+		t.Fatalf("profile command_policies.commands has no entry %q: %v",
+			toolSandboxProbeCommand, parsed.CommandPolicies.Commands)
+	}
+	if cmd.Executable != trueBin {
+		t.Errorf("policy command executable = %q, want %q", cmd.Executable, trueBin)
+	}
+
+	// The probe's own temp dir must not leak.
+	if _, err := os.Stat(filepath.Dir(profilePath)); !os.IsNotExist(err) {
+		t.Errorf("expected the probe's temp dir to be removed after the check, stat err = %v", err)
 	}
 }
 

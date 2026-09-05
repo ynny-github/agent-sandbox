@@ -1,5 +1,118 @@
 {
-  "meta": { "name": "agent-sandbox commands" },
-  "filesystem": { "allow": ["$WORKDIR"] },
-  "environment": { "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM"] }
+  "meta": {
+    "name": "agent-sandbox commands (this repository)"
+  },
+  "groups": {
+    "include": ["nix_runtime", "git_config", "mise_manager"]
+  },
+  "filesystem": {
+    "allow": ["$WORKDIR", "/tmp"],
+    "read": [
+      "/nix/store",
+      "/run/current-system/sw",
+      "/home/yn/.local/share/mise",
+      "/home/yn/.cache/go-build",
+      "/home/yn/go"
+    ],
+    "read_file": ["/home/yn/go/bin/agent-sandbox"]
+  },
+  "environment": {
+    "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM"]
+  },
+  "network": {
+    "network_profile": "developer"
+  },
+
+  "command_policies": {
+    "executable_dirs": ["/home/yn/go/bin"],
+    "commands": {
+      "agent-sandbox": {
+        "executable": "/home/yn/go/bin/agent-sandbox",
+        "can_use": ["git"],
+        "from": {
+          "session": {
+            "sandbox": {
+              "fs_read_file": ["/home/yn/go/bin/agent-sandbox"],
+              "fs_read": [
+                "/nix/store",
+                "/run/current-system/sw",
+                "/home/yn/.local/share/mise",
+                "/home/yn/.config/mise",
+                "/home/yn/.cache/go-build",
+                "/home/yn/go",
+                "$WORKDIR"
+              ],
+              "fs_write": ["$WORKDIR", "/tmp", "/home/yn/.cache/go-build", "/home/yn/go"],
+              "environment": {
+                "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM"]
+              },
+
+              "exec_paths": [
+                "/nix/store/zc6fy62c341aibk36p4ywff7rf9wn4wx-ripgrep-15.2.0/bin",
+                "/home/yn/.local/share/mise/installs/go/1.25.14",
+                "/nix/store/kask8rc5n2vrs492p1sq62vilj1sfdrs-mise-2026.8.6/bin",
+                "/nix/store/q8wvrqkl9x8vfmjflgxl9y0y7bnjlv12-coreutils-full-9.11/bin",
+                "/nix/store/c3pj1yrqn88cc8zkr5hywmvy15m0r6c9-gnused-4.10/bin",
+                "/nix/store/q0n8l9xz66pbpj37fxk5vid6dsfpx5vb-gnugrep-3.12/bin",
+                "/nix/store/i6hlg4ss9m53gvh8jqp0zgac67x6mblg-findutils-4.10.0/bin",
+                "/nix/store/lxzzxlm3dis6as7y13l13ywb0nh1c3h8-diffutils-3.12/bin",
+                "/nix/store/hzqx251825abx40q1zqgd37g6hmkz75g-which-2.23/bin",
+                "/home/yn/.local/share/mise/installs/lefthook/2.1.10",
+                "/tmp"
+              ]
+            }
+          }
+        }
+      },
+
+      "git": {
+        "executable": "/nix/store/8yh8zbb0r4na7gkqk0db0gbdid2ax7zm-git-2.54.0/bin/git",
+        "from": {
+          "agent-sandbox": {
+            "sandbox": {
+              "fs_read_file": [
+                "/nix/store/8yh8zbb0r4na7gkqk0db0gbdid2ax7zm-git-2.54.0/bin/git",
+                "/home/yn/.gitconfig"
+              ],
+              "fs_read": ["/nix/store", "/run/current-system/sw"],
+              "fs_write": ["$WORKDIR"],
+              "network": { "allow_all": true },
+              "environment": {
+                "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM"]
+              }
+            },
+            "invocation_policy": {
+              "default": "allow",
+              "deny": [
+                {
+                  "argv": { "contains": ["--force"] },
+                  "reason": "force push is disabled in this sandbox; use --force-with-lease if you must overwrite a remote ref you expect, or ask the operator to run it."
+                },
+                {
+                  "argv": { "prefix": ["reset", "--hard"] },
+                  "reason": "hard reset is disabled in this sandbox; it discards uncommitted work. Use `git stash` or commit first, or ask the operator."
+                },
+                {
+                  "argv": { "contains": ["--no-verify"] },
+                  "reason": "bypassing commit/push hooks is disabled in this sandbox; fix the hook failure instead of skipping it."
+                },
+                {
+                  "argv": { "prefix": ["reflog", "expire"] },
+                  "reason": "reflog expire is disabled in this sandbox; it removes the safety net the reflog gives you."
+                },
+                {
+                  "argv": { "prefix": ["stash", "drop"] },
+                  "reason": "stash drop is disabled in this sandbox; it discards stashed work irreversibly. Use `git stash pop` if you want it back."
+                },
+                {
+                  "argv": { "contains": ["-c"] },
+                  "reason": "git -c is disabled in this sandbox; it can override any config key, including ones that run arbitrary commands (core.pager, credential.helper, ...). Edit .git/config directly if you need a persistent change."
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
 }

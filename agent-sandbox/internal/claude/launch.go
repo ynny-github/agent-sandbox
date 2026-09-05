@@ -311,15 +311,55 @@ func startCommandBroker(cfg *config.Config) (string, func(), error) {
 		return "", nil, fmt.Errorf("start command broker: %w", err)
 	}
 
-	if err := waitForSocket(sockPath, brokerStartTimeout); err != nil {
-		cmd.Process.Kill()
+	// waitExited carries cmd.Wait's result exactly once. Starting it here,
+	// before the readiness race below, is what lets that race observe the
+	// child dying (nono rejecting the profile, say) instead of only ever
+	// seeing the socket never appear; the channel is buffered so whichever
+	// side — the race below, or cleanup later — ends up reading it does not
+	// block a send from the other.
+	waitExited := make(chan error, 1)
+	go func() { waitExited <- cmd.Wait() }()
+
+	childExited, err := waitForSocketOrExit(sockPath, brokerStartTimeout, waitExited)
+	if err != nil {
+		if !childExited {
+			// Still running past the deadline, or wedged mid-startup: stop it and
+			// reap it before reporting, so this call never leaves an orphaned
+			// broker process behind.
+			cmd.Process.Kill()
+			<-waitExited
+		}
+		os.Remove(sockPath)
 		return "", nil, err
 	}
 
 	cleanup := func() {
-		if cmd.Process != nil {
-			cmd.Process.Signal(syscall.SIGTERM)
-			cmd.Wait()
+		if cmd.Process == nil {
+			os.Remove(sockPath)
+			return
+		}
+		if sigErr := cmd.Process.Signal(syscall.SIGTERM); sigErr != nil {
+			fmt.Fprintf(os.Stderr, "agent-sandbox: signal command broker: %v\n", sigErr)
+		}
+		// Nothing here can confirm that nono forwards SIGTERM into the session
+		// it supervises, so this cannot simply wait on cmd.Wait() forever: a
+		// broker that never receives (or never acts on) the signal would hang
+		// agent-sandbox claude after the agent has already exited, with nothing
+		// on screen explaining why. Escalate to SIGKILL instead once
+		// brokerStopTimeout passes.
+		select {
+		case waitErr := <-waitExited:
+			if waitErr != nil {
+				fmt.Fprintf(os.Stderr, "agent-sandbox: command broker: %v\n", waitErr)
+			}
+		case <-time.After(brokerStopTimeout):
+			fmt.Fprintf(os.Stderr,
+				"agent-sandbox: command broker did not exit within %s after SIGTERM; killing it\n",
+				brokerStopTimeout)
+			if killErr := cmd.Process.Kill(); killErr != nil {
+				fmt.Fprintf(os.Stderr, "agent-sandbox: kill command broker: %v\n", killErr)
+			}
+			<-waitExited
 		}
 		os.Remove(sockPath)
 	}
@@ -331,18 +371,47 @@ func startCommandBroker(cfg *config.Config) (string, func(), error) {
 // running against a broker that will never answer.
 const brokerStartTimeout = 15 * time.Second
 
-// waitForSocket polls until path exists or the deadline passes. Polling is used
-// rather than a readiness handshake because the broker is behind a sandbox
-// boundary: there is no shared channel to signal on until the socket itself.
-func waitForSocket(path string, timeout time.Duration) error {
+// brokerStopTimeout bounds how long teardown waits for the broker to exit
+// after SIGTERM before escalating to SIGKILL. Signal forwarding into a nono
+// session is not this package's to verify, so teardown cannot simply trust it
+// and wait forever.
+//
+// It is a var, not a const, so a test can shrink it rather than spend several
+// real seconds proving the escalation path actually fires.
+var brokerStopTimeout = 5 * time.Second
+
+// waitForSocketOrExit waits for the broker's socket to appear, racing that
+// against the child exiting first via exited. Polling for the socket (rather
+// than a readiness handshake) is necessary because the broker is behind a
+// sandbox boundary: there is no shared channel to signal on until the socket
+// itself appears. Racing it against exited is what turns "nono rejected the
+// profile and the child exited within milliseconds" into an immediate,
+// specific error instead of a silent wait for the full timeout.
+//
+// childExited reports whether exited fired (in which case the child is
+// already reaped and err explains why it died) or the deadline passed with
+// the child still running (in which case the caller still owns stopping and
+// reaping it).
+func waitForSocketOrExit(path string, timeout time.Duration, exited <-chan error) (childExited bool, err error) {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if _, err := os.Stat(path); err == nil {
-			return nil
+		if _, statErr := os.Stat(path); statErr == nil {
+			return false, nil
 		}
-		time.Sleep(25 * time.Millisecond)
+		select {
+		case waitErr := <-exited:
+			if waitErr == nil {
+				// A nil error from cmd.Wait means the process exited 0: unusual for
+				// nono to do without ever binding the socket, but still reported as
+				// a specific, immediate failure rather than folded into the
+				// generic timeout message below.
+				return true, fmt.Errorf("command broker exited (status 0) before binding its socket")
+			}
+			return true, fmt.Errorf("command broker exited before binding its socket: %w", waitErr)
+		case <-time.After(25 * time.Millisecond):
+		}
 	}
-	return fmt.Errorf("command broker did not start within %s; run `agent-sandbox doctor`", timeout)
+	return false, fmt.Errorf("command broker did not start within %s; run `agent-sandbox doctor`", timeout)
 }
 
 // BrokerArgs builds the `nono run` argv for the command broker's session.
@@ -354,7 +423,7 @@ func waitForSocket(path string, timeout time.Duration) error {
 // which is what $WORKDIR expands to inside it.
 func BrokerArgs(cfg *config.Config, nonoPath, selfPath, sockPath, workdir string) []string {
 	return []string{
-		"nono", "run", "--silent",
+		nonoPath, "run", "--silent",
 		"--profile", cfg.CommandProfilePath(),
 		"--workdir", workdir,
 		"--allow-unix-socket-bind", sockPath,

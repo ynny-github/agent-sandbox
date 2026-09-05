@@ -57,15 +57,17 @@ func runBroker(cmd *cobra.Command, args []string) error {
 	// A command still in flight when the signal arrives does not get to finish:
 	// Close only stops accepting new connections, it does not wait for
 	// in-flight handle goroutines, so this process exiting immediately after
-	// can truncate that command's output. Under `agent-sandbox claude`'s own
-	// teardown this is not reachable — launch.go's cleanup runs only after the
-	// supervised Claude process has already exited, so no client can be
-	// mid-command when the signal is sent. It is reachable if this session is
-	// signaled directly (SIGINT reaching the whole foreground process group,
-	// say) while a command is still running; draining in-flight connections
-	// with a bounded timeout would close that gap but is a bigger change than
-	// this task's mandate, so it is left as a known follow-up rather than
-	// papered over here.
+	// can truncate that command's output. This is reachable more often than it
+	// sounds: this process is started with no SysProcAttr.Setpgid, so it sits
+	// in the launcher's own foreground process group, and an ordinary terminal
+	// Ctrl-C reaches it directly, not only launch.go's own SIGTERM on teardown.
+	// What makes that acceptable rather than a bug to fix here is harm, not
+	// rarity: a Ctrl-C also aborts the agent in the same instant, so the
+	// truncated output belongs to a command the user just cancelled, not one
+	// they were waiting on. Draining in-flight connections with a bounded
+	// timeout would close the gap properly but is a bigger change than this
+	// task's mandate, so it is left as a known follow-up rather than papered
+	// over here.
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(sigs)

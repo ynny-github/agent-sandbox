@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/agentconfig"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/broker"
@@ -81,6 +82,38 @@ func makeFakeNono(t *testing.T) string {
 	}
 	t.Setenv("PATH", dir)
 	return path
+}
+
+// makeFakeNonoWedged writes a "nono" that creates the socket named after
+// "--allow-unix-socket-bind" (standing in for a broker session that started
+// fine), then ignores SIGTERM and sleeps, standing in for a broker that never
+// exits on its own. It is what TestStartCommandBroker_CleanupKillsAWedgedBroker
+// uses to prove teardown escalates to SIGKILL rather than waiting forever.
+func makeFakeNonoWedged(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nono")
+	// touch and sleep are external binaries and this script's own PATH is
+	// deliberately just this fake nono's directory (so it, not any real nono,
+	// is what gets resolved), so both the socket creation and the "never
+	// exits" wait use only sh builtins: redirection and a busy loop.
+	script := `#!/bin/sh
+sock=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "--allow-unix-socket-bind" ]; then
+    sock="$arg"
+  fi
+  prev="$arg"
+done
+: > "$sock"
+trap '' TERM
+while :; do :; done
+`
+	if err := os.WriteFile(path, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
 }
 
 func argsContain(args []string, target string) bool {
@@ -644,6 +677,70 @@ func TestStartCommandBroker_NonoNotInPath(t *testing.T) {
 	}
 }
 
+// TestStartCommandBroker_ReportsChildExitBeforeBinding is the integration-level
+// version of TestWaitForSocketOrExit_ChildExitsFirst: with a fake "nono" that
+// exits 0 without ever binding a socket (standing in for nono rejecting the
+// command profile), startCommandBroker must fail fast with a specific error
+// rather than blocking for the full brokerStartTimeout and reporting a bare
+// "did not start" message.
+func TestStartCommandBroker_ReportsChildExitBeforeBinding(t *testing.T) {
+	makeFakeNono(t)
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	start := time.Now()
+	sock, cleanup, err := startCommandBroker(&config.Config{})
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("startCommandBroker() took %s, want it to fail fast once the child exits", elapsed)
+	}
+	if err == nil {
+		t.Fatal("startCommandBroker() error = nil, want an error when the child exits before binding")
+	}
+	if !strings.Contains(err.Error(), "exited") {
+		t.Errorf("err = %v, want it to mention the child exiting", err)
+	}
+	if sock != "" {
+		t.Errorf("socket = %q, want empty on error", sock)
+	}
+	if cleanup != nil {
+		t.Error("cleanup should be nil on error")
+	}
+}
+
+// TestStartCommandBroker_CleanupKillsAWedgedBroker is the regression test for
+// Important Finding 2: teardown must not trust a signaled broker to exit and
+// wait on it forever. With a fake "nono" that ignores SIGTERM entirely,
+// cleanup must still return — bounded by brokerStopTimeout, shrunk here so the
+// test does not spend real seconds proving it — rather than hang
+// agent-sandbox claude after the agent has already exited.
+func TestStartCommandBroker_CleanupKillsAWedgedBroker(t *testing.T) {
+	old := brokerStopTimeout
+	brokerStopTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { brokerStopTimeout = old })
+
+	makeFakeNonoWedged(t)
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	sock, cleanup, err := startCommandBroker(&config.Config{})
+	if err != nil {
+		t.Fatalf("startCommandBroker() error = %v", err)
+	}
+	if cleanup == nil {
+		t.Fatal("cleanup = nil, want a cleanup function")
+	}
+	if _, statErr := os.Stat(sock); statErr != nil {
+		t.Fatalf("socket %s missing before cleanup: %v", sock, statErr)
+	}
+
+	start := time.Now()
+	cleanup()
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Errorf("cleanup() took %s, want it bounded by brokerStopTimeout instead of hanging", elapsed)
+	}
+	if _, statErr := os.Stat(sock); !os.IsNotExist(statErr) {
+		t.Errorf("socket %s still exists after cleanup (stat err = %v), want it removed", sock, statErr)
+	}
+}
+
 func TestBrokerArgsRunsTheBrokerUnderTheCommandProfile(t *testing.T) {
 	dir := t.TempDir()
 	profile := filepath.Join(dir, "command-profile.json")
@@ -669,6 +766,106 @@ func TestBrokerArgsRunsTheBrokerUnderTheCommandProfile(t *testing.T) {
 	}
 	if strings.Contains(joined, "--allow-cwd") {
 		t.Errorf("BrokerArgs() grants --allow-cwd; the working directory comes from the profile's $WORKDIR")
+	}
+}
+
+// TestBrokerArgsUsesTheResolvedNonoPath guards against BrokerArgs silently
+// discarding nonoPath: `agent-sandbox debug` exists specifically to print the
+// invocation the launcher really builds, and a hardcoded "nono" in argv[0]
+// would defeat that the moment the resolved binary isn't the first "nono" on
+// PATH.
+func TestBrokerArgsUsesTheResolvedNonoPath(t *testing.T) {
+	dir := t.TempDir()
+	profile := filepath.Join(dir, "command-profile.json")
+	if err := os.WriteFile(profile, []byte("{}"), 0o600); err != nil {
+		t.Fatalf("write profile: %v", err)
+	}
+	cfg := loadConfigWithCommandProfile(t, dir, profile)
+
+	args := BrokerArgs(cfg, "/opt/nono/bin/nono", "/opt/agent-sandbox/bin/agent-sandbox",
+		"/run/b.sock", "/work/project")
+
+	if len(args) == 0 || args[0] != "/opt/nono/bin/nono" {
+		t.Errorf("args[0] = %v, want the resolved nono path %q", args, "/opt/nono/bin/nono")
+	}
+}
+
+func TestWaitForSocketOrExit_SocketAppears(t *testing.T) {
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "s.sock")
+	exited := make(chan error, 1) // never sent to: the child stays "running"
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		if err := os.WriteFile(sock, nil, 0o600); err != nil {
+			t.Error(err)
+		}
+	}()
+
+	childExited, err := waitForSocketOrExit(sock, 2*time.Second, exited)
+	if err != nil {
+		t.Fatalf("waitForSocketOrExit() error = %v, want nil", err)
+	}
+	if childExited {
+		t.Error("childExited = true, want false: the child never exited on this path")
+	}
+}
+
+// TestWaitForSocketOrExit_ChildExitsFirst is the case Important Finding 1
+// exists to fix: a broker nono rejects (a bad profile, say) exits almost
+// immediately, and that must surface as a fast, specific error instead of the
+// launcher blocking for the full startup timeout and then reporting a
+// generic "did not start" message.
+func TestWaitForSocketOrExit_ChildExitsFirst(t *testing.T) {
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "s.sock") // never created
+	exited := make(chan error, 1)
+	exited <- errors.New("exit status 2")
+
+	start := time.Now()
+	childExited, err := waitForSocketOrExit(sock, 2*time.Second, exited)
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Errorf("waitForSocketOrExit() took %s, want it to return promptly on child exit", elapsed)
+	}
+	if !childExited {
+		t.Error("childExited = false, want true")
+	}
+	if err == nil || !strings.Contains(err.Error(), "exited before binding its socket") {
+		t.Errorf("err = %v, want it to say the child exited before binding", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "exit status 2") {
+		t.Errorf("err = %v, want it to wrap the underlying exit error", err)
+	}
+}
+
+// TestWaitForSocketOrExit_ChildExitsCleanly guards the nil-error edge case: a
+// nil error from cmd.Wait means the process exited with status 0, which %w
+// would otherwise render as a broken "%!w(<nil>)" message.
+func TestWaitForSocketOrExit_ChildExitsCleanly(t *testing.T) {
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "s.sock")
+	exited := make(chan error, 1)
+	exited <- nil
+
+	childExited, err := waitForSocketOrExit(sock, 2*time.Second, exited)
+	if !childExited {
+		t.Error("childExited = false, want true")
+	}
+	if err == nil || !strings.Contains(err.Error(), "status 0") {
+		t.Errorf("err = %v, want it to mention exit status 0", err)
+	}
+}
+
+func TestWaitForSocketOrExit_Timeout(t *testing.T) {
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "s.sock")
+	exited := make(chan error, 1) // never sent to
+
+	childExited, err := waitForSocketOrExit(sock, 50*time.Millisecond, exited)
+	if childExited {
+		t.Error("childExited = true, want false: nothing was ever sent on exited")
+	}
+	if err == nil || !strings.Contains(err.Error(), "did not start within") {
+		t.Errorf("err = %v, want the timeout message", err)
 	}
 }
 

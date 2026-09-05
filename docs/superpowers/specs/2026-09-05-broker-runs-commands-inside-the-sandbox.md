@@ -256,12 +256,40 @@ the broker inside the sandbox there is nothing to spawn:
 | `--workdir` passed per request | passed once, at broker startup |
 | `waitDelay` backstop | kept; a grandchild holding the output pipes is still possible |
 
-The stdin pump stays, and for the same reason the current code documents:
-assigning `cmd.Stdin` makes `Wait` block on os/exec's copier, which sits in
-`Read()`. Measured: without `StdinPipe`, a pipeline hangs.
-
 The `Request` gains nothing. Redirections are handled by the interpreter inside
 the broker, so they never reach the wire.
+
+### Stream ownership is the one delicate part
+
+The exec handler must not hand the interpreter's own pipe ends to a child. A
+policy command reaches its target through a shim, and the shim duplicates every
+fd it is given and keeps the copy. Pass the interpreter's pipe writer straight
+through and it stays open after the command exits, so the next stage never sees
+EOF: measured, `rg --version | rg ripgrep` with both commands policy-controlled
+produced its complete, correct output and then hung 5/5, stranding the reader's
+shim in `anon_pipe_read` — a leaked process that never exits. Closing the
+broker's own copy of that writer does not help; the shim holds another.
+
+The handler interposes an os/exec pipe on every stream the interpreter supplies
+that is not already a real file:
+
+- `cmd.StdoutPipe()` / `cmd.StderrPipe()`, copied into the interpreter's writer,
+  and that writer closed once the copy finishes. The shim then only ever
+  duplicates the os/exec pipe, and this process alone holds the interpreter's
+  end, so closing it is what ends the stage.
+- The os/exec end closed when a copy fails, which is what delivers `EPIPE` to a
+  writer whose reader has already exited. Without it, `rg . big \| rg -m 1 …`
+  hangs and the upstream shim reports
+  `failed to read tool-sandbox IPC length`.
+- `cmd.StdinPipe()` with a pump goroutine rather than `cmd.Stdin`, for the
+  reason the current `NonoExecutor` documents: with `cmd.Stdin` set, `Wait`
+  blocks on os/exec's copier, which sits in `Read()`.
+
+Measured with all three in place: policy-to-policy pipelines, three-stage
+pipelines, an early-exiting reader, `2>&1 |`, and exit-status propagation all
+behave, with no process left behind over repeated runs. This is the same
+pipe-ownership problem `router.runMixedPipeline` documents today, in a new
+place; the existing comment there is worth carrying over.
 
 ## What is deleted
 
@@ -329,56 +357,6 @@ should know the compose file is no longer inspected.
 
 ## Measured constraints
 
-**A pipeline cannot have a policy command at both ends.** Five runs of each,
-deterministic:
-
-| pipeline | result |
-| --- | --- |
-| policy → floor (`git log \| rg x`, only git policy-controlled) | works |
-| floor → policy (only the reader policy-controlled) | works |
-| shell builtin → policy | works |
-| floor → floor | works |
-| **policy → policy** | **hangs, 5/5** |
-
-Two policy commands running concurrently without a pipe (`a & b & wait`) both
-complete, so this is not serialization — it is the pipe.
-
-The failure is worse than an error. The pipeline produces its complete, correct
-output and then does not exit:
-
-```
-$ rg --version | rg ripgrep
-ripgrep 15.2.0        ← correct output
-                      ← never returns
-```
-
-The agent sees a timeout with no exit status, and the output is discarded. The
-process left behind is the *reader's* shim, blocked in `anon_pipe_read`: it
-relays stdin for the real command and never receives EOF, because the writer's
-side of the pipe stays open after the writer exits. Each occurrence leaks that
-shim process; it does not exit on its own.
-
-The broker cannot close the gap from its side. Closing its own copy of the write
-end when the writer's `Wait` returns changes nothing (measured) — the writer's
-shim holds another copy.
-
-What to do about it is an open decision; see below. One enabling fact, whichever
-way it goes: the broker can identify the case exactly, without keeping a list of
-which commands are policy-controlled. nono prepends its shim directory to
-`PATH`, so `exec.LookPath` resolves a policy command under that directory and a
-floor command to its real binary. "Both ends of this pipe resolved under the
-shim directory" is the whole test.
-
-This interacts badly with the two-tier design, which gives operators a reason to
-move commands into the policy tier: per-command filesystem and network grants
-live there. With only `git` and `docker` policy-controlled the case is nearly
-unreachable, because nothing pipes one into the other. Policy-control `go`,
-`rg` and `curl` to scope their network, and `go list ./... | rg foo` — an
-ordinary line — stops working. The blast radius is set by how thick the policy
-tier is.
-
-Report the underlying behaviour upstream regardless.
-
 **The broker binary must live outside every path the sandbox can write.** nono
 refuses to start otherwise:
 `tool-sandbox policy command binary is replaceable through writable parent
@@ -411,38 +389,13 @@ instead state the two tiers, name the commands in each, and reproduce the
 `invocation_policy` denials with their reasons — the agent needs to know a
 refusal is a policy, not a bug.
 
-**Upstream reports.** Three items, each with a reproducer: `exec_paths` missing
-from the published schema; `invocation_policy` denials bypassable by absolute
-path when the caller holds a broad `exec_paths`; stdin EOF not propagated
-through a shim.
+**Upstream reports.** Two items, each with a reproducer: `exec_paths` missing
+from the published schema, and `invocation_policy` denials bypassable by
+absolute path when the caller holds a broad `exec_paths`. A third is worth
+raising as a question rather than a bug — a shim keeping a duplicate of an
+inherited pipe fd is ordinary fd inheritance, but it means every parent that
+pipes two policy commands together has to interpose, and nothing says so.
 
 **A worked example profile** for this repository, covering the commands the
 agent actually uses here, belongs with the implementation — it is the artifact
 that shows whether the enumeration cost is tolerable in practice.
-
-## Open decision
-
-**What the broker does with a pipeline that has a policy command at both ends.**
-The case is detectable (see Measured constraints); what to do with it is not
-settled.
-
-- *Refuse.* The agent gets an error naming the workaround — write the upstream
-  output to a file and redirect from it, measured working. Costs one retry.
-  Turns a hang into a message, leaks nothing, and becomes dead code if the
-  behaviour is fixed upstream.
-- *Buffer.* Run the upstream to completion into a temporary file, then feed the
-  reader from it. The line works as written, at the cost of streaming: a
-  producer that never ends (`tail -f | …`) never starts the reader, and an
-  unbounded producer fills the disk.
-- *Leave it, and keep the policy tier thin.* No code. The case stays nearly
-  unreachable as long as only commands that are never piped into each other are
-  policy-controlled — but nothing enforces that, and when it is hit the agent
-  loses the output and a shim process is leaked.
-- *Patch nono.* Fix the pipe teardown and carry a second patch alongside the
-  NixOS one.
-
-## Evidence
-
-Every *measured* claim above has a profile and a recorded result in
-[2026-09-05-broker-probes.md](2026-09-05-broker-probes.md). The probes the
-design rests on are `p7`, `p8`, `b1`, `b2`, `s1`, `n12`, `sh1` and `sh2`.

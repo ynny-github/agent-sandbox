@@ -16,7 +16,7 @@ import (
 
 var serveCmd = &cobra.Command{
 	Use:   "command-router",
-	Short: "Start the MCP command router server",
+	Short: "Start the MCP server that brokers commands to the sandbox",
 	RunE:  runServe,
 }
 
@@ -62,19 +62,23 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return runLightweightServe(cfg)
 	}
 
-	runner, cleanup, err := newBrokerCommandRunner(context.Background(), cfg)
+	var runner mcptool.CommandRunner
+	client, err := broker.NewClientFromEnv()
 	if err != nil {
-		// Before the broker existed, a missing command sandbox did not stop the
-		// MCP server: host-routed and dropped commands still work, and refusing
-		// to start hides the reason behind a dead stdio server. Print the
-		// actionable hint and let sandbox-routed commands fail individually.
+		// Every command now runs through the broker, so a missing command
+		// sandbox means every RunCommand call will fail — but refusing to
+		// start here would hide the reason behind a dead stdio server, with
+		// no actionable message reaching the agent at all. Print the
+		// actionable hint instead and let each command fail individually
+		// with it (see mcptool.HandleRunCommand).
 		if !errors.Is(err, broker.ErrBrokerUnavailable) {
 			return err
 		}
 		fmt.Fprintln(os.Stderr, broker.SandboxNotRunningHint)
-		runner, cleanup = unavailableRunner{err: err}, func() {}
+		runner = unavailableRunner{err: err}
+	} else {
+		runner = client
 	}
-	defer cleanup()
 
 	server := newCommandRouterServer(cfg, serveDependencies{
 		commandRunner: runner,

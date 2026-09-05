@@ -2,6 +2,7 @@ package mcptool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -36,6 +37,13 @@ func HandleRunCommand(ctx context.Context, cmd string, cfg HandlerConfig) (*mcp.
 
 	closeErr := files.Close()
 	if runErr != nil {
+		// The broker being unreachable is actionable in a way its raw error
+		// text is not (it names an env var and a connection failure, neither
+		// of which tells the agent what to do); every other RunCommand error
+		// is command-specific and reads fine verbatim.
+		if errors.Is(runErr, broker.ErrBrokerUnavailable) {
+			return errorResult(broker.SandboxNotRunningHint), nil, nil
+		}
 		return errorResult(runErr.Error()), nil, nil
 	}
 	if closeErr != nil {

@@ -5,18 +5,67 @@
 - Command output is returned inline in the tool result.
 {{else}}- The Bash and Monitor tools are disabled; use the `run_command` MCP tool to run shell commands.
 - Command output is written to files; read the returned stdout/stderr paths.
-{{end}}- Every command runs through a host-side command broker, under the operator-written nono profile at `{{.ProfilePath}}`. Which commands that profile allows, and how each may be invoked, is not `agent-sandbox.toml`'s concern — it is the profile's.
+{{end}}
+There is no shell in the loop. The command broker parses your command line
+itself (pipelines, `&&`/`||`/`;`, redirections, globbing, `$(…)`, `for`/`if`,
+`cd` and the other shell builtins all work), and executes each simple command
+directly — never through `bash` or `sh`, which are not runnable in this
+sandbox at all.
+
+Every command in your line sorts into one of two tiers:
+
+- **Policy commands** run in their own child sandbox, with their own
+  filesystem/network grants and argv rules. Reaching one bypasses nothing:
+  its rules cannot be evaded by an absolute path or any other trick.
+- **Floor commands** run directly in the broker's own sandbox, with no argv
+  rules of their own.
+
+A program in neither tier cannot run at all — refused before it starts, the
+same way an unknown command would be. This is the allowlist; there is nothing
+else to check.
+
+**Policy commands and their denials, from `{{.ProfilePath}}`:**
+{{if .PolicyCommands}}{{range .PolicyCommands}}
+- `{{.Name}}`{{if .Denials}}, refusing:{{range .Denials}}
+  - {{.}}{{end}}{{else}} (no invocations refused){{end}}
+{{end -}}
+{{else}}
+- (none declared in the current profile)
+{{end}}
+**Floor commands** — no argv rules, run at the broker's own grants:
+{{if .FloorPaths}}{{range .FloorPaths}}- `{{.}}`
+{{end -}}
+{{else}}- (none declared in the current profile)
+{{end}}
+A refusal always carries a reason on stderr. If a command you need is refused
+with no reason and isn't one of the denials above, it is missing from both
+tiers, not misbehaving — ask the operator to add it to the command profile,
+don't retry it.
+
+One thing the two tiers don't cover: the broker's own shell builtins (`echo`,
+`cd`, `test`, `read`, and the others `mvdan.cc/sh` implements) run inside the
+broker itself, at the broker's own filesystem grants — they never reach either
+tier. A redirect or glob you write is bounded by those same grants, not by
+whichever command's output it's attached to.
+
+Which commands may run, what each may touch, and which invocations are
+refused is not `agent-sandbox.toml`'s concern — it is the command profile's,
+written in nono's own schema, resolved at `{{.ProfilePath}}`.
 
 ## Changing the config
 The sandbox is configured by `{{.ConfigPath}}`. You may edit it directly.
 
 Editing it **does not affect the current session**: the agent's nono profile is
 generated once when the session starts. An edit takes effect the next time the
-operator runs `agent-sandbox claude`.
+operator runs `agent-sandbox claude`. The same is true of the command profile
+at `{{.ProfilePath}}`: it is read once, when the broker starts.
 
 After editing, run `agent-sandbox ai config-check` — it loads the config and
 resolves the agent profile exactly as launch does, so a passing check means the
-config will not be what breaks the next launch.
+config will not be what breaks the next launch. `agent-sandbox doctor` checks
+the command profile itself (that it exists, that `nono profile validate`
+passes on it, and that it does not grant write access to the broker's own
+binary).
 
 Schema:
 
@@ -27,8 +76,8 @@ tool_mode = "hook"                    # "hook" | "mcp"
 command_output_dir = "..."            # mcp tool_mode only: where command output is written
 
 # Host access for the launched agent — the only profile agent-sandbox
-# generates. The sandbox a command runs in is the operator's command profile,
-# configured separately (see above).
+# generates. The sandbox a command runs in is the command profile at the path
+# above, configured separately by the operator (see above).
 [sandbox.agent]
 capabilities = []                     # named bundles; see the list below
 allow        = []                     # directories, read+write

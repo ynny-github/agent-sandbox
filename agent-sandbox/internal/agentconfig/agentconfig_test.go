@@ -1,6 +1,8 @@
 package agentconfig_test
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -8,6 +10,70 @@ import (
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandboxhost"
 )
+
+// writeProfile writes contents (a command-profile.json body) to path.
+func writeProfile(t *testing.T, path, contents string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatalf("write profile: %v", err)
+	}
+}
+
+// configWithProfile returns a *config.Config whose CommandProfilePath()
+// resolves to profile, loaded the same way config.Load resolves a relative
+// command_profile: against the directory holding agent-sandbox.toml.
+func configWithProfile(t *testing.T, dir, profile string) *config.Config {
+	t.Helper()
+	rel, err := filepath.Rel(dir, profile)
+	if err != nil {
+		t.Fatalf("relative profile path: %v", err)
+	}
+	data := "tool_mode = \"hook\"\ncommand_profile = " + `"` + rel + `"` + "\n"
+	tomlPath := filepath.Join(dir, "agent-sandbox.toml")
+	if err := os.WriteFile(tomlPath, []byte(data), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := config.Load(tomlPath)
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	return cfg
+}
+
+// Explain names the command profile's path, both tiers it declares, and the
+// reason behind each invocation_policy denial — an agent that cannot tell a
+// policy refusal from a bug will retry it.
+func TestExplainNamesTheCommandProfileAndBothTiers(t *testing.T) {
+	dir := t.TempDir()
+	profile := filepath.Join(dir, "command-profile.json")
+	writeProfile(t, profile, `{
+	  "command_policies": {
+	    "commands": {
+	      "agent-sandbox": { "can_use": ["git"],
+	        "from": { "session": { "sandbox": { "exec_paths": ["/usr/bin"] } } } },
+	      "git": { "from": { "agent-sandbox": { "invocation_policy": { "deny": [
+	        { "argv": { "contains": ["--force"] }, "reason": "force push is disabled in this sandbox" }
+	      ] } } } }
+	    }
+	  }
+	}`)
+	got := agentconfig.Explain(configWithProfile(t, dir, profile), filepath.Join(dir, "agent-sandbox.toml"))
+
+	for _, want := range []string{
+		profile,
+		"git",
+		"force push is disabled in this sandbox",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Explain() is missing %q\n---\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{"allow_commands", "drop_commands", "safe git", "[sandbox.shell]"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("Explain() still mentions %q", unwanted)
+		}
+	}
+}
 
 func TestPointer_MentionsExplainCommand(t *testing.T) {
 	got := agentconfig.Pointer()

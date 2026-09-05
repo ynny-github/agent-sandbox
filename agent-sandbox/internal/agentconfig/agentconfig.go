@@ -3,6 +3,10 @@ package agentconfig
 import (
 	"bytes"
 	_ "embed"
+	"encoding/json"
+	"fmt"
+	"os"
+	"sort"
 	"strings"
 	"text/template"
 
@@ -35,13 +39,27 @@ type explainView struct {
 	// agent is being told which file to edit, and --config can move it.
 	ConfigPath string
 	// ProfilePath is the command profile the broker runs commands under
-	// (cfg.CommandProfilePath()). agent-sandbox does not generate or read its
-	// contents, so this is a pointer, not a description of what it allows.
+	// (cfg.CommandProfilePath()). agent-sandbox does not generate its contents;
+	// this is a pointer, plus what could be read out of it, not a description
+	// of everything nono's own schema can express.
 	ProfilePath string
+	// PolicyCommands are the commands with their own child sandbox and argv
+	// rules; FloorCommands run in the broker's own sandbox. An agent that knows
+	// which is which can tell a refusal from a bug.
+	PolicyCommands []policyCommandView
+	FloorPaths     []string
 	// Capabilities is the catalog's capability names, so the editing section
 	// lists what may actually be written rather than a prose sample that goes
 	// stale when a bundle is added.
 	Capabilities []string
+}
+
+// policyCommandView is one command_policies.commands entry that is not the
+// broker's own (session) entry: a policy command, reachable only through its
+// nono-generated shim.
+type policyCommandView struct {
+	Name    string
+	Denials []string // each is "<matcher>: <reason>", or just "<matcher>" when the profile carries no reason
 }
 
 // Explain renders a Markdown description of the sandbox environment from cfg,
@@ -50,11 +68,16 @@ type explainView struct {
 // passes the config path it loaded cfg from, so the editing section names the
 // file the agent must actually edit.
 func Explain(cfg *config.Config, configPath string) string {
+	profilePath := cfg.CommandProfilePath()
+	policyCommands, floorPaths := readCommandProfile(profilePath)
+
 	view := explainView{
-		Hook:         cfg.ToolMode == "hook",
-		ConfigPath:   configPath,
-		ProfilePath:  cfg.CommandProfilePath(),
-		Capabilities: sandboxhost.CapabilityNames(),
+		Hook:           cfg.ToolMode == "hook",
+		ConfigPath:     configPath,
+		ProfilePath:    profilePath,
+		PolicyCommands: policyCommands,
+		FloorPaths:     floorPaths,
+		Capabilities:   sandboxhost.CapabilityNames(),
 	}
 
 	var buf bytes.Buffer
@@ -65,4 +88,103 @@ func Explain(cfg *config.Config, configPath string) string {
 		panic("agentconfig: render explain template: " + err.Error())
 	}
 	return strings.TrimRight(buf.String(), "\n") + "\n"
+}
+
+// commandProfileSchema is the slice of nono's command-profile JSON this
+// package reads. It is deliberately narrow: agent-sandbox does not generate or
+// validate the profile, and every field here exists only so an agent reading
+// `ai explain` can tell a policy command from a floor command and see a
+// denial's reason. Any profile field outside this shape is simply not shown.
+type commandProfileSchema struct {
+	CommandPolicies struct {
+		Commands map[string]struct {
+			From map[string]struct {
+				Sandbox struct {
+					ExecPaths []string `json:"exec_paths"`
+				} `json:"sandbox"`
+				InvocationPolicy struct {
+					Deny []struct {
+						Argv   json.RawMessage `json:"argv"`
+						Reason string          `json:"reason"`
+					} `json:"deny"`
+				} `json:"invocation_policy"`
+			} `json:"from"`
+		} `json:"commands"`
+	} `json:"command_policies"`
+}
+
+// readCommandProfile parses the command profile at path and returns its
+// policy commands (sorted by name) and the broker's own floor paths. A
+// missing or unparseable profile is not an error here: Explain always returns
+// a string, and a launch-time check (doctor, config-check) is where a broken
+// profile is actually reported. Here it just means the two-tier section of the
+// output is empty.
+func readCommandProfile(path string) ([]policyCommandView, []string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, nil
+	}
+	var profile commandProfileSchema
+	if err := json.Unmarshal(data, &profile); err != nil {
+		return nil, nil
+	}
+
+	names := make([]string, 0, len(profile.CommandPolicies.Commands))
+	for name := range profile.CommandPolicies.Commands {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var floorPaths []string
+	var policyCommands []policyCommandView
+	for _, name := range names {
+		entry := profile.CommandPolicies.Commands[name]
+		if session, ok := entry.From["session"]; ok {
+			// The session's own callee is the broker: what it can exec directly
+			// (exec_paths) is the floor, not a policy command.
+			floorPaths = append(floorPaths, session.Sandbox.ExecPaths...)
+			continue
+		}
+
+		var denials []string
+		callers := make([]string, 0, len(entry.From))
+		for caller := range entry.From {
+			callers = append(callers, caller)
+		}
+		sort.Strings(callers)
+		for _, caller := range callers {
+			for _, rule := range entry.From[caller].InvocationPolicy.Deny {
+				matcher := renderArgvMatcher(rule.Argv)
+				if rule.Reason != "" {
+					denials = append(denials, matcher+": "+rule.Reason)
+				} else {
+					denials = append(denials, matcher)
+				}
+			}
+		}
+		policyCommands = append(policyCommands, policyCommandView{Name: name, Denials: denials})
+	}
+	return policyCommands, floorPaths
+}
+
+// renderArgvMatcher renders an invocation_policy rule's argv matcher (e.g.
+// {"contains": ["--force"]} or {"prefix": ["reset", "--hard"]}) as a short,
+// human-legible string. It never fails: a matcher shape it does not recognize
+// still renders as its raw JSON, so an unusual profile is described rather
+// than dropped silently.
+func renderArgvMatcher(raw json.RawMessage) string {
+	var m map[string][]string
+	if err := json.Unmarshal(raw, &m); err == nil && len(m) > 0 {
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		var parts []string
+		for _, k := range keys {
+			parts = append(parts, fmt.Sprintf("argv %s %s", k, strings.Join(m[k], " ")))
+		}
+		return strings.Join(parts, ", ")
+	}
+	return "argv " + string(raw)
 }

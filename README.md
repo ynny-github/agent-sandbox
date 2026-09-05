@@ -416,8 +416,18 @@ argv rules:
 `reason` reaches the agent verbatim on stderr, at exit code 126 — see
 `agent-sandbox ai explain` for the full, current list.
 
-Two properties worth knowing before writing your own:
+Three properties worth knowing before writing your own:
 
+- **The broker's own entry must list its directory in `executable_dirs`.**
+  The launcher invokes `agent-sandbox broker` by base name, never by an
+  absolute path: nono treats an absolute-path invocation of a declared
+  policy command as a direct exec bypass and refuses it, so resolving the
+  broker's own entrypoint goes through `command_policies.executable_dirs`
+  plus its pinned `executable`, not through the launcher's own `PATH`. Every
+  profile that declares `agent-sandbox` as a policy command — which is every
+  profile shaped like the example above — needs the directory holding the
+  installed binary in `executable_dirs`, or the whole session fails to
+  start. `agent-sandbox doctor` checks for exactly this.
 - **Enumerating every runnable command is the real cost of this design.** A
   program absent from both tiers cannot run at all, which is the allowlist
   working as intended — and also the profile's recurring maintenance

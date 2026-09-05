@@ -385,6 +385,80 @@ func TestCheckCommandProfileOK(t *testing.T) {
 	}
 }
 
+func TestCheckCommandProfileFailsWhenEntrypointExecutableDirMissing(t *testing.T) {
+	// BrokerArgs invokes the broker by base name, and nono resolves a
+	// declared policy command's name against command_policies.executable_dirs,
+	// not the process's own PATH. A profile that declares "agent-sandbox" (the
+	// base name of whatever selfPath resolves to) as a policy command without
+	// listing its directory here would fail to start the broker session —
+	// exactly the shape this test's fixture profile has.
+	dir := t.TempDir()
+	binDir := t.TempDir()
+	selfBin := filepath.Join(binDir, "agent-sandbox")
+
+	profile := filepath.Join(dir, "command-profile.json")
+	body := `{
+	  "filesystem": {"allow": ["$WORKDIR"]},
+	  "command_policies": {
+	    "executable_dirs": ["/some/other/dir"],
+	    "commands": {
+	      "agent-sandbox": {"executable": "` + selfBin + `"}
+	    }
+	  }
+	}`
+	if err := os.WriteFile(profile, []byte(body), 0o600); err != nil {
+		t.Fatalf("write profile: %v", err)
+	}
+	restore := stubRunCommand(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return []byte("valid"), nil
+	})
+	defer restore()
+	restoreSelf := stubSelfPath(selfBin)
+	defer restoreSelf()
+
+	got := checkCommandProfile(configWithProfile(t, dir, profile))
+	if got.ok {
+		t.Fatal("checkCommandProfile ok = true, want false: profile declares the entrypoint as a policy command without its directory in executable_dirs")
+	}
+	if !strings.Contains(got.hint, "executable_dirs") {
+		t.Errorf("hint = %q, want it to mention executable_dirs", got.hint)
+	}
+	if !strings.Contains(got.hint, binDir) {
+		t.Errorf("hint = %q, want it to name the missing directory %q", got.hint, binDir)
+	}
+}
+
+func TestCheckCommandProfileOKWhenEntrypointExecutableDirPresent(t *testing.T) {
+	dir := t.TempDir()
+	binDir := t.TempDir()
+	selfBin := filepath.Join(binDir, "agent-sandbox")
+
+	profile := filepath.Join(dir, "command-profile.json")
+	body := `{
+	  "filesystem": {"allow": ["$WORKDIR"]},
+	  "command_policies": {
+	    "executable_dirs": ["` + binDir + `"],
+	    "commands": {
+	      "agent-sandbox": {"executable": "` + selfBin + `"}
+	    }
+	  }
+	}`
+	if err := os.WriteFile(profile, []byte(body), 0o600); err != nil {
+		t.Fatalf("write profile: %v", err)
+	}
+	restore := stubRunCommand(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return []byte("valid"), nil
+	})
+	defer restore()
+	restoreSelf := stubSelfPath(selfBin)
+	defer restoreSelf()
+
+	got := checkCommandProfile(configWithProfile(t, dir, profile))
+	if !got.ok {
+		t.Errorf("checkCommandProfile ok = false, want true: details=%v hint=%q", got.details, got.hint)
+	}
+}
+
 func TestCheckCommandProfileFailsWhenTheFileIsMissing(t *testing.T) {
 	dir := t.TempDir()
 	present := filepath.Join(dir, "command-profile.json")

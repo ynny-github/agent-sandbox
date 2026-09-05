@@ -701,7 +701,7 @@ func TestBrokerArgsRunsTheBrokerUnderTheCommandProfile(t *testing.T) {
 		"--profile " + profile,
 		"--workdir /work/project",
 		"--allow-unix-socket-bind /run/b.sock",
-		"-- /opt/agent-sandbox/bin/agent-sandbox broker --socket /run/b.sock",
+		"-- agent-sandbox broker --socket /run/b.sock",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("BrokerArgs() = %q\nmissing %q", joined, want)
@@ -709,6 +709,42 @@ func TestBrokerArgsRunsTheBrokerUnderTheCommandProfile(t *testing.T) {
 	}
 	if strings.Contains(joined, "--allow-cwd") {
 		t.Errorf("BrokerArgs() grants --allow-cwd; the working directory comes from the profile's $WORKDIR")
+	}
+	if strings.Contains(joined, "/opt/agent-sandbox/bin/agent-sandbox") {
+		t.Errorf("BrokerArgs() = %q, want the entrypoint invoked by base name, not selfPath's absolute form (nono refuses an absolute-path invocation of a policy command as a direct exec bypass)", joined)
+	}
+}
+
+// TestBrokerArgsInvokesTheEntrypointByBaseName is the direct regression test
+// for the bug this rewrite fixes: nono treats an absolute-path invocation of
+// a declared policy command as a direct exec bypass and refuses it outright,
+// measured against a real profile that declares "agent-sandbox" as its own
+// policy command (the shape the design's worked example, and this
+// repository's own command-profile.json, both use). Resolution has to go
+// through nono's own name-based matching against command_policies instead.
+func TestBrokerArgsInvokesTheEntrypointByBaseName(t *testing.T) {
+	dir := t.TempDir()
+	profile := filepath.Join(dir, "command-profile.json")
+	if err := os.WriteFile(profile, []byte("{}"), 0o600); err != nil {
+		t.Fatalf("write profile: %v", err)
+	}
+	cfg := loadConfigWithCommandProfile(t, dir, profile)
+
+	args := BrokerArgs(cfg, "/usr/bin/nono", "/opt/agent-sandbox/bin/agent-sandbox",
+		"/run/b.sock", "/work/project")
+
+	dashIdx := -1
+	for i, a := range args {
+		if a == "--" {
+			dashIdx = i
+			break
+		}
+	}
+	if dashIdx < 0 || dashIdx+1 >= len(args) {
+		t.Fatalf("BrokerArgs() = %v, no entrypoint after --", args)
+	}
+	if got := args[dashIdx+1]; got != "agent-sandbox" {
+		t.Errorf("entrypoint = %q, want the base name %q", got, "agent-sandbox")
 	}
 }
 

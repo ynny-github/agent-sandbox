@@ -391,6 +391,22 @@ func waitForSocketOrExit(path string, timeout time.Duration, exited <-chan error
 // policies apply to everything it executes. It is deliberately not given
 // --allow-cwd; the working directory reaches the profile through --workdir,
 // which is what $WORKDIR expands to inside it.
+//
+// The entrypoint is invoked by base name, never by selfPath's absolute form.
+// A command profile that declares "agent-sandbox" as its own policy command
+// (the shape docs/superpowers/specs/2026-09-05-broker-runs-commands-inside-the-sandbox.md's
+// own worked example uses, and the shape command-profile.json in this
+// repository uses) is matched against a *name*, resolved through nono's own
+// command_policies.executable_dirs plus that entry's pinned executable — not
+// against whatever absolute path the caller happened to invoke it by. Handing
+// nono the absolute path instead is treated as a direct exec bypass of the
+// policy command it resolves to and refused outright ("tool-sandbox direct
+// exec bypass denied for policy-controlled command 'agent-sandbox'"), measured
+// against a real profile carrying that shape. Resolution of the base name
+// still goes through nono's own process (inheriting this process's PATH,
+// unaffected by anything the sandbox itself grants), so the profile's
+// executable_dirs must contain the directory selfPath resolves to; doctor's
+// checkCommandProfile verifies this.
 func BrokerArgs(cfg *config.Config, nonoPath, selfPath, sockPath, workdir string) []string {
 	return []string{
 		nonoPath, "run", "--silent",
@@ -398,7 +414,7 @@ func BrokerArgs(cfg *config.Config, nonoPath, selfPath, sockPath, workdir string
 		"--workdir", workdir,
 		"--allow-unix-socket-bind", sockPath,
 		"--",
-		selfPath, "broker", "--socket", sockPath,
+		filepath.Base(selfPath), "broker", "--socket", sockPath,
 	}
 }
 

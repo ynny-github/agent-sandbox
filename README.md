@@ -569,10 +569,25 @@ agent-sandbox claude --env file:.secrets.env -- --model opus
 mise install          # Go + lefthook
 go test ./...         # unit + integration tests
 go build ./...
+mise run build         # install a working-tree build to $(go env GOPATH)/bin
 ```
 
-End-to-end suites live in `tests/e2e` (Go/Ginkgo) and `e2e` (Python/pytest,
-MCP stdio).
+**Building this project's own binary no longer puts it on `PATH`.** `agent-sandbox
+claude` resolves its own broker entrypoint by base name through the launcher's
+PATH (see [the command profile](#the-command-profile)), and a build that
+landed in this working tree would sit inside the same directory the command
+profile grants `fs_write` — the writable-and-executable combination nono
+refuses a policy command's binary for. `mise run build` installs to
+`$(go env GOPATH)/bin` instead, which is also the path this repository's own
+`command-profile.json` pins as `agent-sandbox`'s `executable`, so a build here
+and a session launched here agree on which binary is the broker. Run `mise run
+build` after every change you want to exercise, then launch as usual
+(`agent-sandbox claude`) — `GOPATH/bin` is already expected to be on a Go
+developer's `PATH`. `go run .` cannot stand in for this: its output binary is
+staged under `$TMPDIR` at run time, on no reliable footing with the profile at
+all.
+
+End-to-end suites live in `e2e` (Python/pytest, MCP stdio).
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/);
 `lefthook` validates the title on `commit-msg`.

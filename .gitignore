@@ -1,7 +1,8 @@
 # common
 tmp/
 
-# the working-tree agent-sandbox build this project puts on PATH (mise run build)
+# stray local build output, if anyone still builds here by hand; `mise run
+# build` itself installs to GOPATH/bin now, not here (see .mise.toml)
 /bin/
 
 # python

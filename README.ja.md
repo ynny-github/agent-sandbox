@@ -586,10 +586,28 @@ agent-sandbox claude --env file:.secrets.env -- --model opus
 mise install          # Go と lefthook
 go test ./...         # ユニットテスト + 統合テスト
 go build ./...
+mise run build         # 作業ツリーのビルドを $(go env GOPATH)/bin にインストール
 ```
 
-E2E スイートは `tests/e2e` (Go/Ginkgo) と `e2e` (Python/pytest、MCP stdio) に
-あります。
+**このプロジェクト自身のバイナリをビルドしても、もう `PATH` には乗りません。**
+`agent-sandbox claude` は自分自身のブローカーのエントリポイントを、起動元
+プロセスの `PATH` を通してベース名で解決します
+([コマンドプロファイル](#コマンドプロファイル) 参照)。もし作業ツリー内に
+ビルド出力を置いてしまうと、それはコマンドプロファイルが `fs_write` を
+許可しているのと同じディレクトリに収まってしまい — nono がポリシーコマンドの
+バイナリに対して拒否する、書き込み可能かつ実行可能という組み合わせに
+なります。そこで `mise run build` はその代わりに `$(go env GOPATH)/bin` へ
+インストールします。ここは、このリポジトリ自身の `command-profile.json` が
+`agent-sandbox` の `executable` として指定しているパスと同じです。つまり、
+ここでビルドしたバイナリと、ここから起動したセッションとで、どれがブローカー
+なのかについて食い違いが起きません。変更を試したいときは毎回 `mise run
+build` を実行してから、いつも通り起動してください
+(`agent-sandbox claude`) — `GOPATH/bin` は Go 開発者の `PATH` にすでに
+含まれているはずのものです。`go run .` はこの代わりにはなりません:
+生成されるバイナリは実行時に `$TMPDIR` 以下に置かれ、プロファイルとの間に
+何の対応関係もないからです。
+
+E2E スイートは `e2e` (Python/pytest、MCP stdio) にあります。
 
 コミットは [Conventional Commits](https://www.conventionalcommits.org/) に従います。
 `lefthook` が `commit-msg` でタイトルを検証します。

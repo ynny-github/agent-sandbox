@@ -286,6 +286,7 @@ package broker_test
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -306,12 +307,15 @@ func runShell(t *testing.T, dir, command string, stdin string) (int, string, str
 	defer cancel()
 
 	var out, errb bytes.Buffer
-	var in *strings.Reader
+	// in must stay a nil *interface*, not a typed nil pointer: a nil
+	// *strings.Reader assigned to an io.Reader makes a non-nil interface, and
+	// the executor would take the stdin path for every case that wants none.
+	var in io.Reader
 	if stdin != "" {
 		in = strings.NewReader(stdin)
 	}
 	e := broker.NewShellExecutor()
-	code, err := e.Run(ctx, command, dir, readerOrNil(in), &out, &errb)
+	code, err := e.Run(ctx, command, dir, in, &out, &errb)
 	if err != nil {
 		t.Fatalf("Run(%q): %v", command, err)
 	}
@@ -319,13 +323,6 @@ func runShell(t *testing.T, dir, command string, stdin string) (int, string, str
 		t.Fatalf("Run(%q) did not finish within the timeout", command)
 	}
 	return code, out.String(), errb.String()
-}
-
-func readerOrNil(r *strings.Reader) *strings.Reader {
-	if r == nil {
-		return nil
-	}
-	return r
 }
 
 func TestShellExecutorRunsASimpleCommand(t *testing.T) {
@@ -735,7 +732,7 @@ interpreter pipe end passed through stays open after the writer exits."
 - Create: `agent-sandbox/cmd/broker.go`
 - Create: `agent-sandbox/cmd/broker_test.go`
 - Modify: `agent-sandbox/internal/broker/protocol_test.go`, `agent-sandbox/internal/broker/server_test.go`, `agent-sandbox/internal/broker/network_e2e_test.go`
-- Modify: `agent-sandbox/cmd/exec.go`, `agent-sandbox/internal/mcptool/handler.go`, `agent-sandbox/internal/mcptool/tool.go`, `agent-sandbox/cmd/serve.go`, `agent-sandbox/cmd/command_runner.go`
+- Modify: `agent-sandbox/cmd/exec.go`, `agent-sandbox/internal/mcptool/handler.go`, `agent-sandbox/internal/mcptool/tool.go`, `agent-sandbox/cmd/serve.go`, `agent-sandbox/cmd/command_runner.go`, `agent-sandbox/cmd/hook.go`, `agent-sandbox/cmd/hook_test.go`, `agent-sandbox/internal/claude/settings.go`, `agent-sandbox/internal/claude/settings_test.go`
 - Delete: `agent-sandbox/internal/router/` (whole directory), `agent-sandbox/cmd/allow.go`, `agent-sandbox/cmd/allow_test.go`
 
 **Interfaces:**
@@ -747,6 +744,7 @@ interpreter pipe end passed through stays open after the writer exits."
   - `broker.CommandRunner` interface with the same method set, moved here from `router`.
   - `broker.SandboxNotRunningHint` string constant, moved here from `router`.
   - `agent-sandbox broker --socket <path>` subcommand.
+  - `cmd.runHookCore(in io.Reader, out io.Writer) error` — the `policyFile` parameter is gone, and the hook no longer emits `--policy-file`.
 
 - [ ] **Step 1: Write the failing protocol test**
 
@@ -1102,6 +1100,23 @@ func runExec(cmd *cobra.Command, args []string) error {
 ```
 
 Delete `execPolicyFile`, its flag registration, and `resolveExecConfig`.
+
+The hook that *emits* that flag has to go in the same task, or the hook would
+keep rewriting commands into `agent-sandbox exec --policy-file … -- …` against
+an `exec` that no longer accepts it, breaking every Bash tool call until Task 6.
+In `agent-sandbox/cmd/hook.go`, drop `hookPolicyFile`, its flag registration,
+and the `policyFile` parameter of `runHookCore`, leaving:
+
+```go
+	wrapped := "agent-sandbox exec -- " + shellquote.Quote(input.ToolInput.Command)
+```
+
+In `agent-sandbox/internal/claude/settings.go`, drop the `policyFile` argument
+and the `--policy-file` suffix it appends to the injected hook command, and
+update `settingsJSON`'s signature and its callers. Update
+`agent-sandbox/cmd/hook_test.go` and
+`agent-sandbox/internal/claude/settings_test.go` to match. The snapshot itself
+is still written at this point; Task 6 removes it.
 
 In `agent-sandbox/internal/mcptool/handler.go`:
 
@@ -1545,8 +1560,9 @@ func Resolve(cfg *config.Config, agent string) (*Resolved, error) {
 
 In `agent-sandbox/internal/sandboxhost/catalog.go`, delete the `domains` field
 from `capability`, every `domains:` line in the catalog, and
-`shellNetworkProfile`. Delete the `domains` accumulation in `expand` and the
-`Network` field of `nonoProfile` if nothing else sets it.
+`shellNetworkProfile`. Delete the `domains` accumulation in `expand`, the `Network` field of
+`nonoProfile`, and the `profileNetwork` type: only the shell profile ever set
+them, and the shell profile is going away.
 
 - [ ] **Step 6: Run the sandboxhost suite**
 
@@ -1589,62 +1605,42 @@ one that stops the launch."
 **Files:**
 - Delete: `agent-sandbox/internal/safe/` (whole directory), `agent-sandbox/cmd/safe.go`, `agent-sandbox/cmd/safe_git.go`, `agent-sandbox/cmd/safe_git_test.go`, `agent-sandbox/cmd/safe_docker_compose.go`, `agent-sandbox/cmd/safe_docker_compose_test.go`
 - Modify: `agent-sandbox/internal/policysnapshot/policysnapshot.go`, `agent-sandbox/internal/policysnapshot/policysnapshot_test.go`
-- Modify: `agent-sandbox/cmd/hook.go`, `agent-sandbox/cmd/hook_test.go`, `agent-sandbox/internal/claude/settings.go`, `agent-sandbox/internal/claude/settings_test.go`, `agent-sandbox/internal/claude/launch.go`, `agent-sandbox/cmd/debug.go`
+- Modify: `agent-sandbox/internal/claude/launch.go`, `agent-sandbox/cmd/debug.go`
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `policysnapshot.StateDir()` only — `Write` and `Load` are gone. `cmd.runHookCore(in io.Reader, out io.Writer) error` loses its `policyFile` parameter.
+- Produces: `policysnapshot.StateDir()` only — `Write` and `Load` are gone. `claude.BuildArgs` loses its `snapshotPath` parameter.
 
-- [ ] **Step 1: Write the failing hook test**
+- [ ] **Step 1: Delete the tests for the functions that are going**
 
-In `agent-sandbox/cmd/hook_test.go`, change the expectation to a bare wrapper:
+In `agent-sandbox/internal/policysnapshot/policysnapshot_test.go`, delete the
+tests covering `Write` and `Load`. Nothing replaces them: the snapshot they
+tested no longer has anything to freeze.
 
-```go
-func TestHookWrapsTheCommandWithoutAPolicyFile(t *testing.T) {
-	in := strings.NewReader(`{"tool_input":{"command":"rg -n foo ."}}`)
-	var out bytes.Buffer
-	if err := runHookCore(in, &out); err != nil {
-		t.Fatalf("runHookCore: %v", err)
-	}
-	var got map[string]any
-	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	hook := got["hookSpecificOutput"].(map[string]any)
-	updated := hook["updatedInput"].(map[string]any)
-	want := `agent-sandbox exec -- 'rg -n foo .'`
-	if updated["command"] != want {
-		t.Errorf("command = %q, want %q", updated["command"], want)
-	}
-}
-```
+- [ ] **Step 2: Run the suite to see what still depends on them**
 
-- [ ] **Step 2: Run it to verify it fails**
-
-Run: `go test ./agent-sandbox/cmd/ -run HookWraps -v`
-Expected: FAIL — `too many arguments in call to runHookCore`.
+Run: `go test ./...`
+Expected: PASS — the tests are gone but the functions remain, so nothing breaks
+yet. This step exists to record the starting point.
 
 - [ ] **Step 3: Remove the snapshot plumbing**
 
-In `agent-sandbox/cmd/hook.go`, drop `hookPolicyFile`, its flag, and the
-`policyFile` parameter; `prefix` becomes the constant `"agent-sandbox exec"`.
-
-In `agent-sandbox/internal/claude/settings.go`, drop the `policyFile` argument
-and the `--policy-file` suffix from the injected hook command; update
-`settingsJSON`'s signature and every caller.
-
 In `agent-sandbox/internal/policysnapshot/policysnapshot.go`, delete `Write` and
-`Load`, keeping `StateDir` and its doc comment. Delete the tests that covered
-them.
+`Load`, keeping `StateDir` and its doc comment — `cmd/doctor.go` and the broker
+socket path both use it.
 
 In `agent-sandbox/internal/claude/launch.go`, delete `writeSnapshot` from
 `runDeps`, the snapshot block in `run`, the `--read-file snapshotPath` grant in
-`BuildArgs`, and the `snapshotPath` parameter. In `agent-sandbox/cmd/debug.go`,
+`BuildArgs`, and the `snapshotPath` parameter; update `launch_test.go`'s
+`runDeps` fakes and `BuildArgs` callers to match. In `agent-sandbox/cmd/debug.go`,
 delete the snapshot block.
 
-- [ ] **Step 4: Run it to verify it passes**
+The hook and the injected settings already stopped emitting `--policy-file` in
+Task 3, so nothing here changes what the agent's commands are rewritten into.
 
-Run: `go test ./agent-sandbox/cmd/ -run HookWraps -v`
+- [ ] **Step 4: Run the suite to verify it still passes**
+
+Run: `go test ./...`
 Expected: PASS.
 
 - [ ] **Step 5: Delete the safe wrappers**

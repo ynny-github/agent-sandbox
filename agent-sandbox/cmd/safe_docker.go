@@ -123,7 +123,7 @@ func splitDockerGlobal(args []string) (subcommand string, rest []string, unrecog
 func runSafeDocker(cmd *cobra.Command, args []string) error {
 	sub, rest, unrecognized := splitDockerGlobal(args)
 	if unrecognized != "" {
-		fmt.Fprintf(cmd.ErrOrStderr(), "refused: unrecognized global docker flag %q is not allowed\n", unrecognized)
+		fmt.Fprintf(cmd.ErrOrStderr(), "blocked: unrecognized global docker flag %q is not allowed\n", unrecognized)
 		os.Exit(1)
 	}
 	if sub == "compose" {
@@ -137,7 +137,7 @@ func runSafeDocker(cmd *cobra.Command, args []string) error {
 		// wrong on its own. Refuse rather than carry it through unchecked.
 		if leading := args[:len(args)-len(rest)]; len(leading) > 0 {
 			fmt.Fprintf(cmd.ErrOrStderr(),
-				"refused: a global docker flag (%s) before \"compose\" is not allowed: it would validate and run the resolved compose model against a different daemon than the default one\n",
+				"blocked: a global docker flag (%s) before \"compose\" is not allowed: it would validate and run the resolved compose model against a different daemon than the default one\n",
 				strings.Join(leading, " "))
 			os.Exit(1)
 		}
@@ -150,7 +150,7 @@ func runSafeDocker(cmd *cobra.Command, args []string) error {
 	}
 	if vs := dockerCLIViolations(sub, rest, cwd); len(vs) > 0 {
 		for _, v := range vs {
-			fmt.Fprintf(cmd.ErrOrStderr(), "refused: %s\n", v)
+			fmt.Fprintf(cmd.ErrOrStderr(), "blocked: %s\n", v)
 		}
 		os.Exit(1)
 	}
@@ -376,12 +376,6 @@ func checkBindSource(src, cwd string) string {
 // runSafeDockerCompose validates a "docker compose" invocation (args is
 // everything after the "compose" token) before running it.
 func runSafeDockerCompose(cmd *cobra.Command, args []string) error {
-	// A global --help/-h describes this wrapper, not docker compose: an agent
-	// wants this command's usage, so print it and stop.
-	if dockercompose.WantsGlobalHelp(args) {
-		return cmd.Help()
-	}
-
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("getwd: %w", err)
@@ -393,7 +387,7 @@ func runSafeDockerCompose(cmd *cobra.Command, args []string) error {
 	}
 	if len(violations) > 0 {
 		for _, v := range violations {
-			fmt.Fprintf(cmd.ErrOrStderr(), "refused: %s\n", v)
+			fmt.Fprintf(cmd.ErrOrStderr(), "blocked: %s\n", v.Setting)
 		}
 		os.Exit(1)
 	}

@@ -17,6 +17,17 @@ import (
 func Prepare(ctx context.Context, args []string, cwd string, r Resolver) ([]safe.Violation, error) {
 	parsed := ParseArgs(args)
 
+	// --help never executes anything, so let it fall straight through to the
+	// real binary instead of resolving a model no help output needs. Without
+	// this, a bare "compose --help" would still shell out to
+	// "realdocker compose --help config --format json" — measured: real
+	// docker treats the "--help" ahead of "config" as help for "config"
+	// specifically and prints that (exit 0), not JSON, so DecodeModel would
+	// fail and the agent would see an opaque decode error instead of help.
+	if parsed.HelpRequested {
+		return nil, nil
+	}
+
 	if v := CheckCLI(parsed); len(v) > 0 {
 		return v, nil
 	}

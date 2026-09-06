@@ -61,6 +61,20 @@ func TestPrepare_UnsafeModel_ReturnsViolations(t *testing.T) {
 	}
 }
 
+func TestPrepare_HelpRequested_SkipsResolve(t *testing.T) {
+	r := &fakeResolver{}
+	v, err := dockercompose.Prepare(context.Background(), []string{"--help"}, "/work", r)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(v) != 0 {
+		t.Fatalf("expected no violations for --help, got %v", v)
+	}
+	if r.called {
+		t.Error("resolver should not be called when --help is requested")
+	}
+}
+
 func TestPrepare_ResolverError_Wrapped(t *testing.T) {
 	r := &fakeResolver{err: errors.New("boom")}
 	_, err := dockercompose.Prepare(context.Background(), []string{"up"}, "/work", r)

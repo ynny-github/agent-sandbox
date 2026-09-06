@@ -1,7 +1,7 @@
 # The broker runs commands, from inside the sandbox
 
 Date: 2026-09-05
-Status: agreed design, not yet implemented
+Status: implemented
 Supersedes: [2026-09-04-broker-with-command-policies.md](2026-09-04-broker-with-command-policies.md)
 Prerequisite reading: [2026-09-04-tool-sandbox-blocked-by-claude.md](2026-09-04-tool-sandbox-blocked-by-claude.md)
 
@@ -398,6 +398,47 @@ the repository's configured aliases and re-check the expansion. That last one is
 the only defence against the direct-write route, and it is structurally
 impossible in a matcher.
 
+**The wrapper's `-c`/`--config-env` inspection is a denylist, not a boundary,
+and what actually closes the rest of it lives one layer down.**
+`execCapableConfigKeys` in `internal/safe/git/rules.go` names nine config keys
+that run a program as a value. git has more of them —
+`diff.external`, `filter.*.clean`/`smudge`, `merge.*.driver`, `pager.*`,
+`protocol.*.command`, `uploadpack.packObjectsHook`, `trailer.*.command`,
+`core.gitProxy`, `gpg.<fmt>.program` among them — and every one is settable by
+the same direct-write route the alias check exists to close:
+`echo '[diff] external = …' >> .git/config` is a broker builtin, not an
+`execve`, so neither the parser nor the shim ever sees it. What stops these
+is not the wrapper at all: `realgit`'s own `exec_paths` in the command
+profile names only `libexec/git-core`, so every shell-out one of those keys
+would need — `sh -c`, a bare program name, `rebase -x`, `bisect run`,
+`submodule foreach`, `difftool --extcmd` — fails at `execve` under nono's
+Landlock execute restriction, independent of anything the parser did or did
+not catch. That layer is load-bearing for all of those, and belongs to the
+profile, not to this wrapper: widening `realgit`'s `exec_paths` toward
+`/nix/store` — the natural reflex when some git subcommand's shell-out fails
+for an unrelated reason — reopens every one of those config keys at once,
+silently, because nothing in the wrapper's own rule set changed. It is not,
+however, a complete backstop for `diff.external` specifically: see "Accepted
+residual: `diff.external` reaches `ld-linux` directly" below, measured on
+this branch, for one config key on this list that reaches execution through
+this same narrow `exec_paths` regardless. The parser stops what it can see in
+argv; a narrow `exec_paths` stops what it cannot; a git config key that runs
+a program is the thing the second layer is holding back.
+
+Not every rule in `internal/safe/git/rules.go` is that kind of boundary,
+and it is worth being precise about which is which. `hard-reset`,
+`clean-force`, `discard-changes`, `stash-destroy` and `tag-delete` are
+guardrails against an accidental invocation, not defenses against a
+deliberate one: `rm`, `mv` and `cp` are floor commands with write access to
+`$WORKDIR` in this repository's own profile, so `rm -rf .git` needs no git
+at all, and none of those five rules sits anywhere in that path. Presenting
+the full rule set as one undifferentiated policy overstates that second
+class; `force-push`, `branch-force-delete`, `filter-history`,
+`update-ref-delete`, `gc-prune`, `bypass-hooks`, `alias-injection`,
+`config-exec-injection`, `remote-tamper`, `config-write` and
+`exec-path-injection` are the ones doing boundary work against what git
+itself, or a config value it reads, can be made to do.
+
 The same argument restores the compose wrapper. Its rules read the *resolved*
 Compose model — host-path mounts, the Docker socket, `privileged`, host
 `network`/`pid`/`ipc`, `userns_mode`, devices, dangerous capabilities, seccomp
@@ -476,6 +517,70 @@ that re-execs `libexec/docker/docker`, the actual CLI binary. `realdocker`
 must be pinned at `libexec/docker/docker` directly, or every invocation
 crashes.
 
+### Accepted residual: `diff.external` reaches `ld-linux` directly, bypassing `exec_paths`
+
+**Measured 2026-09-06, against this repository's own `command-profile.json`,
+in a real broker session** (a real `nono run` under the profile, driving the
+broker over its wire protocol, not a bench test of the Go packages in
+isolation): the `-c`/`--config-env` denylist and the narrow `exec_paths`
+layer described above do not stop everything. Writing a single-token
+`diff.external` straight into `.git/config` — the same direct-write route
+`alias-injection` exists to catch, which the wrapper's parser never sees —
+reaches git's own dynamic linker directly, and from there reaches arbitrary
+execution of anything readable under the sandbox, with no shell involved:
+
+1. `echo -e '[diff]\n\texternal = <path-to-ld-linux-x86-64.so.2>' >>
+   .git/config` (the exact path is `realgit`'s own ELF interpreter, i.e. the
+   `PT_INTERP` of the pinned git binary — readable and, it turns out,
+   executable regardless of `exec_paths`).
+2. `git diff --no-index <fileA> <fileB>` through the real wrapper in a live
+   broker session. git's `prepare_shell_cmd` skips `$SHELL -c` for a
+   config-supplied command with no shell metacharacters (a bare path has
+   none), so it calls `execve` on the `diff.external` value directly.
+3. **`execve` succeeds.** nono's Landlock execute restriction on `realgit`'s
+   sandbox (`exec_paths: ["…/libexec/git-core"]`) does not cover this path,
+   confirming the review's hypothesis: the pinned binary's own `PT_INTERP`
+   is exec-allowed independent of `exec_paths`. With `<fileA>` a plain text
+   file, the observed result was `ld.so`'s own load failure, relayed by git
+   as `fatal: external diff died, stopping at <fileA>` — proof `execve`
+   itself was not refused, but not yet proof of arbitrary execution.
+4. **Arbitrary execution, confirmed.** Run the same `git diff --no-index`
+   with `<fileA>` set to the real path of a *different* ELF binary readable
+   under the sandbox (measured with `ripgrep`'s own binary, readable via
+   `realgit`'s `fs_read` of `/nix/store`) and `<fileB>` any file with
+   different content (so git does not skip the callout as a no-op diff).
+   `ld-linux-x86-64.so.2`, invoked as documented in its own man page for
+   direct invocation (`ld.so <path> <args>...`, `argv[0]` set to `<path>`),
+   loaded and ran that second binary for real: the command's own output
+   appeared on stderr —
+   ```
+   rg: 0000000000000000000000000000000000000000: No such file or directory (os error 2)
+   rg: 100755: No such file or directory (os error 2)
+   ...
+   fatal: external diff died, stopping at /nix/store/…-ripgrep-15.2.0/bin/rg
+   ```
+   — `rg` genuinely executed, treating the hex/mode strings git appends as
+   its own positional arguments (it errored on each because they are not
+   real paths, not because `rg` failed to run). The invoking `agent` needs
+   only **read** access to whatever binary it names this way — the write
+   needed is only to `.git/config` under `$WORKDIR`, which the sandbox
+   already grants for entirely legitimate reasons.
+
+This is a real, working bypass of the Landlock execute layer this document
+elsewhere calls load-bearing, not a theoretical one — it was driven through
+a live broker session over the actual wire protocol, the same path an
+agent's shell line takes. It is accepted as a residual for this branch, not
+fixed here: closing it needs either an upstream fix (narrowing what a
+pinned command's own `PT_INTERP` is allowed to do, or nono exposing a way to
+deny it), or a wrapper-side rule that recognizes `diff.external` (and the
+other `execCapableConfigKeys`) as refused however they reach the config —
+including a route with no `execve` and no shim for the wrapper to see at
+all, which is exactly the shape "Wrappers, reinstated" above says a matcher
+structurally cannot close. Whoever picks this up next should not assume
+`exec_paths` is a complete backstop for `execCapableConfigKeys`: it is not,
+for at least this one interpreter-path route, and probably for any other
+config key on that list pointed at a program instead of a shell command.
+
 ## Measured constraints
 
 **The broker binary must live outside every path the sandbox can write.** nono
@@ -518,17 +623,30 @@ NixOS unpatched (unfixed in 0.75.0; see the prerequisite document).
 
 ## Follow-on work
 
-**`doctor`** should verify, before a session starts, that the command profile
-exists, that `nono profile validate` passes on it, that the nono on PATH can
-actually start tool-sandbox, and that the broker binary is not writable through
-the profile's own grants. Each of these otherwise produces a session that
-refuses every command with an error the agent cannot act on.
+**`doctor` — done.** It verifies, before a session starts, that the command
+profile exists, that `nono profile validate` passes on it, that the broker
+binary is not writable through the profile's own grants, that resolving the
+broker's own name through this process's `PATH` lands back on that exact
+binary, and — when the profile pins the entrypoint's `executable` — that the
+pinned path also names that exact binary. Each of these otherwise produces a
+session that refuses every command with an error the agent cannot act on.
 
-**`agent-sandbox ai explain`** currently describes `allow_commands`,
-`drop_commands` and the resolved shell grants, all of which are gone. It should
-instead state the two tiers, name the commands in each, and reproduce the
-`invocation_policy` denials with their reasons — the agent needs to know a
-refusal is a policy, not a bug.
+**`agent-sandbox ai explain` — done, with one known gap.** It states the two
+tiers, names the commands in each, and — for a command bound to a `safe
+<tool>` wrapper rather than to `invocation_policy` directly — renders that
+wrapper's own rule messages, read live from the Go package that implements
+it (`wrapperRuleMessages` in `internal/agentconfig/agentconfig.go`), plus
+two behaviours a plain rule list would omit: alias expansion re-checking the
+expanded form, and the refusal a git subcommand this package cannot resolve
+as a real subcommand or a configured alias now gets. The known gap is
+`docker`: `internal/safe/dockercompose` has no `Rules()`-shaped export — its
+checks are inline literals inside `CheckModel`/`CheckCLI` — so
+`wrapperRuleMessages` cannot read a rule list out of it the way it does for
+git. A profile that wires the README's docker opt-in block gets a `docker`
+entry in `ai explain` with no `WrapperDenials` at all: correct about the
+wrapper's `blocked: <reason>` shape, silent about what the wrapper actually
+refuses. Closing this needs a `Rules()`-shaped export from
+`internal/safe/dockercompose` first; it is not attempted here.
 
 **Upstream reports.** Two items, each with a reproducer: `exec_paths` missing
 from the published schema, and `invocation_policy` denials bypassable by

@@ -142,9 +142,9 @@ allowlist, and there is nothing else to check:
 
 - **Policy commands** are declared in the profile with their own child
   sandbox. Some carry nono's own `invocation_policy` argv rules directly;
-  others — `git` and `docker`, in this repository's own profile — are
-  instead bound to a wrapper binary that parses the tool's actual grammar and
-  decides in Go, with the real binary reachable only from that wrapper (see
+  others — `git`, in this repository's own profile — are instead bound to a
+  wrapper binary that parses the tool's actual grammar and decides in Go,
+  with the real binary reachable only from that wrapper (see
   [The command profile](#the-command-profile)). Either way, the broker
   dispatches to a policy command only through nono's own generated shim —
   never by an absolute path, a symlink, or any other indirection that skips
@@ -432,21 +432,19 @@ top-level ceiling instead.
 
 **A worked example** — this repository's own `command-profile.json` at the
 repo root — declares `agent-sandbox` itself as the session's policy command
-(`can_use: ["git", "go", "docker"]`, `exec_paths` covering `rg`, `mise`,
-`gofmt` (as a single file, not its whole directory — see the note on
-multi-call binaries below), and the coreutils this repo's own workflows
-use). `git`, `docker`, and `go` are its three policy commands, for three
-different reasons:
+(`can_use: ["git", "go"]`, `exec_paths` covering `rg`, `mise`, `gofmt` (as a
+single file, not its whole directory — see the note on multi-call binaries
+below), and the coreutils this repo's own workflows use). `git` and `go` are
+its two policy commands, for two different reasons:
 
-- **`git` and `docker` are bound to a wrapper, not to the real binary.** The
-  profile pins `git`'s (and `docker`'s) `executable` back to the
-  `agent-sandbox` binary itself, with `argv_prepend: ["safe", "git"]` (or
-  `["safe", "docker"]`) inserted after the shim's own `argv[0]`, so
-  `git status --short` reaches the wrapper as
+- **`git` is bound to a wrapper, not to the real binary.** The profile pins
+  `git`'s `executable` back to the `agent-sandbox` binary itself, with
+  `argv_prepend: ["safe", "git"]` inserted after the shim's own `argv[0]`,
+  so `git status --short` reaches the wrapper as
   `["safe", "git", "status", "--short"]` — exactly what
   `agent-sandbox safe git` parses. The real binary gets a second name
-  reachable only from the wrapper (`realgit`, `realdocker`), so there is no
-  path to it that skips the parser.
+  reachable only from the wrapper (`realgit`), so there is no path to it
+  that skips the parser.
 - **`go` carries neither a wrapper nor an `invocation_policy`.** A compiler
   is not something argv-level rules can usefully bound, but it still needs
   its own child sandbox, because `go test` compiles and immediately executes
@@ -487,25 +485,78 @@ rule set refuses, among others: unconditional `--force`/`-f` on push,
 exec-capable config key via `-c`/`--config-env`, `stash drop`/`clear`,
 changing a remote, deleting a tag, discarding working-tree changes
 (`checkout -- .`/`restore --worktree`), writing config (`git config` reads
-are allowed; anything that is not a read is not), and `--exec-path`.
-`docker`'s wrapper (`internal/safe/dockercompose` and `cmd/safe_docker.go`)
-checks a `compose` invocation against its *resolved* model
-(`docker compose config`) — host-path mounts, the Docker socket,
-`privileged`, host `network`/`pid`/`ipc`, dangerous capabilities, disabled
-seccomp/apparmor — and checks every other invocation at the argv level for
-`run`/`exec`, `--privileged`, and a host-path or Docker-socket bind mount.
+are allowed; anything that is not a read is not), and `--exec-path`. Run
+`agent-sandbox safe git --help`, or read the source, for the exact and
+current rule set: the list above is a snapshot and this document is not
+what keeps it in sync — the profile deliberately carries no second copy of
+it either, for the same reason.
 
-Run `agent-sandbox safe git --help` / `agent-sandbox safe docker --help`, or
-read the source, for the exact and current rule set: the list above is a
-snapshot and this document is not what keeps it in sync — the profile
-deliberately carries no second copy of it either, for the same reason.
+A refusal from the wrapper prints `blocked: <reason>` to stderr and
+**exits 1** — it is caught in Go before nono is ever involved, so it is not
+the `invocation_policy` exit code 126 an argv-rule denial produces (still
+true for a command that carries `invocation_policy` directly, and for
+nono's own tool-sandbox refusals, e.g. a command absent from `can_use`).
 
-A refusal from either wrapper prints `blocked: <reason>` or
-`refused: <reason>` to stderr and **exits 1** — it is caught in Go before
-nono is ever involved, so it is not the `invocation_policy` exit code 126 an
-argv-rule denial produces (still true for a command that carries
-`invocation_policy` directly, and for nono's own tool-sandbox refusals, e.g.
-a command absent from `can_use`).
+**`docker` is not declared in this repository's profile at all — not as a
+policy command, not as a floor command.** A `docker` wrapper exists
+(`internal/safe/dockercompose` and `cmd/safe_docker.go`, identical shape to
+`git`'s: `docker` → wrapper → `realdocker` → the real binary) and is fully
+built and tested, but wiring it into a command profile is a capability
+decision an operator makes deliberately, not something to enable by
+copying this repository's profile. The reason is the Docker socket, and it
+is not what it looks like:
+
+> **The Docker socket is not filesystem-gated.** nono does not mediate
+> pathname AF_UNIX sockets — only the Linux *abstract* socket namespace —
+> so `/var/run/docker.sock` is reachable by any command that can execute
+> the `docker` binary, regardless of what `fs_read`/`fs_write` grant it
+> does or does not have. Not declaring `docker` in a profile is a real
+> allowlist boundary (the broker will not dispatch a name absent from both
+> tiers, full stop); *declaring* it, with no filesystem grant anywhere near
+> the socket, is not — the daemon is reachable the moment the binary is.
+> Once it is, the wrapper's checks (below) are the *entire* defense, not a
+> second layer behind a filesystem bound, and reaching the daemon at all is
+> root-equivalent: the socket permits mounting `/` into a container. Gating
+> the socket itself needs `linux.af_unix_mediation` plus a
+> `filesystem.unix_socket` allowlist — a separate opt-in nono's profile
+> guide documents under its `no-docker` example — which this repository's
+> profile does not configure, because this repository's profile does not
+> declare `docker` at all.
+
+An operator who decides the wrapper's checks are sufficient can wire it in
+with the identical shape as `git`:
+
+```json
+"docker": {
+  "executable": "<agent-sandbox binary>",
+  "can_use": ["realdocker"],
+  "from": { "agent-sandbox": { "sandbox": {
+    "argv_prepend": ["safe", "docker"],
+    "...": "..."
+  } } }
+},
+"realdocker": {
+  "executable": "/nix/store/…-docker-…/libexec/docker/docker",
+  "from": { "docker": { "sandbox": { "...": "..." } } }
+}
+```
+
+Two things worth knowing before doing that. First, the `executable` above
+is deliberately `libexec/docker/docker`, not the more obvious
+`bin/docker`: on NixOS, `bin/docker` is a small stub that re-execs
+`libexec/docker/docker` by absolute path, and nono's per-command Landlock
+rule set (built from the pinned executable's own direct library
+dependencies) does not cover that second, indirectly invoked path —
+pinning the stub crashes every invocation, silently (`execve(...) = -1
+EACCES`, reported only as "Command exited with code 255"). Second, the
+wrapper's checks (`internal/safe/dockercompose` and `cmd/safe_docker.go`)
+are argv/model-level, not filesystem-level: a `compose` invocation is
+checked against its *resolved* model (`docker compose config`) —
+host-path mounts, the Docker socket, `privileged`, host
+`network`/`pid`/`ipc`, dangerous capabilities, disabled seccomp/apparmor —
+and every other invocation is checked at the argv level for `run`/`exec`,
+`--privileged`, and a host-path or Docker-socket bind mount. Run
+`agent-sandbox safe docker --help` for the exact, current rule set.
 
 Four properties worth knowing before writing your own:
 
@@ -561,13 +612,15 @@ Four properties worth knowing before writing your own:
   never a multi-call host or a version-manager shim — pointing an entry at
   `mise` turns every mise-managed tool into an attempted direct exec of
   `mise` itself. Nix's own `docker` package has the identical shape and cost
-  a real debugging session to find: `bin/docker` is a small stub that
-  re-execs `libexec/docker/docker`, the actual CLI binary, and nono's
-  per-command Landlock rule set — built from the pinned executable's own
-  direct library dependencies — does not cover that second, indirectly
-  invoked path. Every invocation crashed with `execve(...) = -1 EACCES`
-  (reported only as "Command exited with code 255", no other output) until
-  `realdocker` was re-pinned at `libexec/docker/docker` directly.
+  a real debugging session to find while testing the opt-in `docker` block
+  above: `bin/docker` is a small stub that re-execs `libexec/docker/docker`,
+  the actual CLI binary, and nono's per-command Landlock rule set — built
+  from the pinned executable's own direct library dependencies — does not
+  cover that second, indirectly invoked path. Pinning `realdocker` at
+  `bin/docker` crashed every invocation with `execve(...) = -1 EACCES`
+  (reported only as "Command exited with code 255", no other output); the
+  block above already pins `libexec/docker/docker` directly, for this
+  reason.
 - **`nono profile validate` checks JSON syntax and group references only** —
   it does not catch every schema mistake (`exec_paths` itself is not in the
   published JSON Schema, though the runtime honours it). Verify a real

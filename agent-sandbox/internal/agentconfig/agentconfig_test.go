@@ -8,6 +8,7 @@ import (
 
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/agentconfig"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/safe/git"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandboxhost"
 )
 
@@ -119,6 +120,68 @@ func TestExplain_WrapperBoundCommand_NamesTheWrapper(t *testing.T) {
 	// deleted — regression coverage for that, not just a documentation nit.
 	if strings.Contains(got, "`realgit`") {
 		t.Errorf("Explain() lists `realgit`, which the broker cannot reach directly:\n%s", got)
+	}
+}
+
+// A profile that reads and parses fine but has no entry with a "session"
+// caller leaves this package unable to identify the broker's own entrypoint.
+// That must not render as "(none declared in the current profile)" — an
+// affirmative statement to the agent that nothing is policy-controlled —
+// but as an explicit statement that the broker entry could not be found.
+func TestExplain_NoSessionCaller_ReportsBrokerNotFound(t *testing.T) {
+	dir := t.TempDir()
+	profile := filepath.Join(dir, "command-profile.json")
+	writeProfile(t, profile, `{
+	  "command_policies": {
+	    "commands": {
+	      "git": { "from": { "agent-sandbox": { "invocation_policy": { "deny": [
+	        { "argv": { "contains": ["--force"] }, "reason": "force push is disabled" }
+	      ] } } } }
+	    }
+	  }
+	}`)
+	got := agentconfig.Explain(configWithProfile(t, dir, profile), filepath.Join(dir, "agent-sandbox.toml"))
+
+	if !strings.Contains(got, "could not identify the broker entry in "+profile) {
+		t.Errorf("Explain() does not report the missing broker entry for %q\n---\n%s", profile, got)
+	}
+	if strings.Contains(got, "(none declared in the current profile)") {
+		t.Errorf("Explain() falls back to the misleading \"none declared\" message:\n%s", got)
+	}
+}
+
+// Two entries with a "session" caller are not a shape this profile format is
+// meant to have, but a second one's own floor paths must not silently vanish
+// the way a first-match "break" would drop them.
+func TestExplain_TwoSessionCallers_KeepsBothFloorPaths(t *testing.T) {
+	dir := t.TempDir()
+	profile := filepath.Join(dir, "command-profile.json")
+	writeProfile(t, profile, `{
+	  "command_policies": {
+	    "commands": {
+	      "agent-sandbox": { "from": { "session": { "sandbox": { "exec_paths": ["/usr/bin"] } } } },
+	      "other-entry": { "from": { "session": { "sandbox": { "exec_paths": ["/opt/tool/bin"] } } } }
+	    }
+	  }
+	}`)
+	got := agentconfig.Explain(configWithProfile(t, dir, profile), filepath.Join(dir, "agent-sandbox.toml"))
+
+	for _, want := range []string{"/usr/bin", "/opt/tool/bin"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Explain() dropped a floor path %q from a second session-callable entry\n---\n%s", want, got)
+		}
+	}
+}
+
+// wrapperRuleMessages skips a rule with an empty Message (explain.tmpl would
+// otherwise render a bare "- " list item). Every git rule must carry one, so
+// this is a guard against a future rule shipping without it, not a
+// description of behavior this package needs to special-case today.
+func TestGitRules_EveryRuleHasAMessage(t *testing.T) {
+	for _, r := range git.Rules() {
+		if r.Message == "" {
+			t.Errorf("git rule %q has an empty Message", r.ID)
+		}
 	}
 }
 

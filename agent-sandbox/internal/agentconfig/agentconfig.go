@@ -51,6 +51,15 @@ type explainView struct {
 	// which is which can tell a refusal from a bug.
 	PolicyCommands []policyCommandView
 	FloorPaths     []string
+	// BrokerIssue is set when the profile parsed but no entry in it has a
+	// "session" caller — the broker's own entrypoint could not be identified,
+	// so PolicyCommands and FloorPaths are both necessarily empty for a
+	// reason that has nothing to do with the profile declaring no commands.
+	// Rendering this distinctly matters: "(none declared in the current
+	// profile)" reads to the agent as an affirmative statement that nothing
+	// is policy-controlled, which is false here — the profile could not be
+	// read the way this package expects, not read and found empty.
+	BrokerIssue string
 	// Capabilities is the catalog's capability names, so the editing section
 	// lists what may actually be written rather than a prose sample that goes
 	// stale when a bundle is added.
@@ -83,24 +92,30 @@ type policyCommandView struct {
 }
 
 // wrapperRuleMessages returns the human-readable rule messages for a
-// wrapper-bound command name, read from the same Go source the wrapper
-// itself enforces, or nil if this package does not know that wrapper's
-// source.
+// wrapper subcommand (e.g. "safe git", the value of policyCommandView.
+// Wrapper), read from the same Go source the wrapper itself enforces, or nil
+// if this package does not know that wrapper's source.
+//
+// This switches on the wrapper, not the profile's command name: the wrapper
+// is what identifies the rule source, and a profile is free to bind the same
+// wrapper under a different command name (or to bind a name this package has
+// no rule source for at all, e.g. "safe docker" — see the spec's Follow-on
+// work for why that one is not covered here).
 //
 // This exists instead of pointing the agent at "agent-sandbox safe <tool>
-// --help": that invocation is unreachable from inside a broker session
-// (agent-sandbox's own command_policies entry has no self edge granting it
-// "agent-sandbox"), and even if it were reachable it would not print a rule
-// set — "safe git"/"safe docker" both set DisableFlagParsing: true, so
+// --help": "safe git"/"safe docker" both set DisableFlagParsing: true, so
 // "--help" passes straight through to the real tool and prints *its* help
-// instead. Reading the rule messages directly, the way this function does,
-// needs neither.
-func wrapperRuleMessages(name string) []string {
-	switch name {
-	case "git":
+// instead of a rule set. Reading the rule messages directly, the way this
+// function does, needs neither that nor a self-invocation of agent-sandbox.
+func wrapperRuleMessages(wrapper string) []string {
+	switch wrapper {
+	case "safe git":
 		rules := git.Rules()
 		msgs := make([]string, 0, len(rules))
 		for _, r := range rules {
+			if r.Message == "" {
+				continue
+			}
 			msgs = append(msgs, r.Message)
 		}
 		return msgs
@@ -116,7 +131,17 @@ func wrapperRuleMessages(name string) []string {
 // file the agent must actually edit.
 func Explain(cfg *config.Config, configPath string) string {
 	profilePath := cfg.CommandProfilePath()
-	policyCommands, floorPaths := readCommandProfile(profilePath)
+	policyCommands, floorPaths, brokerFound := readCommandProfile(profilePath)
+
+	var brokerIssue string
+	if !brokerFound {
+		// The profile read and parsed fine, but no entry in it had a "session"
+		// caller, so this package could not tell which command is the
+		// broker's own entrypoint. A missing or unparseable file returns
+		// brokerFound true instead: that case already has its own launch-time
+		// diagnostic (doctor, config-check) and stays silent here.
+		brokerIssue = fmt.Sprintf("could not identify the broker entry in %s", profilePath)
+	}
 
 	view := explainView{
 		Hook:           cfg.ToolMode == "hook",
@@ -124,6 +149,7 @@ func Explain(cfg *config.Config, configPath string) string {
 		ProfilePath:    profilePath,
 		PolicyCommands: policyCommands,
 		FloorPaths:     floorPaths,
+		BrokerIssue:    brokerIssue,
 		Capabilities:   sandboxhost.CapabilityNames(),
 	}
 
@@ -168,19 +194,23 @@ type commandProfileSchema struct {
 }
 
 // readCommandProfile parses the command profile at path and returns its
-// policy commands (sorted by name) and the broker's own floor paths. A
-// missing or unparseable profile is not an error here: Explain always returns
-// a string, and a launch-time check (doctor, config-check) is where a broken
-// profile is actually reported. Here it just means the two-tier section of the
-// output is empty.
-func readCommandProfile(path string) ([]policyCommandView, []string) {
+// policy commands (sorted by name), the broker's own floor paths, and
+// whether an entry with a "session" caller (the broker's own entrypoint)
+// was found at all. A missing or unparseable profile is not an error here:
+// Explain always returns a string, and a launch-time check (doctor,
+// config-check) is where a broken profile is actually reported — for that
+// case this returns brokerFound true, since it is not this function's
+// diagnostic to give. brokerFound false means the file read and parsed, but
+// no entry in it had a "session" caller, so the caller should say so rather
+// than let an empty PolicyCommands/FloorPaths read as "nothing declared".
+func readCommandProfile(path string) (policyCommands []policyCommandView, floorPaths []string, brokerFound bool) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, nil
+		return nil, nil, true
 	}
 	var profile commandProfileSchema
 	if err := json.Unmarshal(data, &profile); err != nil {
-		return nil, nil
+		return nil, nil, true
 	}
 
 	names := make([]string, 0, len(profile.CommandPolicies.Commands))
@@ -199,19 +229,29 @@ func readCommandProfile(path string) ([]policyCommandView, []string) {
 	// allowed to invoke it". Listing it as though it were a live command the
 	// agent could type is what shipped a false "no invocations refused" line
 	// for it once git's own invocation_policy was removed.
+	//
+	// A well-formed profile has exactly one such entry; this does not stop
+	// scanning after the first because a second one's floor paths must not
+	// vanish silently — but reachability below is still checked against only
+	// the last name seen, which is the one real profile shape this was
+	// written for.
 	var brokerName string
-	var floorPaths []string
+	var found bool
 	for _, name := range names {
 		if session, ok := profile.CommandPolicies.Commands[name].From["session"]; ok {
 			brokerName = name
+			found = true
 			// The session's own callee is the broker: what it can exec directly
-			// (exec_paths) is the floor, not a policy command.
+			// (exec_paths) is the floor, not a policy command. Keep scanning
+			// rather than stop at the first match, so a second such entry's
+			// own floor paths are not silently dropped.
 			floorPaths = append(floorPaths, session.Sandbox.ExecPaths...)
-			break
 		}
 	}
+	if !found {
+		return nil, nil, false
+	}
 
-	var policyCommands []policyCommandView
 	for _, name := range names {
 		if name == brokerName {
 			continue
@@ -243,13 +283,13 @@ func readCommandProfile(path string) ([]policyCommandView, []string) {
 		}
 		var wrapperDenials []string
 		if wrapper != "" {
-			wrapperDenials = wrapperRuleMessages(name)
+			wrapperDenials = wrapperRuleMessages(wrapper)
 		}
 		policyCommands = append(policyCommands, policyCommandView{
 			Name: name, Denials: denials, Wrapper: wrapper, WrapperDenials: wrapperDenials,
 		})
 	}
-	return policyCommands, floorPaths
+	return policyCommands, floorPaths, true
 }
 
 // renderArgvMatcher renders an invocation_policy rule's argv matcher (e.g.

@@ -360,76 +360,81 @@ mediate *everything* is mistaken about these.
   `sideOptions.network`, and the capability struct's `domains` field, which only
   ever fed the shell side. `Resolve` and the catalog stay: the agent profile is
   still generated.
-- `internal/safe/git` and `cmd/safe_git.go`. Its rules move to
-  `invocation_policy` on git's edge, where they cannot be evaded by wrapping —
-  the deleted wrapper itself was evaded by `sh -c 'git push --force'`. That is
-  narrower than "the replacement translates the sixteen rules": counted
-  against `internal/safe/git/rules.go`'s own rule IDs at the commit that
-  deleted it, at least eight — `config-write`, `branch-force-delete`,
-  `filter-history`, `update-ref-delete`, `gc-prune`, `remote-tamper`,
-  `tag-delete`, and `discard-changes` — shipped with no `invocation_policy`
-  counterpart at all when this profile was first written, not even an
-  imprecise one. `config-write`'s absence was a real, demonstrated
-  regression: `git config alias.h 'reset --hard'` then `git h` (or writing
-  `$WORKDIR/.git/config` directly, which `fs_write` already permits) reaches
-  a denied command with no execve in between, so no shim ever sees it, and
-  the fix pass that found this closed seven of the eight with argv rules
-  precise enough not to block common legitimate usage (`git config`'s own
-  subcommand denied wholesale, `-D`/`--delete`/`--prune=now`/`--prune=all`/
-  `filter-branch`/`filter-repo`/`remote remove|rm|set-url`/`tag -d`, each as
-  its own `prefix` or `contains` rule) plus one true mechanism gap this
-  branch's own choice does not close, described next. `discard-changes`
-  stays accepted loss: nothing in `exact`/`prefix`/`contains` can express "the
-  worktree-affecting form of `checkout`/`restore`, but not the `--staged` or
-  path-scoped ones" without either missing the dangerous default case or
-  blocking the safe, everyday one — see `command-profile.json`'s git entry
-  for the seven that did ship.
-  Two things the *matcher itself* cannot express regardless of which rule ID
-  is being ported: a refspec beginning with `:` or `+` (token-prefix
-  inspection at an arbitrary position) and per-key `-c`/`--config-env`
-  inspection (`alias.*` vs. an ordinary override). Deny `-c` (as a `prefix`,
-  not `contains` — `contains` also wrongly matches `-c` as a *subcommand's*
-  own flag, e.g. `git switch -c`) and `--config-env` wholesale instead, which
-  is stronger for the keys it was guarding but also refuses legitimate
-  one-off uses like `git -c core.pager=cat log` the original per-key
-  inspection would have let through; accept the refspec gap.
-
-- `internal/safe/dockercompose`, `cmd/safe_docker_compose.go`, and with the git
-  wrapper gone too, `cmd/safe.go` and `internal/safe`. Command control narrows
-  to what nono can express, the same reduction git takes.
-- `policysnapshot.Write` and `policysnapshot.Load`, the `--policy-file` flag on
-  `agent-sandbox exec`, and the flag's injection in `cmd/hook.go` and
-  `internal/claude/settings.go`. The snapshot existed to freeze
-  `allow_commands` / `drop_commands` at launch so a mid-session config edit
-  could not change routing; with routing gone there is nothing left to freeze,
-  and the command profile is read once by nono when the broker starts.
-  `policysnapshot.StateDir` stays — `cmd/doctor.go` and the broker socket path
-  both use it.
+- Nothing from `internal/safe`. **This reverses an earlier decision in this same
+  document**, and the reversal is what the "Wrappers, reinstated" section below
+  is about. The wrappers stay, and the name an agent types is bound to them.
 
 `internal/shellquote` stays — `cmd/hook.go` and `internal/claude/settings.go`
 still quote the agent's command line into `agent-sandbox exec -- …`.
 
-### What the docker reduction costs
+### Wrappers, reinstated — and why the earlier decision was wrong
 
-`safe docker-compose` refused an invocation whose resolved Compose model would
-mount a host path outside the working directory or the Docker socket, set
-`privileged`, host `network`/`pid`/`ipc`, `userns_mode: host`, expose devices,
-add a dangerous Linux capability, or disable seccomp/apparmor — and refused the
-`run` and `exec` subcommands. Only the last is visible in argv.
+An earlier revision of this document deleted `internal/safe/git` and
+`internal/safe/dockercompose`, on the reasoning that command control should
+narrow to what nono itself can express. That reasoning rested on
+`invocation_policy` being sufficient. It is not, and the evidence is specific.
 
-So the surviving policy is two `invocation_policy` rules:
+**Measured 2026-09-06:** nono anchors an `argv.prefix` matcher at the command's
+*first argument* (`crates/nono-cli/src/tool-sandbox/policy.rs`: `invocation_args`
+is `argv.iter().skip(1)`, and the prefix arm zips from index 0). git accepts its
+global options *before* the subcommand, so one leading token walks past every
+prefix rule:
 
-```json
-"deny": [
-  { "argv": { "prefix": ["compose", "run"] },  "reason": "docker compose run is disabled in this sandbox" },
-  { "argv": { "prefix": ["compose", "exec"] }, "reason": "docker compose exec is disabled in this sandbox" }
-]
+```
+git --no-pager config alias.h "reset --hard"    # matches nothing
+git h                                           # → hard reset
 ```
 
-Everything the wrapper read out of the YAML is no longer checked. That is a real
-loss, bounded by the fact that the Docker socket is not granted to commands
-unless an operator writes it into the command profile. An operator who does
-should know the compose file is no longer inspected.
+`--hard` is inside a single quoted token, so `contains` misses it too. And the
+alias need not be installed through git at all: `.git/config` is under
+`$WORKDIR`, the broker's own sandbox can write there, and `echo '[alias] …' >>
+.git/config` is an *interpreter builtin* — no `execve`, no shim, nothing to
+mediate. No argv matcher can see either route.
+
+A wrapper can. It parses git's grammar, so global options do not hide the
+subcommand; it can inspect `-c key=value`; it can distinguish a `config` read
+from a write; and it can resolve the invocation's first non-global token against
+the repository's configured aliases and re-check the expansion. That last one is
+the only defence against the direct-write route, and it is structurally
+impossible in a matcher.
+
+The same argument restores the compose wrapper. Its rules read the *resolved*
+Compose model — host-path mounts, the Docker socket, `privileged`, host
+`network`/`pid`/`ipc`, `userns_mode`, devices, dangerous capabilities, seccomp
+and apparmor. None of that is in argv, and none of it was recoverable by the two
+subcommand denials that replaced it.
+
+### How a wrapper is bound to a command name
+
+The profile binds the name the agent types to the wrapper, and gives the real
+binary a second name reachable only from it. Measured 2026-09-06:
+
+```json
+"git":      { "executable": "<wrapper>",   "can_use": ["git-real"],
+              "from": { "<broker>": { "sandbox": { "argv_prepend": ["safe", "git"], … } } } },
+"git-real": { "executable": "<real git>",
+              "from": { "git": { "sandbox": { … } } } }
+```
+
+- `argv_prepend` inserts after the synthesised `argv[0]`, so `git status --short`
+  reaches the wrapper as `["safe","git","status","--short"]` — what the CLI
+  already parses. `argv[0]` is the shim's own path.
+- The same executable may be pinned under two command names.
+- **The wrapper must never `LookPath` the tool it wraps.** nono puts its shim
+  directory first on `PATH`, so `LookPath("git")` resolves back to the wrapper,
+  `argv_prepend` fires again, and it recurses without bound — measured four
+  levels deep before the probe was killed. The deleted `cmd/safe_git.go` used
+  `LookPath`, so restoring it unchanged would ship an infinite loop.
+- Resolving the *second* name instead (`LookPath("git-real")`) avoids that, needs
+  no absolute path, and keeps the real binary behind a shim of its own.
+- Reachability is enforced by nono, not by convention. Invoking `git-real`
+  directly from the floor is refused: *"'git-real' is blocked because tool
+  '<broker>' is not allowed to invoke it … `can_use` must include 'git-real'"*.
+
+`docker` takes the identical shape: `docker` → the wrapper, `docker-real` → the
+real binary, reachable only from it. It matters only when an operator grants the
+Docker socket, which the profile does not do by default — but the shape is
+there so that granting it does not also mean giving up the compose checks.
 
 ## Measured constraints
 

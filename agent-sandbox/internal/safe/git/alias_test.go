@@ -280,6 +280,137 @@ func TestAliasExpansion_ChainUnderDepthCap_ExpandsToRealCommand(t *testing.T) {
 	t.Logf("violations: %v", vs)
 }
 
+// TestAliasExpansion_BareGlobal_ForwardedToAliasLookup is the CRITICAL from
+// the R27 review round: "--bare" reproduces the same class of divergence as
+// CRITICAL 2's "-C", and it is why enumerating "repo-selecting globals" (the
+// original fix) is the wrong shape — --bare is not a repo *selector* in the
+// same way -C is, so it was never on that list, and any global not on the
+// list was silently dropped.
+//
+// Fixture matches the review's exact measurement: outer/ is a real
+// repository with alias.z = status; outer/inner/ holds nothing but a
+// hand-written "config" file (no ".git", no HEAD/objects/refs — not even a
+// repository shape at all) with a "!"-shell alias.z. From outer/inner:
+//   - "git config --get alias.z" (no --bare) correctly falls through to
+//     outer's repository and reports "status".
+//   - "git --bare z" sets GIT_DIR to cwd during option parsing and expands
+//     the alias from outer/inner/config *before* validating it is a usable
+//     repository at all, running the shell payload.
+//   - "git --bare config --get alias.z" (the literal call this package's
+//     resolveAlias makes, --bare forwarded) takes the stricter, validated
+//     path and reports nothing (exit 1): the directory does not validate as
+//     a repository. That is a *different* mechanism than "resolved the same
+//     value", but the outcome this package needs is the same: refuse, since
+//     resolveAlias's own "could not be resolved" branch already treats that
+//     as refuse-not-allow.
+//
+// Fails against the pre-fix aliasSafeGlobals (without "--bare"): resolveAlias
+// then never forwards --bare, "git config --get alias.z" (no --bare) reports
+// the benign "status" from outer's real repository, checkAlias expands to
+// the known-safe "status" subcommand, and Check reports no violations —
+// while the real "git --bare z" the agent typed would run the shell payload.
+func TestAliasExpansion_BareGlobal_ForwardedToAliasLookup(t *testing.T) {
+	outer := initRepo(t)
+	appendConfig(t, outer, "[alias]\n\tz = status\n")
+
+	inner := filepath.Join(outer, "inner")
+	if err := os.MkdirAll(inner, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(inner, "config"),
+		[]byte("[alias]\n\tz = \"!echo BAREPAYLOAD\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	withFakeGitReal(t)
+	t.Chdir(inner)
+
+	vs := git.Check([]string{"--bare", "z"})
+	if len(vs) == 0 {
+		t.Fatal(`expected "git --bare z" to be refused, got no violations`)
+	}
+	t.Logf("violations: %v", vs)
+}
+
+// TestAliasExpansion_UnclassifiedKnownGlobal_Refused is R27's fail-closed
+// default in the ordinary case: "--no-replace-objects" is a real git global
+// option (git.go's globalBoolOpts), but it is not on aliasSafeGlobals, so an
+// otherwise perfectly safe alias must still be refused rather than checked
+// while silently dropping a global this package has not verified has no
+// effect on alias resolution. The violation names the offending global, so
+// an operator can classify it and add it to aliasSafeGlobals.
+func TestAliasExpansion_UnclassifiedKnownGlobal_Refused(t *testing.T) {
+	dir := initRepo(t)
+	appendConfig(t, dir, "[alias]\n\tco = checkout\n")
+	withFakeGitReal(t)
+	t.Chdir(dir)
+
+	vs := git.Check([]string{"--no-replace-objects", "co"})
+	if len(vs) == 0 {
+		t.Fatal("expected the unclassified global to force a refusal even for a safe alias, got no violations")
+	}
+	found := false
+	for _, v := range vs {
+		if strings.Contains(v.Setting, "--no-replace-objects") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a violation naming \"--no-replace-objects\", got %v", vs)
+	}
+}
+
+// TestAliasExpansion_UnrecognizedGlobal_Refused is the other half of R27:
+// "including one Parse did not recognise". Parse still records an unknown
+// global (see TestParse's "unknown global kept" case in git_test.go); this
+// checks the alias-expansion path refuses on it exactly like a known-but-
+// unclassified one, rather than silently dropping it because it has no
+// entry anywhere.
+func TestAliasExpansion_UnrecognizedGlobal_Refused(t *testing.T) {
+	dir := initRepo(t)
+	appendConfig(t, dir, "[alias]\n\tco = checkout\n")
+	withFakeGitReal(t)
+	t.Chdir(dir)
+
+	vs := git.Check([]string{"--some-future-git-flag", "co"})
+	if len(vs) == 0 {
+		t.Fatal("expected an unrecognized global to force a refusal, got no violations")
+	}
+	found := false
+	for _, v := range vs {
+		if strings.Contains(v.Setting, "--some-future-git-flag") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a violation naming \"--some-future-git-flag\", got %v", vs)
+	}
+}
+
+// TestExecPathGlobal_Refused is R28: "--exec-path" changes where git looks
+// for the binaries behind its own subcommands, including ones it does not
+// recognize as builtins. Measured (review): with an executable "git-svn"
+// planted in a directory, "git --exec-path=<dir> svn --version" ran it.
+// Alias-expansion does not help here — "svn" is in knownSubcommands (it is a
+// real, if external, git command name), so nothing downstream ever looks at
+// it — which is exactly why this needs its own rule rather than relying on
+// the alias path.
+func TestExecPathGlobal_Refused(t *testing.T) {
+	vs := git.Check([]string{"--exec-path=/tmp/whatever", "svn", "--version"})
+	if len(vs) == 0 {
+		t.Fatal("expected --exec-path to be refused, got no violations")
+	}
+	found := false
+	for _, v := range vs {
+		if strings.Contains(v.Setting, "--exec-path") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a violation naming --exec-path, got %v", vs)
+	}
+}
+
 func TestAliasExpansion_KnownSubcommand_NotTreatedAsAlias(t *testing.T) {
 	dir := initRepo(t)
 	// Do NOT call withFakeGitReal: if "status" were (wrongly) treated as a

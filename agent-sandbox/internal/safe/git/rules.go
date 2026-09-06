@@ -309,4 +309,18 @@ var rules = []Rule{
 			return true
 		},
 	},
+	{
+		ID: "exec-path-injection",
+		Message: "setting --exec-path is not allowed: it changes where git looks for the " +
+			"binaries behind its own subcommands, including ones it does not recognize as " +
+			"builtins, so a planted binary of that name runs in place of the real one",
+		Match: func(inv Invocation) bool {
+			for _, g := range inv.Global {
+				if g.Name == "--exec-path" {
+					return true
+				}
+			}
+			return false
+		},
+	},
 }

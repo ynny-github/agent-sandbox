@@ -80,6 +80,12 @@ func checkAlias(inv Invocation, depth int) []safe.Violation {
 			"%q nests more than %d aliases deep; refusing rather than keep expanding", inv.Subcommand, maxAliasDepth)}}
 	}
 
+	if bad := unsafeGlobalForAliasLookup(inv.Global); bad != "" {
+		return []safe.Violation{{Source: "cli", Setting: fmt.Sprintf(
+			"global option %q is not on the list this wrapper knows is safe to check before resolving %q as an alias; refusing rather than risk checking a different repository or config than the one that would actually run (add %q to aliasSafeGlobals once its effect on alias resolution is verified)",
+			bad, inv.Subcommand, bad)}}
+	}
+
 	value, ok := resolveAlias(inv.Subcommand, inv.Global)
 	if !ok {
 		return []safe.Violation{{Source: "cli", Setting: fmt.Sprintf(
@@ -115,35 +121,74 @@ func checkAlias(inv Invocation, depth int) []safe.Violation {
 	return out
 }
 
-// repoSelectingGlobals are the git global options that select which
-// repository, or which config values, a git invocation resolves against:
-// -C and --git-dir/--work-tree/--namespace change which repository, and
-// -c/--config-env set a config value (including an alias.* one) for the
-// duration of that invocation, ahead of every file git would otherwise read.
+// aliasSafeGlobals are the git global options verified safe to forward,
+// verbatim, onto this package's own "config --get alias.<name>" call. Each
+// entry changes which repository, or which config values, a git invocation
+// resolves against, and forwarding it reproduces that for this package's own
+// lookup:
 //
-// resolveAlias must forward exactly these from the invocation it is
-// checking, or it validates one repository/config while the real invocation
-// — which carries the same globals through to execGit — resolves the alias
-// from a different one. Measured: with alias.z=status committed in cwd's
-// .git/config and alias.z="reset --hard" committed in sub/.git/config,
-// "git config --get alias.z" (no globals) reports "status", but
-// "git -C sub z" runs the reset — a different repository entirely.
-var repoSelectingGlobals = map[string]bool{
+//   - -C, --git-dir, --work-tree, --namespace select the repository.
+//   - -c, --config-env set a config value (including an alias.* one) ahead
+//     of every file git would otherwise read.
+//   - --bare sets GIT_DIR to the current directory. CRITICAL from review,
+//     measured: with alias.z=status in outer/'s repository config and a
+//     hand-written "config" file directly in outer/inner/ (no ".git"
+//     subdirectory — a --bare GIT_DIR *is* the config file's directory)
+//     holding "z = !echo BAREPAYLOAD", "git config --get alias.z" from
+//     outer/inner reports "status" (the ordinary, non-bare repository) while
+//     "git --bare z" from the same directory runs the shell payload. Not
+//     forwarding --bare reproduced exactly the divergence forwarding -C was
+//     added to close.
+//
+// Every other global is refused rather than silently dropped — including one
+// Parse did not recognize at all (see unsafeGlobalForAliasLookup and
+// checkAlias). Dropping an unclassified global is what made --bare a repeat
+// of the -C problem: the fix is not "also handle --bare", it is to stop
+// enumerating globals believed relevant and default to refusing any global
+// this package has not verified, so the next git release cannot reopen this
+// silently. The cost accepted for this: an invocation using a global that is
+// genuinely harmless for alias resolution (say, --paginate) but is not yet
+// in this map is refused too, until someone verifies it and adds it here —
+// visibly, as a refusal with the global's name in it, not silently.
+//
+// --exec-path is deliberately not here, in either direction: it is refused
+// outright, for every invocation, by the exec-path-injection rule in
+// rules.go (R28), before alias-expansion ever runs. Adding it here would
+// only mean "safe to drop for alias lookup," a different and wrong claim.
+var aliasSafeGlobals = map[string]bool{
 	"-C": true, "--git-dir": true, "--work-tree": true, "--namespace": true,
-	"-c": true, "--config-env": true,
+	"-c": true, "--config-env": true, "--bare": true,
+}
+
+// unsafeGlobalForAliasLookup returns the name of the first global in globals
+// that is not in aliasSafeGlobals, or "" if every one of them is.
+func unsafeGlobalForAliasLookup(globals []GlobalOpt) string {
+	for _, g := range globals {
+		if !aliasSafeGlobals[g.Name] {
+			return g.Name
+		}
+	}
+	return ""
 }
 
 // aliasLookupArgv builds the "config --get alias.<name>" argv, prefixed with
-// every repo-selecting global from globals, in order, so the alias is
-// resolved against exactly the repository and config the real invocation
-// would use.
+// every aliasSafeGlobals entry from globals, in order. Callers must have
+// already confirmed every global in globals is in aliasSafeGlobals (see
+// unsafeGlobalForAliasLookup) — this does not re-check, it only knows how to
+// format each safe global: with its value when git itself expects one
+// (globalValueOpts, defined in git.go) and without one otherwise (--bare
+// takes none; appending an empty value token for it would insert a spurious
+// empty argument that git would misread as the subcommand).
 func aliasLookupArgv(name string, globals []GlobalOpt) []string {
 	var argv []string
 	for _, g := range globals {
-		if !repoSelectingGlobals[g.Name] {
+		if !aliasSafeGlobals[g.Name] {
 			continue
 		}
-		argv = append(argv, g.Name, g.Value)
+		argv = append(argv, g.Name)
+		if globalValueOpts[g.Name] {
+			argv = append(argv, g.Value)
+		}
 	}
 	return append(argv, "config", "--get", "alias."+name)
 }

@@ -30,10 +30,20 @@ Named volumes, tmpfs mounts, and every other compose subcommand pass through.
 
 Every other docker invocation is checked at the argv level only — there is no
 resolved model to read the way "docker compose config" gives one for compose:
-  - the "run" and "exec" subcommands are refused outright;
-  - "--privileged" is refused wherever it appears;
+  - "run" and "exec" are refused outright, including as "docker container run"
+    / "docker container exec" (the equivalent management-command form);
+  - "--privileged" is refused, including its "=true"/"=false" attached forms,
+    wherever it appears — not only with "run";
   - a "-v"/"--volume"/"--mount" bind of a host path outside the current
-    working directory, or of the Docker socket, is refused wherever it appears.
+    working directory, or of the Docker socket, is refused wherever it
+    appears. A relative source is resolved against the working directory
+    first, the same as docker itself does for "--mount". "-v" is also
+    checked inside a short-flag cluster (e.g. "-tv /host:/x"), by looking
+    for a "v" in the cluster; a cluster where an earlier flag also consumes
+    a value of its own (e.g. "-ev", where "v" is "-e"'s one-character value)
+    can be misread as "-v" instead — this is a known, narrow gap, and such
+    an invocation may be refused (or, rarely, checked against the wrong
+    value) rather than silently passed.
 Nothing else about a plain docker invocation is inspected: capabilities,
 network mode, and the rest of what the compose model check reads have no
 equivalent check here.
@@ -145,6 +155,21 @@ func runSafeDocker(cmd *cobra.Command, args []string) error {
 // arbitrary command execution.
 var dockerDangerousSubcommands = map[string]bool{"run": true, "exec": true}
 
+// effectiveSubcommand collapses docker's "container <verb>" management-
+// command aliases to their top-level equivalents, so "docker container run"
+// and "docker container exec" are recognized the same as "docker run" and
+// "docker exec" (measured (review): both are live aliases for the same
+// entrypoints). Only these two verbs are collapsed — they are the ones this
+// package's checks must refuse outright; other "docker container <verb>"
+// forms (ls, stop, rm, ...) are not entrypoints for arbitrary execution and
+// are left alone.
+func effectiveSubcommand(sub string, rest []string) string {
+	if sub == "container" && len(rest) > 1 && (rest[1] == "run" || rest[1] == "exec") {
+		return rest[1]
+	}
+	return sub
+}
+
 // dockerCLIViolations applies argv-only checks to a non-compose docker
 // invocation. sub is docker's own subcommand (as identified by
 // splitDockerGlobal); rest is sub and everything from there on; cwd bounds
@@ -156,17 +181,20 @@ var dockerDangerousSubcommands = map[string]bool{"run": true, "exec": true}
 // categories CheckModel would refuse for compose. A container created some
 // other way — a Swarm service, a Dockerfile ONBUILD, an image's own
 // ENTRYPOINT — is out of reach of an argv-only check and this does not claim
-// to catch it.
+// to catch it. See the command's Long help text for the short-flag-cluster
+// caveat on "-v".
 func dockerCLIViolations(sub string, rest []string, cwd string) []string {
 	var out []string
-	if dockerDangerousSubcommands[sub] {
-		out = append(out, fmt.Sprintf("%q subcommand is not allowed", sub))
+	if eff := effectiveSubcommand(sub, rest); dockerDangerousSubcommands[eff] {
+		out = append(out, fmt.Sprintf("%q subcommand is not allowed", eff))
 	}
 	for i, a := range rest {
 		switch {
-		case a == "--privileged":
-			out = append(out, "--privileged is not allowed")
-		case a == "-v" || a == "--volume":
+		case a == "--privileged", strings.HasPrefix(a, "--privileged="):
+			if privilegedFlagIsTrue(a) {
+				out = append(out, "--privileged is not allowed")
+			}
+		case a == "--volume":
 			if i+1 < len(rest) {
 				if v := checkVolumeSpec(rest[i+1], cwd); v != "" {
 					out = append(out, v)
@@ -176,9 +204,11 @@ func dockerCLIViolations(sub string, rest []string, cwd string) []string {
 			if v := checkVolumeSpec(strings.TrimPrefix(a, "--volume="), cwd); v != "" {
 				out = append(out, v)
 			}
-		case len(a) > 2 && strings.HasPrefix(a, "-v") && a[1] != '-':
-			if v := checkVolumeSpec(a[2:], cwd); v != "" {
-				out = append(out, v)
+		case len(a) >= 2 && a[0] == '-' && a[1] != '-':
+			if val, ok := shortFlagVolumeValue(a, rest, i); ok && val != "" {
+				if v := checkVolumeSpec(val, cwd); v != "" {
+					out = append(out, v)
+				}
 			}
 		case a == "--mount":
 			if i+1 < len(rest) {
@@ -195,17 +225,72 @@ func dockerCLIViolations(sub string, rest []string, cwd string) []string {
 	return out
 }
 
-// checkVolumeSpec applies the same rule dockercompose.CheckModel applies to
-// a bind mount's source to a "-v"/"--volume" spec ("SRC:DST[:OPTS]", or a
-// bare "SRC" for an anonymous volume): refuse the Docker socket, refuse a
-// host path outside cwd, and let a named volume (a source with no leading
-// "/", which docker never treats as a host path) through untouched.
-func checkVolumeSpec(spec, cwd string) string {
-	src := spec
-	if idx := strings.IndexByte(spec, ':'); idx >= 0 {
-		src = spec[:idx]
+// privilegedFlagIsTrue reports whether a is "--privileged" or an attached
+// "--privileged=<value>" whose value is not one of pflag's recognized false
+// spellings. Docker's --privileged is a pflag bool, which accepts the
+// attached form (measured (review): "--privileged=true" was not previously
+// recognized at all). An unparseable value defaults to true — fail closed,
+// since docker's own parser would refuse it before ever reaching this far,
+// and "unparseable" is not evidence that privileged mode is off.
+func privilegedFlagIsTrue(a string) bool {
+	val, ok := strings.CutPrefix(a, "--privileged=")
+	if !ok {
+		return a == "--privileged"
 	}
-	return checkBindSource(src, cwd)
+	switch val {
+	case "false", "False", "FALSE", "0", "f", "F":
+		return false
+	default:
+		return true
+	}
+}
+
+// shortFlagVolumeValue reports whether short-flag token a (e.g. "-v",
+// "-tv", "-v/host:/x", "-itv") includes docker's "-v"/--volume short flag,
+// and returns its value: whatever follows the first "v" within the same
+// token, or the next argv token when nothing follows there.
+//
+// This is a heuristic, not a full short-flag-cluster parser: pflag's real
+// rule is that once a value-taking flag is reached in a cluster, everything
+// remaining in that token (or the next token, if nothing remains) is its
+// value, and telling the cluster's real "-v" apart from an earlier
+// value-taking flag whose own attached value happens to contain the letter
+// "v" (e.g. "-ev", where "v" is "-e"'s value, not a second flag) requires
+// knowing every relevant flag's type, which this package does not
+// enumerate. Finding the first "v" cannot miss a real "-v" that is present —
+// an earlier value flag would have consumed the token before a later "-v"
+// could appear at all — so the only failure direction is inspecting a
+// misattributed value as if it were a mount spec, which is over-cautious
+// (a possible extra refusal), never permissive (see the command's Long
+// help text).
+func shortFlagVolumeValue(a string, rest []string, i int) (value string, ok bool) {
+	idx := strings.IndexByte(a, 'v')
+	if idx < 1 {
+		return "", false
+	}
+	if idx+1 < len(a) {
+		return a[idx+1:], true
+	}
+	if i+1 < len(rest) {
+		return rest[i+1], true
+	}
+	return "", true
+}
+
+// checkVolumeSpec applies the same rule dockercompose.CheckModel applies to
+// a bind mount's source to a "-v"/"--volume" spec ("SRC:DST[:OPTS]"): refuse
+// the Docker socket, refuse a host path outside cwd (resolving a relative
+// one against it first), and let a named volume through untouched.
+//
+// A bare "SRC" with no ":" at all is not this: docker treats a single path
+// with no destination as an anonymous volume's *container* path, not a host
+// source — there is nothing to check.
+func checkVolumeSpec(spec, cwd string) string {
+	idx := strings.IndexByte(spec, ':')
+	if idx < 0 {
+		return ""
+	}
+	return checkBindSource(spec[:idx], cwd)
 }
 
 // checkMountSpec applies the same rule to a "--mount" spec
@@ -231,19 +316,34 @@ func checkMountSpec(spec, cwd string) string {
 	return checkBindSource(src, cwd)
 }
 
-// checkBindSource is the shared rule: a source with no leading "/" is not a
-// host path (docker requires bind sources to be absolute; anything else is a
-// named volume) and passes untouched; the Docker socket and any host path
-// outside cwd are refused, matching dockercompose.CheckModel's own bind
-// checks exactly.
+// looksLikeHostPath reports whether a bind source names a filesystem path
+// rather than a named-volume identifier: docker treats a bare name (no "/",
+// and not "." or "..") as a named volume, and anything else — absolute, or
+// relative and resolved against the caller's own cwd — as a host path.
+// Measured (review): "--mount type=bind,src=./relx,dst=/x" is accepted and
+// resolved relative to cwd, not rejected for lacking a leading "/" as this
+// package previously assumed. The same resolution is applied to "-v" here
+// too, out of caution, though only the "--mount" case was itself measured.
+func looksLikeHostPath(src string) bool {
+	return strings.ContainsRune(src, '/') || src == "." || src == ".."
+}
+
+// checkBindSource is the shared rule: a bare name is a named volume and
+// passes untouched (see looksLikeHostPath); a relative path is resolved
+// against cwd first; the Docker socket and any host path outside cwd are
+// refused, matching dockercompose.CheckModel's own bind checks.
 func checkBindSource(src, cwd string) string {
-	if !strings.HasPrefix(src, "/") {
+	if !looksLikeHostPath(src) {
 		return ""
 	}
-	if filepath.Base(filepath.Clean(src)) == "docker.sock" {
+	abs := src
+	if !filepath.IsAbs(abs) {
+		abs = filepath.Join(cwd, abs)
+	}
+	if filepath.Base(filepath.Clean(abs)) == "docker.sock" {
 		return fmt.Sprintf("bind mount of the docker socket %q is not allowed", src)
 	}
-	if !safe.PathWithin(safe.RealPath(cwd), safe.RealPath(src)) {
+	if !safe.PathWithin(safe.RealPath(cwd), safe.RealPath(abs)) {
 		return fmt.Sprintf("bind mount %q escapes the work directory", src)
 	}
 	return ""

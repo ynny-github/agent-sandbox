@@ -119,6 +119,10 @@ func TestRules(t *testing.T) {
 		{"config unset", []string{"config", "--unset", "user.name"}, "config-write"},
 		{"config get allowed", []string{"config", "--get", "user.name"}, ""},
 		{"config list allowed", []string{"config", "--list"}, ""},
+
+		// exec-path injection (R28)
+		{"exec-path attached blocked", []string{"--exec-path=/tmp/x", "svn", "--version"}, "exec-path-injection"},
+		{"exec-path separate blocked", []string{"--exec-path", "/tmp/x", "status"}, "exec-path-injection"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

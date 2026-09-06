@@ -185,3 +185,115 @@ func TestRunSafeDocker_ComposeNoLeadingGlobal_EmptySegment(t *testing.T) {
 		t.Errorf("leading = %v, want empty", leading)
 	}
 }
+
+// TestDockerCLIViolations_PrivilegedAttachedTrue_Refused is the first of the
+// four CRITICAL-3 defeats from the R27 review round: docker's --privileged
+// is a pflag bool and accepts the attached "=true" form; the check used to
+// be an exact "a == \"--privileged\"" and missed it. Fails against that
+// exact-match code (verified by reverting locally); passes now that
+// privilegedFlagIsTrue also recognizes "--privileged=true".
+func TestDockerCLIViolations_PrivilegedAttachedTrue_Refused(t *testing.T) {
+	vs := dockerCLIViolations("create", []string{"create", "--privileged=true", "alpine"}, "/work")
+	if len(vs) == 0 {
+		t.Fatal("expected --privileged=true to be refused, got no violations")
+	}
+}
+
+func TestDockerCLIViolations_PrivilegedAttachedFalse_Allowed(t *testing.T) {
+	vs := dockerCLIViolations("create", []string{"create", "--privileged=false", "alpine"}, "/work")
+	if len(vs) != 0 {
+		t.Errorf("expected --privileged=false to pass, got %v", vs)
+	}
+}
+
+// TestDockerCLIViolations_ShortClusterTV_Refused is the second CRITICAL-3
+// defeat: "-tv /:/host" is a short-flag cluster (tty + volume) whose "-v"
+// the old attached-form check ("-v" as an exact prefix) could not see at
+// all, since the cluster starts with "t", not "v". Fails against the
+// pre-fix code (verified by reverting shortFlagVolumeValue's use locally to
+// the old "strings.HasPrefix(a, \"-v\")" check); passes now.
+func TestDockerCLIViolations_ShortClusterTV_Refused(t *testing.T) {
+	vs := dockerCLIViolations("create", []string{"create", "-tv", "/:/host", "alpine"}, "/work")
+	if len(vs) == 0 {
+		t.Fatal(`expected "-tv /:/host" to be refused, got no violations`)
+	}
+	t.Logf("violations: %v", vs)
+}
+
+func TestDockerCLIViolations_ShortClusterITV_BindWithinCwd_Allowed(t *testing.T) {
+	vs := dockerCLIViolations("create", []string{"create", "-itv", "/work/data:/data", "alpine"}, "/work")
+	if len(vs) != 0 {
+		t.Errorf("expected a short-cluster bind within cwd to pass, got %v", vs)
+	}
+}
+
+// TestDockerCLIViolations_MountFlagRelativeSourceEscapingCwd_Refused is the
+// third CRITICAL-3 defeat: checkBindSource used to return "" (pass) for any
+// source not starting with "/", on the belief that docker requires bind
+// sources to be absolute. Measured (review) that "--mount
+// type=bind,src=./relx,dst=/x" is accepted and resolved against the
+// client's own cwd — so a relative "../.." source escapes the work
+// directory exactly as an absolute one outside it would. Fails against the
+// pre-fix "if !strings.HasPrefix(src, \"/\") { return \"\" }" check
+// (verified by reverting locally); passes now that a relative source is
+// resolved against cwd before the containment check.
+func TestDockerCLIViolations_MountFlagRelativeSourceEscapingCwd_Refused(t *testing.T) {
+	vs := dockerCLIViolations("create",
+		[]string{"create", "--mount", "type=bind,src=../..,dst=/x", "alpine"}, "/a/b/c")
+	if len(vs) == 0 {
+		t.Fatal(`expected "--mount type=bind,src=../.." to be refused, got no violations`)
+	}
+	t.Logf("violations: %v", vs)
+}
+
+func TestDockerCLIViolations_MountFlagRelativeSourceWithinCwd_Allowed(t *testing.T) {
+	vs := dockerCLIViolations("create",
+		[]string{"create", "--mount", "type=bind,src=./relx,dst=/x", "alpine"}, "/work")
+	if len(vs) != 0 {
+		t.Errorf("expected a relative source within cwd to pass, got %v", vs)
+	}
+}
+
+// TestDockerCLIViolations_ContainerRun_Refused and
+// TestDockerCLIViolations_ContainerExec_Refused are the fourth CRITICAL-3
+// defeat: "docker container run"/"docker container exec" are live aliases
+// for "docker run"/"docker exec" (measured, review) that the top-level
+// subcommand check alone does not see, since splitDockerGlobal identifies
+// "container" as the subcommand, not "run"/"exec". Fails against
+// dockerDangerousSubcommands[sub] alone (verified by reverting
+// effectiveSubcommand's use locally); passes now that effectiveSubcommand
+// collapses the two.
+func TestDockerCLIViolations_ContainerRun_Refused(t *testing.T) {
+	vs := dockerCLIViolations("container", []string{"container", "run", "alpine", "sh"}, "/work")
+	if len(vs) == 0 {
+		t.Fatal(`expected "docker container run" to be refused, got no violations`)
+	}
+}
+
+func TestDockerCLIViolations_ContainerExec_Refused(t *testing.T) {
+	vs := dockerCLIViolations("container", []string{"container", "exec", "web", "sh"}, "/work")
+	if len(vs) == 0 {
+		t.Fatal(`expected "docker container exec" to be refused, got no violations`)
+	}
+}
+
+func TestDockerCLIViolations_ContainerLs_Passes(t *testing.T) {
+	vs := dockerCLIViolations("container", []string{"container", "ls"}, "/work")
+	if len(vs) != 0 {
+		t.Errorf(`expected "docker container ls" to pass, got %v`, vs)
+	}
+}
+
+// TestDockerCLIViolations_AnonymousVolume_Allowed is the first of the two
+// nits: "-v /data" (a single path, no ":") declares an anonymous volume at
+// that *container* path — there is no host source at all — but the old
+// checkVolumeSpec treated the whole spec as a source when it found no ":",
+// so an absolute container path outside cwd was wrongly refused as an
+// escaping bind. Fails against code that skips the ":" check in
+// checkVolumeSpec (verified by reverting locally); passes now.
+func TestDockerCLIViolations_AnonymousVolume_Allowed(t *testing.T) {
+	vs := dockerCLIViolations("create", []string{"create", "-v", "/data", "alpine"}, "/work")
+	if len(vs) != 0 {
+		t.Errorf(`expected "-v /data" (anonymous volume) to pass, got %v`, vs)
+	}
+}

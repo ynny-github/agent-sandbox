@@ -440,36 +440,41 @@ binary a second name reachable only from it. Measured 2026-09-06:
   '<broker>' is not allowed to invoke it … `can_use` must include 'realgit'"*.
 
 `docker` takes the identical shape: `docker` → the wrapper, `realdocker` → the
-real binary, reachable only from it. It matters only when an operator grants the
-Docker socket, which the profile does not do by default — but the shape is
-there so that granting it does not also mean giving up the compose checks.
+real binary, reachable only from it.
 
-**Measured 2026-09-06, and not what "does not grant" was assumed to mean:**
-naming the Docker socket in no `fs_read`/`fs_write` grant does not, by
-itself, block a connection to it. `docker ps` against a profile with zero
-filesystem grants beyond the pinned binary and `/nix/store` still reached the
-real daemon and returned a real container list. nono's Landlock
-`scoped=LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET` only covers the Linux *abstract*
-socket namespace; `/var/run/docker.sock` is an ordinary pathname socket, and
-gating a pathname socket specifically needs `linux.af_unix_mediation` plus a
-`filesystem.unix_socket` allowlist (see the profile guide's `no-docker`
-example) — neither of which this profile, or its `network_profile:
-"developer"` ceiling, configures. Until an operator adds that mediation, the
-compose-model check and the plain-invocation argv checks (`run`/`exec`,
-`--privileged`, a host or socket bind mount) are the *only* things standing
-between the agent and a live Docker daemon, not a backstop of "the socket
-isn't reachable anyway."
+**The Docker socket is not filesystem-gated, at all, by any of this.**
+An earlier revision of this document claimed granting the socket was a
+separate, later step — "it matters only when an operator grants the Docker
+socket, which the profile does not do by default." Measured 2026-09-06, that
+claim is false: `docker ps` against a profile with zero filesystem grants
+beyond the pinned binary and `/nix/store` — no `/var/run`, no socket path
+anywhere in `fs_read`/`fs_write` — still reached the real daemon and
+returned a real container list. nono does not mediate pathname AF_UNIX
+sockets: its Landlock `scoped=LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET` covers
+only the Linux *abstract* socket namespace, and `/var/run/docker.sock` is an
+ordinary pathname socket. Gating a pathname socket needs
+`linux.af_unix_mediation` plus a `filesystem.unix_socket` allowlist (see the
+profile guide's `no-docker` example) — a separate, deliberate opt-in this
+document never specifies and no profile in this repository configures.
 
-One host-packaging trap measured while wiring this: Nix's `docker` package
-installs `bin/docker` as a small stub that re-execs `libexec/docker/docker`,
-the actual CLI binary — the same "multi-call host" shape this document's
-Measured Constraints section already warns about for `ls` and `mise`. nono's
-per-command Landlock rule set is built from the pinned executable's own
-direct library dependencies, so pinning `realdocker` at the stub does not
-grant execute on the second, indirectly invoked path: every invocation
-crashed with `execve(...) = -1 EACCES`, reported as "Command exited with code
-255" with no other output. `realdocker` must be pinned at
-`libexec/docker/docker` directly.
+The consequence is not cosmetic: **the only gate on the Docker daemon is
+whether the profile makes the `docker` binary reachable at all.** Once it
+is reachable — by any command, through any path, wrapped or not — the
+daemon is reachable, socket grant or no socket grant, and the wrapper's
+argv/compose checks become the *sole* defense rather than a second layer
+sitting behind a filesystem bound. Reaching the daemon this way is
+root-equivalent: the socket permits mounting `/` into a container. This is
+why command-profile.json in this repository does not declare `docker` or
+`realdocker` at all — wiring the wrapper in is a capability decision for an
+operator to make deliberately, not a step that happens to be inert until a
+second, unrelated grant is added.
+
+One host-packaging trap measured while wiring this, recorded in Measured
+Constraints below alongside the other three `executable`-pinning traps this
+branch found: Nix's `docker` package installs `bin/docker` as a small stub
+that re-execs `libexec/docker/docker`, the actual CLI binary. `realdocker`
+must be pinned at `libexec/docker/docker` directly, or every invocation
+crashes.
 
 ## Measured constraints
 
@@ -483,10 +488,30 @@ and would be refused. Installation has to move.
 executed. This is the intended allowlist, and it is also the operator's
 recurring cost.
 
-**A pinned `executable` must be the program, not a multi-call host.** Pointing
-an `ls` entry at coreutils' combined binary silently produced no policy
-enforcement. Version-manager shims have the same shape: a `mise` entry turns
-every mise-managed tool into an attempted direct exec of `mise`.
+**A pinned `executable` must be the program, not a multi-call host — four
+measured variants, so far, on this branch alone.** Pointing an `ls` entry at
+coreutils' combined binary silently produced no policy enforcement.
+Version-manager shims have the same shape: a `mise` entry turns every
+mise-managed tool into an attempted direct exec of `mise`. git's own
+multi-call dispatch is a third variant, argv-shaped rather than
+directory-shaped: naming the real git binary's second command `git-real`
+(instead of `realgit`) made git itself treat `argv[0]`'s `git-<word>`
+basename as an attempt to run `<word>` as one of its own builtins, silently
+dropping the rest of argv (`fatal: cannot handle real as a builtin`) — see
+"How a wrapper is bound to a command name" above. A fourth, host-packaging
+variant: Nix's `docker` package installs `bin/docker` as a small stub that
+re-execs `libexec/docker/docker`, the actual CLI binary, by absolute path.
+nono's per-command Landlock rule set is built from the pinned executable's
+own direct library dependencies (its ELF interpreter, its linked `.so`s, a
+handful of fixed system files) — not from whatever paths it re-execs into —
+so pinning an entry at `bin/docker` does not grant execute on the second,
+indirectly invoked path: every invocation crashed with
+`execve(".../libexec/docker/docker", ...) = -1 EACCES`, reported only as
+"Command exited with code 255" with no other output. Confirmed by `strace
+-f`, and confirmed specific to this one binary's packaging shape by a
+control run pinning the real `git` binary the same way, which did not
+crash. The fix in every case is the same: pin the actual program, whatever
+directory or argv-derived indirection the package puts in front of it.
 
 **The NixOS patch is still a prerequisite.** nono cannot start tool-sandbox on
 NixOS unpatched (unfixed in 0.75.0; see the prerequisite document).

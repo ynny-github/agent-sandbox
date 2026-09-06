@@ -483,18 +483,70 @@ rule set refuses, among others: unconditional `--force`/`-f` on push,
 `gc --prune=now`/`--prune=all`, bypassing hooks or signatures
 (`--no-verify`, `--no-gpg-sign`, `commit -n`), injecting an alias or an
 exec-capable config key via `-c`/`--config-env`, `stash drop`/`clear`,
-changing a remote, deleting a tag, discarding working-tree changes
+removing a remote or changing its URL (adding one is allowed), deleting a
+tag, discarding working-tree changes
 (`checkout -- .`/`restore --worktree`), writing config (`git config` reads
 are allowed; anything that is not a read is not), and `--exec-path`. The
 list above is a snapshot; `internal/safe/git/rules.go` is the source, and
 `agent-sandbox ai explain` renders it live from that same source (not from
 this document) for whichever profile is actually running. Do not point an
-agent at `agent-sandbox safe git --help` for this: that invocation is
-unreachable from inside a broker session in the first place (nothing in
-this profile grants `agent-sandbox` a path back to itself), and even
-reachable it would not print a rule set — `safe git` disables its own flag
-parsing, so `--help` passes straight through to real git and prints git's
-own help instead.
+agent at `agent-sandbox safe git --help` for this: `safe git` disables its
+own flag parsing, so `--help` passes straight through to real git and
+prints git's own help instead, not a rule set.
+
+**The `-c`/`--config-env` entries above (`execCapableConfigKeys` in
+`internal/safe/git/rules.go`) are a nine-key denylist, not the boundary,
+and treating them as the boundary is the mistake to avoid.** git has more
+exec-capable config keys than that nine — `diff.external`,
+`filter.*.clean`/`smudge`, `merge.*.driver`, `pager.*`,
+`protocol.*.command`, `uploadpack.packObjectsHook`, `trailer.*.command`,
+`core.gitProxy`, `gpg.<fmt>.program` among them — and every one of them is
+settable by the same route the alias check above exists to catch:
+`echo '[diff] external = …' >> .git/config` is a broker builtin, not an
+`execve`, so neither this wrapper's parser nor nono's shim is ever in the
+loop. What actually stops these is a layer underneath the wrapper, not the
+wrapper itself: `realgit`'s own `exec_paths` in the command profile names
+only `libexec/git-core`, so every shell-out one of those config keys would
+need — `sh -c`, a bare program name, `rebase -x`, `bisect run`,
+`submodule foreach`, `difftool --extcmd` — fails at `execve` under nono's
+Landlock execute restriction, regardless of what the parser did or did not
+catch. That narrow `exec_paths` is load-bearing and lives entirely in
+`command-profile.json`, not in this repository's Go source. Widening
+`realgit`'s `exec_paths` toward `/nix/store` — the natural fix to reach for
+when some unrelated git subcommand's shell-out fails — silently reopens
+every one of those config keys at once, because nothing in the wrapper's
+own rule set changed. The parser stops what it can see in argv; a narrow
+`exec_paths` stops what it cannot see at all; a git config key that runs a
+program is exactly what that second layer is holding back — for every
+route except one, measured and recorded as an accepted residual in the
+spec's "Accepted residual: `diff.external` reaches `ld-linux` directly"
+(a single-token `diff.external` reaches the pinned git binary's own dynamic
+linker regardless of `exec_paths`, and from there reaches arbitrary
+execution of anything readable under the sandbox).
+
+It is also worth being precise about what kind of rule each entry in the
+list above actually is. `hard-reset`, `clean-force`, `discard-changes`,
+`stash-destroy` and `tag-delete` are guardrails against an accidental
+invocation, not defenses against a deliberate one: `rm`, `mv` and `cp` are
+floor commands with write access to `$WORKDIR` in this repository's own
+profile, so `rm -rf .git` needs no git at all, and none of those five rules
+sits anywhere near that path. The rest of the list — `force-push`,
+`branch-force-delete`, `filter-history`, `update-ref-delete`, `gc-prune`,
+`bypass-hooks`, `alias-injection`, `config-exec-injection`,
+`remote-tamper`, `config-write` and `exec-path-injection` — are the ones
+doing boundary work against what git itself, or a config value it reads,
+can be made to do; presenting the whole list as one undifferentiated
+policy overstates the first five.
+
+`remote-tamper` in particular is not a network control, and its message
+says so: it refuses `remote remove`/`rm`/`set-url` through git's own CLI,
+but `remote add` is explicitly allowed, `remote.origin.url` is settable by
+the same direct `.git/config` write the alias check exists to catch, and
+`realgit`'s own child sandbox carries `"network": {"allow_all": true}`
+regardless. What git can reach over the network is bounded by exactly one
+thing: the session's own `developer` network profile (the top-level
+`network` section's ceiling) — nothing this wrapper checks narrows it
+further.
 
 A refusal from the wrapper prints `blocked: <reason>` to stderr and
 **exits 1** — it is caught in Go before nono is ever involved, so it is not
@@ -556,8 +608,11 @@ pinning the stub crashes every invocation, silently (`execve(...) = -1
 EACCES`, reported only as "Command exited with code 255"). Second, the
 wrapper's checks (`internal/safe/dockercompose` and `cmd/safe_docker.go`;
 read the source for the exact, current rule set — `--help` passes straight
-through to real docker, since the wrapper disables its own flag parsing,
-and prints docker's help instead of the rule set) are argv/model-level,
+through to real docker and prints docker's own help, never the wrapper's
+rule set: the plain `docker` path never intercepts it because the wrapper
+disables its own flag parsing, and the `compose` path skips model
+resolution outright once it sees `--help`, since help executes nothing and
+needs no model) are argv/model-level,
 not filesystem-level: a `compose` invocation is checked against its
 *resolved* model (`docker compose config`) — host-path mounts, the Docker
 socket, `privileged`, host `network`/`pid`/`ipc`, dangerous capabilities,

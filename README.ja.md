@@ -494,7 +494,8 @@ push での無条件の `--force`/`-f`、`reset --hard`、`clean -f`、ブラン
 `reflog expire`、`gc --prune=now`/`--prune=all`、フックや署名の回避
 (`--no-verify`、`--no-gpg-sign`、`commit -n`)、`-c`/`--config-env` 経由の
 エイリアスまたは exec 可能な config キーの注入、`stash drop`/`clear`、
-リモートの変更、タグの削除、作業ツリーの変更の破棄
+リモートの削除または URL の変更 (追加は許可されます)、タグの削除、
+作業ツリーの変更の破棄
 (`checkout -- .`/`restore --worktree`)、config への書き込み (`git config`
 の読み取りは許可されますが、読み取りでないものは許可されません)、そして
 `--exec-path`。上の一覧はある時点のスナップショットです。ソースは
@@ -502,11 +503,67 @@ push での無条件の `--force`/`-f`、`reset --hard`、`clean -f`、ブラン
 (この文書からではなく) その同じソースから、実際に動いているプロファイルの
 ためにルールセットをその場でレンダリングします。これを目的に
 `agent-sandbox safe git --help` をエージェントに向けさせないでください:
-そもそもブローカーセッションの内側からはこの呼び出しに到達できません
-(このプロファイルには `agent-sandbox` が自分自身へ戻る経路を与える設定が
-ありません)。仮に到達できたとしてもルールセットは表示されません —
-`safe git` は自分自身のフラグ解析を無効にしているため、`--help` は実 git
-にそのまま通り、git 自身のヘルプが表示されます。
+`safe git` は自分自身のフラグ解析を無効にしているため、`--help` は
+ルールセットではなく実 git にそのまま通り、git 自身のヘルプが表示される
+だけです。
+
+**上にある `-c`/`--config-env` の各項目 (`internal/safe/git/rules.go` の
+`execCapableConfigKeys`) は 9 個の config キーからなる denylist であって、
+境界そのものではありません。それを境界だと思い込むことが避けるべき誤りです。**
+git には exec 可能な config キーがこの 9 個よりずっと多くあります —
+`diff.external`、`filter.*.clean`/`smudge`、`merge.*.driver`、`pager.*`、
+`protocol.*.command`、`uploadpack.packObjectsHook`、`trailer.*.command`、
+`core.gitProxy`、`gpg.<fmt>.program` など — そしてそのどれもが、上の
+エイリアスチェックがまさに捕まえようとしているのと同じ経路で設定できて
+しまいます: `echo '[diff] external = …' >> .git/config` はブローカーの
+組み込みビルトインであって `execve` ではないため、このラッパーのパーサーも
+nono の shim も一切関与しません。これらを実際に止めているのはラッパー
+ではなく、その一段下にある層です: `realgit` 自身の `exec_paths` はコマンド
+プロファイルの中で `libexec/git-core` だけを指しているため、これらの
+config キーが必要とするようなシェルアウト — `sh -c`、裸のプログラム名、
+`rebase -x`、`bisect run`、`submodule foreach`、`difftool --extcmd` —
+はどれも、パーサーが何を捕まえたか/捕まえなかったかに関係なく、nono の
+Landlock 実行制限によって `execve` の時点で失敗します。この狭い
+`exec_paths` はまさに要となる層であり、それは丸ごと
+`command-profile.json` の中にあります。このリポジトリの Go ソースには
+ありません。何か無関係な git サブコマンドのシェルアウトが失敗したときに
+つい手を伸ばしたくなる「自然な直し方」— `realgit` の `exec_paths` を
+`/nix/store` へ広げること — は、ラッパー自身のルールセットには何の変更も
+無いまま、これらの config キーをまとめて静かに再び開けてしまいます。
+パーサーが止めるのは argv に見えるものだけであり、狭い `exec_paths` が
+止めるのはそもそも見えないものであり、プログラムを実行する git の
+config キーは、まさにこの第二の層が押しとどめているものそのものです —
+ただし 1 つの経路を除きます。これは計測済みで、spec の
+「受け入れられた残存リスク: `diff.external` は `ld-linux` に直接到達する」
+に記録されています (単一トークンの `diff.external` は `exec_paths` に
+関係なく固定された git バイナリ自身の動的リンカに到達し、そこから
+サンドボックス内で読み取り可能などんなものも任意に実行できてしまいます)。
+
+上の一覧にある各ルールがそれぞれどんな種類のものかも、正確に述べて
+おく価値があります。`hard-reset`、`clean-force`、`discard-changes`、
+`stash-destroy`、`tag-delete` は、意図的な行為に対する防御ではなく
+事故的な呼び出しに対するガードレールです: このリポジトリ自身の
+プロファイルでは `rm`、`mv`、`cp` は `$WORKDIR` への書き込み権限を持つ
+フロアコマンドなので、`rm -rf .git` は git を一切必要とせず、上の 5 つの
+ルールはどれもその経路の近くにすら立っていません。残りの一覧 —
+`force-push`、`branch-force-delete`、`filter-history`、
+`update-ref-delete`、`gc-prune`、`bypass-hooks`、`alias-injection`、
+`config-exec-injection`、`remote-tamper`、`config-write`、
+`exec-path-injection` — は、git 自身や git が読む config 値にできることに
+対して実際に境界としての仕事をしているものです。一覧全体を一枚岩の
+ポリシーであるかのように示すことは、最初の 5 つについては言い過ぎに
+なります。
+
+`remote-tamper` は特にネットワークの制御ではなく、メッセージ自体も
+そう述べています: これが拒否するのは git 自身の CLI 経由の
+`remote remove`/`rm`/`set-url` だけで、`remote add` は明示的に許可されて
+いますし、`remote.origin.url` はエイリアスチェックがまさに捕まえようと
+している経路と同じ `.git/config` への直接書き込みで設定できてしまい、
+`realgit` 自身の子サンドボックスは常に `"network": {"allow_all": true}`
+を持っています。git がネットワーク越しに到達できる範囲を絞っているのは
+ただ 1 つ、セッション自身の `developer` ネットワークプロファイル
+(トップレベルの `network` セクションという上限) だけです — このラッパーが
+チェックする何かがそれをさらに狭めることはありません。
 
 ラッパーによる拒否は `blocked: <reason>` を stderr に出力して
 **exit 1** で終了します — nono に到達する前に Go の中で捕まえられている
@@ -568,9 +625,12 @@ push での無条件の `--force`/`-f`、`reset --hard`、`clean -f`、ブラン
 すべての呼び出しが黙ってクラッシュします (`execve(...) = -1 EACCES`、
 "Command exited with code 255" としか報告されません)。第二に、ラッパーの
 チェック (`internal/safe/dockercompose` と `cmd/safe_docker.go`。正確で
-最新のルールセットはソースを読んでください — ラッパーは自分自身の
-フラグ解析を無効にしているため、`--help` は実 docker にそのまま通り、
-ルールセットではなく docker 自身のヘルプを表示します) は argv・
+最新のルールセットはソースを読んでください — `--help` は実 docker に
+そのまま通り、ラッパーのルールセットではなく docker 自身のヘルプを
+表示します: 通常の `docker` の経路では、ラッパーが自分自身のフラグ解析を
+無効にしているためそもそも横取りされず、`compose` の経路では、
+`--help` を見た時点でモデル解決自体を丸ごとスキップします —
+ヘルプは何も実行しないので、モデルを必要としないからです) は argv・
 モデルレベルであり、ファイルシステムレベルではありません: `compose` の
 呼び出しは *解決済みの* モデル (`docker compose config`) に照らして
 チェックされます — ホストパスのマウント、Docker ソケット、`privileged`、

@@ -410,10 +410,10 @@ The profile binds the name the agent types to the wrapper, and gives the real
 binary a second name reachable only from it. Measured 2026-09-06:
 
 ```json
-"git":      { "executable": "<wrapper>",   "can_use": ["git-real"],
-              "from": { "<broker>": { "sandbox": { "argv_prepend": ["safe", "git"], … } } } },
-"git-real": { "executable": "<real git>",
-              "from": { "git": { "sandbox": { … } } } }
+"git":     { "executable": "<wrapper>",   "can_use": ["realgit"],
+             "from": { "<broker>": { "sandbox": { "argv_prepend": ["safe", "git"], … } } } },
+"realgit": { "executable": "<real git>",
+             "from": { "git": { "sandbox": { … } } } }
 ```
 
 - `argv_prepend` inserts after the synthesised `argv[0]`, so `git status --short`
@@ -425,16 +425,34 @@ binary a second name reachable only from it. Measured 2026-09-06:
   `argv_prepend` fires again, and it recurses without bound — measured four
   levels deep before the probe was killed. The deleted `cmd/safe_git.go` used
   `LookPath`, so restoring it unchanged would ship an infinite loop.
-- Resolving the *second* name instead (`LookPath("git-real")`) avoids that, needs
-  no absolute path, and keeps the real binary behind a shim of its own.
-- Reachability is enforced by nono, not by convention. Invoking `git-real`
-  directly from the floor is refused: *"'git-real' is blocked because tool
-  '<broker>' is not allowed to invoke it … `can_use` must include 'git-real'"*.
+- Resolving a *second* name instead avoids that, needs no absolute path, and
+  keeps the real binary behind a shim of its own. **That second name must not
+  be of the form `git-<word>`.** git treats `argv[0]`'s basename that way as an
+  attempt to run `<word>` as one of its own multi-call builtins, ignoring the
+  rest of argv. Measured: naming the real binary `git-real` and invoking it as
+  `git-real config --get alias.h` produced `fatal: cannot handle real as a
+  builtin`, silently dropping `config --get alias.h` entirely. The name used
+  here and in `command-profile.json` is `realgit` (and `realdocker` for
+  docker, for the same reason on general principle, though docker has no
+  equivalent multi-call dispatch today).
+- Reachability is enforced by nono, not by convention. Invoking `realgit`
+  directly from the floor is refused: *"'realgit' is blocked because tool
+  '<broker>' is not allowed to invoke it … `can_use` must include 'realgit'"*.
 
-`docker` takes the identical shape: `docker` → the wrapper, `docker-real` → the
+`docker` takes the identical shape: `docker` → the wrapper, `realdocker` → the
 real binary, reachable only from it. It matters only when an operator grants the
 Docker socket, which the profile does not do by default — but the shape is
 there so that granting it does not also mean giving up the compose checks.
+One host-packaging trap measured while wiring this: Nix's `docker` package
+installs `bin/docker` as a small stub that re-execs `libexec/docker/docker`,
+the actual CLI binary — the same "multi-call host" shape this document's
+Measured Constraints section already warns about for `ls` and `mise`. nono's
+per-command Landlock rule set is built from the pinned executable's own
+direct library dependencies, so pinning `realdocker` at the stub does not
+grant execute on the second, indirectly invoked path: every invocation
+crashed with `execve(...) = -1 EACCES`, reported as "Command exited with code
+255" with no other output. `realdocker` must be pinned at
+`libexec/docker/docker` directly.
 
 ## Measured constraints
 

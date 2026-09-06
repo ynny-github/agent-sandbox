@@ -297,3 +297,38 @@ func TestDockerCLIViolations_AnonymousVolume_Allowed(t *testing.T) {
 		t.Errorf(`expected "-v /data" (anonymous volume) to pass, got %v`, vs)
 	}
 }
+
+// TestDockerCLIViolations_ShortFlagEqualsForm_Refused is the IMPORTANT from
+// the review round after CRITICAL 3's docker fixes: pflag (docker's flag
+// library) accepts "-f=value" for a short flag, exactly as it accepts
+// "--flag=value" for a long one. Before stripping a leading "=",
+// shortFlagVolumeValue extracted the literal string "=/:/host" as -v's
+// value; checkVolumeSpec's ":" split then produced a source of "=", which
+// looksLikeHostPath accepted and checkBindSource joined onto cwd — landing
+// *inside* cwd, so nothing was flagged, while "/" (the real target) was
+// never inspected. Reachable via "docker create -v=/:/host alpine" followed
+// by "docker start", since "create" is not itself a refused subcommand.
+// Fails against code that does not strip the leading "=" (verified by
+// reverting locally); passes now.
+func TestDockerCLIViolations_ShortFlagEqualsForm_Refused(t *testing.T) {
+	vs := dockerCLIViolations("create", []string{"create", "-v=/:/host", "alpine"}, "/work")
+	if len(vs) == 0 {
+		t.Fatal(`expected "-v=/:/host" to be refused, got no violations`)
+	}
+	t.Logf("violations: %v", vs)
+}
+
+func TestDockerCLIViolations_ShortClusterEqualsForm_Refused(t *testing.T) {
+	vs := dockerCLIViolations("create", []string{"create", "-tv=/:/host", "alpine"}, "/work")
+	if len(vs) == 0 {
+		t.Fatal(`expected "-tv=/:/host" to be refused, got no violations`)
+	}
+	t.Logf("violations: %v", vs)
+}
+
+func TestDockerCLIViolations_ShortFlagEqualsForm_BindWithinCwd_Allowed(t *testing.T) {
+	vs := dockerCLIViolations("create", []string{"create", "-v=/work/data:/data", "alpine"}, "/work")
+	if len(vs) != 0 {
+		t.Errorf(`expected "-v=/work/data:/data" (within cwd) to pass, got %v`, vs)
+	}
+}

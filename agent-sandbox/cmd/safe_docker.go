@@ -19,6 +19,11 @@ var safeDockerCmd = &cobra.Command{
 	Short: "Run docker, checking a compose invocation against its resolved model and every other invocation at the argv level",
 	Long: `Run "docker", except for two kinds of checks that run first.
 
+An unrecognized global docker flag (one not in this wrapper's own list of
+docker's "--config"/"-c"/"-H"/"-l"/"--tls*"/"-D"/"-v"/"-h" family) is refused
+for every invocation, before either check below runs, rather than risking a
+subcommand hidden behind a flag this wrapper does not know.
+
 When the first non-global argument is "compose", the remainder is validated
 against the resolved model ("docker compose config"). The invocation is
 refused (exit 1, running nothing) when the configuration would:
@@ -32,15 +37,17 @@ Every other docker invocation is checked at the argv level only — there is no
 resolved model to read the way "docker compose config" gives one for compose:
   - "run" and "exec" are refused outright, including as "docker container run"
     / "docker container exec" (the equivalent management-command form);
-  - "--privileged" is refused, including its "=true"/"=false" attached forms,
-    wherever it appears — not only with "run";
+  - "--privileged" is refused, including its attached "=<bool>" form (e.g.
+    "--privileged=true"); an explicit "--privileged=false" is allowed, since
+    it turns privileged mode off, wherever it appears — not only with "run";
   - a "-v"/"--volume"/"--mount" bind of a host path outside the current
     working directory, or of the Docker socket, is refused wherever it
     appears. A relative source is resolved against the working directory
     first, the same as docker itself does for "--mount". "-v" is also
-    checked inside a short-flag cluster (e.g. "-tv /host:/x"), by looking
-    for a "v" in the cluster; a cluster where an earlier flag also consumes
-    a value of its own (e.g. "-ev", where "v" is "-e"'s one-character value)
+    checked inside a short-flag cluster (e.g. "-tv /host:/x") and its
+    attached "=" form (e.g. "-v=/host:/x", "-tv=/host:/x"), by looking for a
+    "v" in the cluster; a cluster where an earlier flag also consumes a
+    value of its own (e.g. "-ev", where "v" is "-e"'s one-character value)
     can be misread as "-v" instead — this is a known, narrow gap, and such
     an invocation may be refused (or, rarely, checked against the wrong
     value) rather than silently passed.
@@ -246,30 +253,47 @@ func privilegedFlagIsTrue(a string) bool {
 }
 
 // shortFlagVolumeValue reports whether short-flag token a (e.g. "-v",
-// "-tv", "-v/host:/x", "-itv") includes docker's "-v"/--volume short flag,
-// and returns its value: whatever follows the first "v" within the same
-// token, or the next argv token when nothing follows there.
+// "-tv", "-v/host:/x", "-itv", "-v=/host:/x") includes docker's
+// "-v"/--volume short flag, and returns its value: whatever follows the
+// first "v" within the same token — with a leading "=" stripped, since
+// pflag (docker's flag library) accepts "-f=value" for a short flag exactly
+// as it accepts "--flag=value" for a long one — or the next argv token when
+// nothing follows there.
 //
-// This is a heuristic, not a full short-flag-cluster parser: pflag's real
-// rule is that once a value-taking flag is reached in a cluster, everything
-// remaining in that token (or the next token, if nothing remains) is its
-// value, and telling the cluster's real "-v" apart from an earlier
-// value-taking flag whose own attached value happens to contain the letter
-// "v" (e.g. "-ev", where "v" is "-e"'s value, not a second flag) requires
-// knowing every relevant flag's type, which this package does not
-// enumerate. Finding the first "v" cannot miss a real "-v" that is present —
-// an earlier value flag would have consumed the token before a later "-v"
-// could appear at all — so the only failure direction is inspecting a
-// misattributed value as if it were a mount spec, which is over-cautious
-// (a possible extra refusal), never permissive (see the command's Long
-// help text).
+// Without stripping the "=", "-v=/:/host" and "-tv=/:/host" both extracted
+// the value as the literal string "=/:/host": checkVolumeSpec's own ":"
+// split then produced a source of "=", which looksLikeHostPath accepted
+// (it contains no "/", but the check at the time keyed only on absence of
+// "/" — the bug predates this method's own leading-"/" check too) and
+// checkBindSource joined onto cwd, so the join landed *inside* cwd and
+// nothing was ever flagged as escaping — while the intended target, "/",
+// was never inspected at all. Reachable via "docker create -v=/:/host
+// alpine" followed by "docker start", since "create" is not itself a
+// refused subcommand.
+//
+// This is still a heuristic, not a full short-flag-cluster parser: pflag's
+// real rule is that once a value-taking flag is reached in a cluster,
+// everything remaining in that token (or the next token, if nothing
+// remains) is its value, and telling the cluster's real "-v" apart from an
+// earlier value-taking flag whose own attached value happens to contain the
+// letter "v" (e.g. "-ev", where "v" is "-e"'s value, not a second flag)
+// requires knowing every relevant flag's type, which this package does not
+// enumerate. Finding the first "v" cannot miss a real "-v" that is
+// present — an earlier value flag would have consumed the token before a
+// later "-v" could appear at all — so misattribution, when it happens,
+// inspects the wrong string as a mount spec rather than skipping a real one
+// (see the command's Long help text). That property is about which flag a
+// found value is attributed to; it says nothing about whether a value this
+// function does correctly attribute to "-v" is then checked correctly —
+// that is checkVolumeSpec/checkBindSource's job, and the leading-"=" bug
+// above was a defect in exactly that half, not in attribution.
 func shortFlagVolumeValue(a string, rest []string, i int) (value string, ok bool) {
 	idx := strings.IndexByte(a, 'v')
 	if idx < 1 {
 		return "", false
 	}
 	if idx+1 < len(a) {
-		return a[idx+1:], true
+		return strings.TrimPrefix(a[idx+1:], "="), true
 	}
 	if i+1 < len(rest) {
 		return rest[i+1], true

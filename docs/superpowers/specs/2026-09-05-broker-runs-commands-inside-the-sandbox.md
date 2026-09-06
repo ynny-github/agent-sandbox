@@ -443,6 +443,23 @@ binary a second name reachable only from it. Measured 2026-09-06:
 real binary, reachable only from it. It matters only when an operator grants the
 Docker socket, which the profile does not do by default — but the shape is
 there so that granting it does not also mean giving up the compose checks.
+
+**Measured 2026-09-06, and not what "does not grant" was assumed to mean:**
+naming the Docker socket in no `fs_read`/`fs_write` grant does not, by
+itself, block a connection to it. `docker ps` against a profile with zero
+filesystem grants beyond the pinned binary and `/nix/store` still reached the
+real daemon and returned a real container list. nono's Landlock
+`scoped=LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET` only covers the Linux *abstract*
+socket namespace; `/var/run/docker.sock` is an ordinary pathname socket, and
+gating a pathname socket specifically needs `linux.af_unix_mediation` plus a
+`filesystem.unix_socket` allowlist (see the profile guide's `no-docker`
+example) — neither of which this profile, or its `network_profile:
+"developer"` ceiling, configures. Until an operator adds that mediation, the
+compose-model check and the plain-invocation argv checks (`run`/`exec`,
+`--privileged`, a host or socket bind mount) are the *only* things standing
+between the agent and a live Docker daemon, not a backstop of "the socket
+isn't reachable anyway."
+
 One host-packaging trap measured while wiring this: Nix's `docker` package
 installs `bin/docker` as a small stub that re-execs `libexec/docker/docker`,
 the actual CLI binary — the same "multi-call host" shape this document's

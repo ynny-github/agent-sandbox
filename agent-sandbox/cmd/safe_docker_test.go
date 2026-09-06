@@ -59,3 +59,129 @@ func TestSplitDockerGlobal(t *testing.T) {
 		})
 	}
 }
+
+// TestDockerCLIViolations_RunPrivilegedHostMount_Refused is CRITICAL 3 from
+// the review: before this check existed, a non-compose docker invocation
+// passed straight through with no checks at all, so
+// "docker run --privileged -v /:/host --network host alpine sh" ran
+// untouched — strictly more powerful than everything dockercompose.CheckModel
+// blocks for the equivalent compose invocation.
+func TestDockerCLIViolations_RunPrivilegedHostMount_Refused(t *testing.T) {
+	args := []string{"run", "--privileged", "-v", "/:/host", "--network", "host", "alpine", "sh"}
+	vs := dockerCLIViolations("run", args, "/work")
+	if len(vs) == 0 {
+		t.Fatal("expected the reviewer's example to be refused, got no violations")
+	}
+	t.Logf("violations: %v", vs)
+}
+
+func TestDockerCLIViolations_PlainSubcommand_Passes(t *testing.T) {
+	if vs := dockerCLIViolations("ps", []string{"ps"}, "/work"); len(vs) != 0 {
+		t.Errorf("expected \"docker ps\" to pass, got %v", vs)
+	}
+}
+
+func TestDockerCLIViolations_ExecSubcommand_Refused(t *testing.T) {
+	if vs := dockerCLIViolations("exec", []string{"exec", "-it", "web", "sh"}, "/work"); len(vs) == 0 {
+		t.Error("expected \"docker exec\" to be refused, got none")
+	}
+}
+
+// TestDockerCLIViolations_PrivilegedWithoutRun_StillRefused checks that
+// --privileged is refused regardless of subcommand, not only on "run": e.g.
+// "docker create --privileged" also creates (though does not yet start) a
+// privileged container.
+func TestDockerCLIViolations_PrivilegedWithoutRun_StillRefused(t *testing.T) {
+	vs := dockerCLIViolations("create", []string{"create", "--privileged", "alpine"}, "/work")
+	if len(vs) == 0 {
+		t.Fatal("expected --privileged to be refused even on \"create\", got no violations")
+	}
+}
+
+func TestDockerCLIViolations_BindWithinCwd_Allowed(t *testing.T) {
+	vs := dockerCLIViolations("create", []string{"create", "-v", "/work/data:/data", "alpine"}, "/work")
+	if len(vs) != 0 {
+		t.Errorf("expected a bind within cwd to pass, got %v", vs)
+	}
+}
+
+func TestDockerCLIViolations_BindOutsideCwd_Refused(t *testing.T) {
+	vs := dockerCLIViolations("create", []string{"create", "-v", "/etc:/etc", "alpine"}, "/work")
+	if len(vs) == 0 {
+		t.Fatal("expected a bind outside cwd to be refused, got no violations")
+	}
+}
+
+func TestDockerCLIViolations_DockerSocketMount_Refused(t *testing.T) {
+	vs := dockerCLIViolations("create",
+		[]string{"create", "-v", "/var/run/docker.sock:/var/run/docker.sock", "alpine"}, "/work")
+	if len(vs) == 0 {
+		t.Fatal("expected a docker.sock bind mount to be refused, got no violations")
+	}
+}
+
+func TestDockerCLIViolations_NamedVolume_Allowed(t *testing.T) {
+	vs := dockerCLIViolations("create", []string{"create", "-v", "myvolume:/data", "alpine"}, "/work")
+	if len(vs) != 0 {
+		t.Errorf("expected a named volume mount to pass, got %v", vs)
+	}
+}
+
+func TestDockerCLIViolations_MountFlagBindOutsideCwd_Refused(t *testing.T) {
+	vs := dockerCLIViolations("create",
+		[]string{"create", "--mount", "type=bind,src=/etc,dst=/etc", "alpine"}, "/work")
+	if len(vs) == 0 {
+		t.Fatal("expected a --mount type=bind outside cwd to be refused, got no violations")
+	}
+}
+
+func TestDockerCLIViolations_MountFlagVolume_Allowed(t *testing.T) {
+	vs := dockerCLIViolations("create",
+		[]string{"create", "--mount", "type=volume,src=myvolume,dst=/data", "alpine"}, "/work")
+	if len(vs) != 0 {
+		t.Errorf("expected a --mount type=volume to pass, got %v", vs)
+	}
+}
+
+// TestRunSafeDocker_ComposeWithLeadingGlobal_Detected is IMPORTANT 4 from the
+// review: "docker --context prod compose up" must not silently execute as
+// "docker compose up" against the default daemon. splitDockerGlobal already
+// separates the leading docker-level globals from "compose up"; this pins
+// that "args[:len(args)-len(rest)]" — the exact expression runSafeDocker
+// uses to detect and refuse a non-empty leading segment — recovers precisely
+// the flags that would otherwise vanish with no diagnostic.
+func TestRunSafeDocker_ComposeWithLeadingGlobal_Detected(t *testing.T) {
+	args := []string{"--context", "prod", "compose", "up"}
+	sub, rest, unrecognized := splitDockerGlobal(args)
+	if unrecognized != "" {
+		t.Fatalf("unexpected unrecognized flag: %q", unrecognized)
+	}
+	if sub != "compose" {
+		t.Fatalf("sub = %q, want compose", sub)
+	}
+	leading := args[:len(args)-len(rest)]
+	want := []string{"--context", "prod"}
+	if len(leading) != len(want) {
+		t.Fatalf("leading = %v, want %v", leading, want)
+	}
+	for i := range leading {
+		if leading[i] != want[i] {
+			t.Errorf("leading[%d] = %q, want %q", i, leading[i], want[i])
+		}
+	}
+}
+
+// TestRunSafeDocker_ComposeNoLeadingGlobal_EmptySegment checks the other side
+// of the same expression: a bare "compose up" (no docker-level global first)
+// must compute an empty leading segment, so ordinary compose invocations are
+// never refused by this check.
+func TestRunSafeDocker_ComposeNoLeadingGlobal_EmptySegment(t *testing.T) {
+	args := []string{"compose", "up"}
+	sub, rest, _ := splitDockerGlobal(args)
+	if sub != "compose" {
+		t.Fatalf("sub = %q, want compose", sub)
+	}
+	if leading := args[:len(args)-len(rest)]; len(leading) != 0 {
+		t.Errorf("leading = %v, want empty", leading)
+	}
+}

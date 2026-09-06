@@ -40,8 +40,14 @@ func checkInvocation(inv Invocation, depth int) []safe.Violation {
 			out = append(out, safe.Violation{Source: "cli", Setting: r.Message})
 		}
 	}
-	out = append(out, checkAlias(inv, depth)...)
-	return out
+	if len(out) > 0 {
+		// Already refused by a global-level rule (alias-injection,
+		// bypass-hooks and config-exec-injection all match on inv.Global
+		// regardless of Subcommand). No need to also shell out to resolve
+		// Subcommand as an alias just to reach the same "refused" outcome.
+		return out
+	}
+	return append(out, checkAlias(inv, depth)...)
 }
 
 // isGitFalse reports whether v is one of git's boolean-false spellings.

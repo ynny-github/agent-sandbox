@@ -13,8 +13,24 @@ import (
 )
 
 var safeGitCmd = &cobra.Command{
-	Use:                "git [args...]",
-	Short:              "Run git, refusing known-dangerous invocations",
+	Use:   "git [args...]",
+	Short: "Run git, refusing known-dangerous invocations and unresolvable subcommands",
+	Long: `Run git, refusing an invocation that git.Check flags before it runs.
+
+This refuses more than just the semantic denylist (force push, hard reset,
+history rewrites, and the rest of git.Rules()): when the first non-global
+token is not one of git's own command names, it is resolved as a configured
+alias and the expansion is re-checked the same way — this is what catches an
+alias installed by a direct write to .git/config, not only one set through
+"git config" or "-c alias.x=...".
+
+One consequence: a third-party git subcommand backed by its own "git-<name>"
+executable on PATH — "git lfs", "git town", and similar plugins — is not a
+git builtin and is not a configured alias either, so it is refused as an
+unresolvable name. This is a behavior change from the wrapper as it existed
+before alias-expansion was added, when such a subcommand simply passed
+through unrecognized. There is currently no mechanism to allow a specific
+third-party subcommand.`,
 	DisableFlagParsing: true, // pass every token straight through to the validator
 	RunE:               runSafeGit,
 }

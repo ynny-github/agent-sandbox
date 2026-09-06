@@ -1,6 +1,7 @@
 package git_test
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -86,6 +87,65 @@ func TestAliasExpansion_DirectConfigWrite_HardResetRefused(t *testing.T) {
 	t.Logf("violations: %v", vs)
 }
 
+// TestAliasExpansion_NewlineInAliasValue_HardResetRefused is CRITICAL 1 from
+// the review: git config supports a "\n" escape inside a quoted alias
+// value, and git's own tokenizer (split_cmdline) treats it as whitespace.
+// Measured on git 2.54.0: [alias] h = "reset --hard\nHEAD" makes
+// "git config --get alias.h" report "reset --hard<LF>HEAD" as one config
+// value, and "git h" runs it as three tokens: reset --hard HEAD. A
+// tokenizer that only splits on space/tab (the bug: splitAliasValue used to
+// switch on `c == ' ' || c == '\t'`) treats the embedded newline as part of
+// the second token, "--hard\nHEAD", which hasLong/hasShort do not match, so
+// hard-reset never fires and this exact .git/config-write attack sails
+// through clean. Fails against the pre-fix tokenizer; passes now that
+// splitAliasValue treats git's full isspace() set as whitespace.
+func TestAliasExpansion_NewlineInAliasValue_HardResetRefused(t *testing.T) {
+	dir := initRepo(t)
+	appendConfig(t, dir, "[alias]\n\th = \"reset --hard\\nHEAD\"\n")
+	withFakeGitReal(t)
+	t.Chdir(dir)
+
+	vs := git.Check([]string{"h"})
+	if len(vs) == 0 {
+		t.Fatal("expected alias \"h\" (= reset --hard<LF>HEAD) to be refused, got no violations")
+	}
+	t.Logf("violations: %v", vs)
+}
+
+// TestAliasExpansion_DashCGlobal_ForwardedToAliasLookup is CRITICAL 2 from
+// the review: resolveAlias used to run "config --get alias.<name>" from the
+// process's own cwd with none of the invocation's globals forwarded, while
+// execGit passes the real invocation's globals (including -C) straight
+// through to the real git binary. So a "-C sub" invocation could be checked
+// against the alias.z defined in the parent repository while actually
+// running the one defined in sub/ — two different repositories, both
+// writable directly by the agent. Fails against the pre-fix resolveAlias
+// (which resolved the parent's alias.z = status and let "-C sub z" through
+// clean); passes now that resolveAlias forwards -C (and the other
+// repo-selecting globals) onto its own "config --get" call.
+func TestAliasExpansion_DashCGlobal_ForwardedToAliasLookup(t *testing.T) {
+	parent := initRepo(t)
+	appendConfig(t, parent, "[alias]\n\tz = status\n")
+
+	sub := filepath.Join(parent, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "init", "-q", sub).CombinedOutput(); err != nil {
+		t.Fatalf("git init sub: %v: %s", err, out)
+	}
+	appendConfig(t, sub, "[alias]\n\tz = reset --hard\n")
+
+	withFakeGitReal(t)
+	t.Chdir(parent)
+
+	vs := git.Check([]string{"-C", "sub", "z"})
+	if len(vs) == 0 {
+		t.Fatal(`expected "git -C sub z" to resolve sub's alias.z (reset --hard) and be refused, got no violations`)
+	}
+	t.Logf("violations: %v", vs)
+}
+
 func TestAliasExpansion_OrdinaryAlias_Passes(t *testing.T) {
 	dir := initRepo(t)
 	appendConfig(t, dir, "[alias]\n\tco = checkout\n")
@@ -146,6 +206,78 @@ func TestAliasExpansion_NestedAlias_ExpandsAndRefuses(t *testing.T) {
 	if len(vs) == 0 {
 		t.Fatal("expected the nested alias to expand down to reset --hard and be refused")
 	}
+}
+
+// TestAliasExpansion_SelfReferentialAlias_TerminatesAndRefuses is IMPORTANT 5
+// from the review: nothing else drives recursion past depth 2, so the branch
+// that distinguishes "bounded" from "loops forever" was never pinned. An
+// alias that expands to itself would recurse without end if maxAliasDepth
+// were ever dropped or miswired; this test only passes if checkAlias
+// actually stops and refuses instead of hanging (a regression here fails by
+// timeout, not by assertion).
+func TestAliasExpansion_SelfReferentialAlias_TerminatesAndRefuses(t *testing.T) {
+	dir := initRepo(t)
+	appendConfig(t, dir, "[alias]\n\tloop = loop\n")
+	withFakeGitReal(t)
+	t.Chdir(dir)
+
+	vs := git.Check([]string{"loop"})
+	if len(vs) == 0 {
+		t.Fatal("expected the self-referential alias to be refused, got no violations")
+	}
+	t.Logf("violations: %v", vs)
+}
+
+// TestAliasExpansion_ChainAtDepthCap_Refused pins the exact boundary
+// maxAliasDepth enforces: a0..a10 is 11 names, none of them real git
+// commands, so resolving a0 all the way down needs 11 alias lookups
+// (depth 0..10) and never reaches a real command. The 11th lookup (for a10,
+// at depth == maxAliasDepth) must be refused as "nests too deep", not
+// attempted.
+func TestAliasExpansion_ChainAtDepthCap_Refused(t *testing.T) {
+	dir := initRepo(t)
+	var cfg strings.Builder
+	cfg.WriteString("[alias]\n")
+	for i := 0; i <= 10; i++ {
+		fmt.Fprintf(&cfg, "\ta%d = a%d\n", i, i+1)
+	}
+	appendConfig(t, dir, cfg.String())
+	withFakeGitReal(t)
+	t.Chdir(dir)
+
+	vs := git.Check([]string{"a0"})
+	if len(vs) == 0 {
+		t.Fatal("expected the 11-deep alias chain to hit the depth cap and be refused, got no violations")
+	}
+	t.Logf("violations: %v", vs)
+}
+
+// TestAliasExpansion_ChainUnderDepthCap_ExpandsToRealCommand checks the other
+// side of the same boundary: a chain of exactly maxAliasDepth (10) alias
+// names that terminates in a real, dangerous command must still expand and
+// be refused for what it actually does, not for hitting the cap.
+func TestAliasExpansion_ChainUnderDepthCap_ExpandsToRealCommand(t *testing.T) {
+	dir := initRepo(t)
+	var cfg strings.Builder
+	cfg.WriteString("[alias]\n")
+	for i := 0; i < 9; i++ {
+		fmt.Fprintf(&cfg, "\ta%d = a%d\n", i, i+1)
+	}
+	cfg.WriteString("\ta9 = reset --hard\n")
+	appendConfig(t, dir, cfg.String())
+	withFakeGitReal(t)
+	t.Chdir(dir)
+
+	vs := git.Check([]string{"a0"})
+	if len(vs) == 0 {
+		t.Fatal("expected the 10-deep alias chain to expand down to reset --hard and be refused for that, got no violations")
+	}
+	for _, v := range vs {
+		if strings.Contains(v.Setting, "nests more than") {
+			t.Errorf("expected refusal for reset --hard, not the depth cap: %v", vs)
+		}
+	}
+	t.Logf("violations: %v", vs)
 }
 
 func TestAliasExpansion_KnownSubcommand_NotTreatedAsAlias(t *testing.T) {

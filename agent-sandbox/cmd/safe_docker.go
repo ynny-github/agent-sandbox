@@ -5,30 +5,42 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 
 	"github.com/spf13/cobra"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/safe"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/safe/dockercompose"
 )
 
 var safeDockerCmd = &cobra.Command{
 	Use:   "docker [args...]",
-	Short: "Run docker, validating a compose invocation before running it",
-	Long: `Run "docker" verbatim, except that when the first non-global argument
-is "compose", the remainder is validated before anything runs.
+	Short: "Run docker, checking a compose invocation against its resolved model and every other invocation at the argv level",
+	Long: `Run "docker", except for two kinds of checks that run first.
 
-The wrapper resolves the project with "docker compose config" and refuses the
-invocation (exit 1, running nothing) when the configuration would:
+When the first non-global argument is "compose", the remainder is validated
+against the resolved model ("docker compose config"). The invocation is
+refused (exit 1, running nothing) when the configuration would:
   - mount a host path outside the current working directory, or the Docker socket;
   - set privileged, host network/pid/ipc, userns_mode host, or expose devices;
   - add a dangerous Linux capability, or disable seccomp/apparmor confinement;
   - use the "run" or "exec" subcommand.
-
 Named volumes, tmpfs mounts, and every other compose subcommand pass through.
-Every non-compose docker invocation passes through unchanged: this wrapper's
-argv-level checks apply to it, but there is no resolved model to read for a
-plain docker command the way there is for compose.`,
+
+Every other docker invocation is checked at the argv level only — there is no
+resolved model to read the way "docker compose config" gives one for compose:
+  - the "run" and "exec" subcommands are refused outright;
+  - "--privileged" is refused wherever it appears;
+  - a "-v"/"--volume"/"--mount" bind of a host path outside the current
+    working directory, or of the Docker socket, is refused wherever it appears.
+Nothing else about a plain docker invocation is inspected: capabilities,
+network mode, and the rest of what the compose model check reads have no
+equivalent check here.
+
+A global docker flag (--context, -H, --config, --tls*, ...) before "compose"
+is refused rather than silently validating and running the resolved compose
+model against a different daemon than the one actually checked.`,
 	Args:               cobra.ArbitraryArgs,
 	DisableFlagParsing: true, // pass every token through to docker verbatim
 	RunE:               runSafeDocker,
@@ -98,9 +110,143 @@ func runSafeDocker(cmd *cobra.Command, args []string) error {
 		os.Exit(1)
 	}
 	if sub == "compose" {
+		// A docker-level global (--context, -H, --config, --tls*, ...) before
+		// "compose" would retarget which daemon/context "docker compose
+		// config" resolves against and which one the final exec runs on,
+		// while dockercompose.Prepare only ever sees compose's own global
+		// flags (rest[1:]). Validation and exec would still agree with each
+		// other — both would silently use the wrong daemon — so this is not
+		// a policy bypass, but retargeting the daemon without a diagnostic is
+		// wrong on its own. Refuse rather than carry it through unchecked.
+		if leading := args[:len(args)-len(rest)]; len(leading) > 0 {
+			fmt.Fprintf(cmd.ErrOrStderr(),
+				"refused: a global docker flag (%s) before \"compose\" is not allowed: it would validate and run the resolved compose model against a different daemon than the default one\n",
+				strings.Join(leading, " "))
+			os.Exit(1)
+		}
 		return runSafeDockerCompose(cmd, rest[1:])
 	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("getwd: %w", err)
+	}
+	if vs := dockerCLIViolations(sub, rest, cwd); len(vs) > 0 {
+		for _, v := range vs {
+			fmt.Fprintf(cmd.ErrOrStderr(), "refused: %s\n", v)
+		}
+		os.Exit(1)
+	}
 	return execDockerReal(args)
+}
+
+// dockerDangerousSubcommands mirrors, at the plain "docker" level, the
+// dockercompose.CheckCLI denial of subcommands that are entrypoints for
+// arbitrary command execution.
+var dockerDangerousSubcommands = map[string]bool{"run": true, "exec": true}
+
+// dockerCLIViolations applies argv-only checks to a non-compose docker
+// invocation. sub is docker's own subcommand (as identified by
+// splitDockerGlobal); rest is sub and everything from there on; cwd bounds
+// an allowed bind mount the same way it does for compose.
+//
+// This is deliberately narrow: there is no resolved model to check the way
+// dockercompose.CheckModel reads what "docker compose config" resolves to,
+// so this only catches what is visible directly in argv, for the same two
+// categories CheckModel would refuse for compose. A container created some
+// other way — a Swarm service, a Dockerfile ONBUILD, an image's own
+// ENTRYPOINT — is out of reach of an argv-only check and this does not claim
+// to catch it.
+func dockerCLIViolations(sub string, rest []string, cwd string) []string {
+	var out []string
+	if dockerDangerousSubcommands[sub] {
+		out = append(out, fmt.Sprintf("%q subcommand is not allowed", sub))
+	}
+	for i, a := range rest {
+		switch {
+		case a == "--privileged":
+			out = append(out, "--privileged is not allowed")
+		case a == "-v" || a == "--volume":
+			if i+1 < len(rest) {
+				if v := checkVolumeSpec(rest[i+1], cwd); v != "" {
+					out = append(out, v)
+				}
+			}
+		case strings.HasPrefix(a, "--volume="):
+			if v := checkVolumeSpec(strings.TrimPrefix(a, "--volume="), cwd); v != "" {
+				out = append(out, v)
+			}
+		case len(a) > 2 && strings.HasPrefix(a, "-v") && a[1] != '-':
+			if v := checkVolumeSpec(a[2:], cwd); v != "" {
+				out = append(out, v)
+			}
+		case a == "--mount":
+			if i+1 < len(rest) {
+				if v := checkMountSpec(rest[i+1], cwd); v != "" {
+					out = append(out, v)
+				}
+			}
+		case strings.HasPrefix(a, "--mount="):
+			if v := checkMountSpec(strings.TrimPrefix(a, "--mount="), cwd); v != "" {
+				out = append(out, v)
+			}
+		}
+	}
+	return out
+}
+
+// checkVolumeSpec applies the same rule dockercompose.CheckModel applies to
+// a bind mount's source to a "-v"/"--volume" spec ("SRC:DST[:OPTS]", or a
+// bare "SRC" for an anonymous volume): refuse the Docker socket, refuse a
+// host path outside cwd, and let a named volume (a source with no leading
+// "/", which docker never treats as a host path) through untouched.
+func checkVolumeSpec(spec, cwd string) string {
+	src := spec
+	if idx := strings.IndexByte(spec, ':'); idx >= 0 {
+		src = spec[:idx]
+	}
+	return checkBindSource(src, cwd)
+}
+
+// checkMountSpec applies the same rule to a "--mount" spec
+// ("type=bind,src=/host,dst=/x", "source=" is an accepted alias for "src=").
+// A non-bind mount (type=volume, type=tmpfs) is not a host path and passes.
+func checkMountSpec(spec, cwd string) string {
+	var typ, src string
+	for _, kv := range strings.Split(spec, ",") {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		switch strings.TrimSpace(k) {
+		case "type":
+			typ = strings.TrimSpace(v)
+		case "src", "source":
+			src = strings.TrimSpace(v)
+		}
+	}
+	if typ != "bind" || src == "" {
+		return ""
+	}
+	return checkBindSource(src, cwd)
+}
+
+// checkBindSource is the shared rule: a source with no leading "/" is not a
+// host path (docker requires bind sources to be absolute; anything else is a
+// named volume) and passes untouched; the Docker socket and any host path
+// outside cwd are refused, matching dockercompose.CheckModel's own bind
+// checks exactly.
+func checkBindSource(src, cwd string) string {
+	if !strings.HasPrefix(src, "/") {
+		return ""
+	}
+	if filepath.Base(filepath.Clean(src)) == "docker.sock" {
+		return fmt.Sprintf("bind mount of the docker socket %q is not allowed", src)
+	}
+	if !safe.PathWithin(safe.RealPath(cwd), safe.RealPath(src)) {
+		return fmt.Sprintf("bind mount %q escapes the work directory", src)
+	}
+	return ""
 }
 
 // runSafeDockerCompose validates a "docker compose" invocation (args is

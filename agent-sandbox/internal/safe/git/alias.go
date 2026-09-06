@@ -80,7 +80,7 @@ func checkAlias(inv Invocation, depth int) []safe.Violation {
 			"%q nests more than %d aliases deep; refusing rather than keep expanding", inv.Subcommand, maxAliasDepth)}}
 	}
 
-	value, ok := resolveAlias(inv.Subcommand)
+	value, ok := resolveAlias(inv.Subcommand, inv.Global)
 	if !ok {
 		return []safe.Violation{{Source: "cli", Setting: fmt.Sprintf(
 			"%q is not a git command and its alias could not be resolved (no repository, or git errored)", inv.Subcommand)}}
@@ -115,22 +115,55 @@ func checkAlias(inv Invocation, depth int) []safe.Violation {
 	return out
 }
 
-// resolveAlias runs "<RealBinary> config --get alias.<name>" in the process's
-// current directory (the repository the wrapper is running against) and
-// returns the alias's raw value. Alias precedence spans repo, global and
-// system config files and include directives, which is exactly why this
-// asks the real git rather than parsing .git/config by hand.
+// repoSelectingGlobals are the git global options that select which
+// repository, or which config values, a git invocation resolves against:
+// -C and --git-dir/--work-tree/--namespace change which repository, and
+// -c/--config-env set a config value (including an alias.* one) for the
+// duration of that invocation, ahead of every file git would otherwise read.
+//
+// resolveAlias must forward exactly these from the invocation it is
+// checking, or it validates one repository/config while the real invocation
+// — which carries the same globals through to execGit — resolves the alias
+// from a different one. Measured: with alias.z=status committed in cwd's
+// .git/config and alias.z="reset --hard" committed in sub/.git/config,
+// "git config --get alias.z" (no globals) reports "status", but
+// "git -C sub z" runs the reset — a different repository entirely.
+var repoSelectingGlobals = map[string]bool{
+	"-C": true, "--git-dir": true, "--work-tree": true, "--namespace": true,
+	"-c": true, "--config-env": true,
+}
+
+// aliasLookupArgv builds the "config --get alias.<name>" argv, prefixed with
+// every repo-selecting global from globals, in order, so the alias is
+// resolved against exactly the repository and config the real invocation
+// would use.
+func aliasLookupArgv(name string, globals []GlobalOpt) []string {
+	var argv []string
+	for _, g := range globals {
+		if !repoSelectingGlobals[g.Name] {
+			continue
+		}
+		argv = append(argv, g.Name, g.Value)
+	}
+	return append(argv, "config", "--get", "alias."+name)
+}
+
+// resolveAlias runs "<RealBinary> [repo-selecting globals] config --get
+// alias.<name>" and returns the alias's raw value. Alias precedence spans
+// repo, global and system config files and include directives, which is
+// exactly why this asks the real git rather than parsing .git/config by
+// hand.
 //
 // It resolves RealBinary ("realgit"), never "git", for the same reason
 // execGit does: this wrapper is itself bound to the name "git". See
 // git.RealBinary for why the resolved name must not start with "git-"
 // either.
-func resolveAlias(name string) (string, bool) {
+func resolveAlias(name string, globals []GlobalOpt) (string, bool) {
 	path, err := exec.LookPath(RealBinary)
 	if err != nil {
 		return "", false
 	}
-	cmd := exec.Command(path, "config", "--get", "alias."+name)
+	cmd := exec.Command(path, aliasLookupArgv(name, globals)...)
 	// argv[0] is forced to "git", not the resolved RealBinary path: belt-and-
 	// braces against git's own argv[0] dispatch (see git.RealBinary), and it
 	// keeps any error git prints naming itself consistent. Do not remove this
@@ -141,6 +174,22 @@ func resolveAlias(name string) (string, bool) {
 		return "", false
 	}
 	return strings.TrimRight(string(out), "\n"), true
+}
+
+// isAliasSpace reports whether c is whitespace by git's own reckoning
+// (isspace(3) under the C locale: space, tab, newline, vertical tab, form
+// feed, carriage return) — not just space and tab. git config supports a
+// "\n" escape inside a quoted alias value, and a tokenizer that only splits
+// on space/tab treats "reset --hard\nHEAD" as a single unsplittable token,
+// so hasLong/hasShort never see "--hard" and the hard-reset rule never
+// fires. Measured on git 2.54.0: [alias] h = "reset --hard\nHEAD" makes
+// "git h" run "reset --hard HEAD".
+func isAliasSpace(c byte) bool {
+	switch c {
+	case ' ', '\t', '\n', '\v', '\f', '\r':
+		return true
+	}
+	return false
 }
 
 // splitAliasValue splits a non-shell alias's value into argv tokens,
@@ -174,7 +223,7 @@ func splitAliasValue(value string) []string {
 			i++
 			cur.WriteByte(value[i])
 			has = true
-		case c == ' ' || c == '\t':
+		case isAliasSpace(c):
 			if has {
 				tokens = append(tokens, cur.String())
 				cur.Reset()

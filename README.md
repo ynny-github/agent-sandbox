@@ -20,7 +20,8 @@ launcher
 ├── nono wrap  --profile <agent profile>    -- claude …         no command control here
 └── nono run   --profile <command profile>  -- agent-sandbox broker
                                                │
-                                               ├─ exec git   → shim → its own child sandbox + argv rules
+                                               ├─ exec git   → shim → wrapper (parses the invocation)
+                                               │                    → shim → real git, its own child sandbox
                                                └─ exec rg    → runs directly in the broker's own sandbox
 ```
 
@@ -140,11 +141,16 @@ program named in neither is never dispatched by the broker — that is the
 allowlist, and there is nothing else to check:
 
 - **Policy commands** are declared in the profile with their own child
-  sandbox and an `invocation_policy` of argv rules. The broker dispatches to
-  one only through nono's own generated shim — never by an absolute path, a
-  symlink, or any other indirection that skips it. That guarantee is about
-  how the broker itself dispatches; it is not a guarantee about what a
-  *different* command's own sandbox can still reach and run — see below.
+  sandbox. Some carry nono's own `invocation_policy` argv rules directly;
+  others — `git` and `docker`, in this repository's own profile — are
+  instead bound to a wrapper binary that parses the tool's actual grammar and
+  decides in Go, with the real binary reachable only from that wrapper (see
+  [The command profile](#the-command-profile)). Either way, the broker
+  dispatches to a policy command only through nono's own generated shim —
+  never by an absolute path, a symlink, or any other indirection that skips
+  it. That guarantee is about how the broker itself dispatches; it is not a
+  guarantee about what a *different* command's own sandbox can still reach
+  and run — see below.
 - **Floor commands** are named in the broker's own `exec_paths` and run
   directly in the broker's sandbox, with no argv rules of their own — there
   is no shim to bypass because there is nothing being enforced.
@@ -426,36 +432,80 @@ top-level ceiling instead.
 
 **A worked example** — this repository's own `command-profile.json` at the
 repo root — declares `agent-sandbox` itself as the session's policy command
-(`can_use: ["git", "go"]`, `exec_paths` covering `rg`, `mise`, `gofmt` (as a
-single file, not its whole directory — see the note on multi-call binaries
-below), and the coreutils this repo's own workflows use). `git` and `go` are
-its two policy commands, for different reasons: `git` carries argv rules;
-`go` carries none — a compiler is not something argv-level rules can usefully
-bound — but still needs its own child sandbox, because `go test` compiles
-and immediately executes a test binary, and that write-then-execute
-directory has to stay out of reach of every other command. More on what a
-compiler being enumerable at all actually costs below.
+(`can_use: ["git", "go", "docker"]`, `exec_paths` covering `rg`, `mise`,
+`gofmt` (as a single file, not its whole directory — see the note on
+multi-call binaries below), and the coreutils this repo's own workflows
+use). `git`, `docker`, and `go` are its three policy commands, for three
+different reasons:
+
+- **`git` and `docker` are bound to a wrapper, not to the real binary.** The
+  profile pins `git`'s (and `docker`'s) `executable` back to the
+  `agent-sandbox` binary itself, with `argv_prepend: ["safe", "git"]` (or
+  `["safe", "docker"]`) inserted after the shim's own `argv[0]`, so
+  `git status --short` reaches the wrapper as
+  `["safe", "git", "status", "--short"]` — exactly what
+  `agent-sandbox safe git` parses. The real binary gets a second name
+  reachable only from the wrapper (`realgit`, `realdocker`), so there is no
+  path to it that skips the parser.
+- **`go` carries neither a wrapper nor an `invocation_policy`.** A compiler
+  is not something argv-level rules can usefully bound, but it still needs
+  its own child sandbox, because `go test` compiles and immediately executes
+  a test binary, and that write-then-execute directory has to stay out of
+  reach of every other command.
+
+More on what a compiler being enumerable at all actually costs below.
 
 ```json
 "git": {
+  "executable": "<agent-sandbox binary>",
+  "can_use": ["realgit"],
+  "from": { "agent-sandbox": { "sandbox": {
+    "argv_prepend": ["safe", "git"],
+    "...": "..."
+  } } }
+},
+"realgit": {
   "executable": "/nix/store/…-git-2.54.0/bin/git",
-  "from": { "agent-sandbox": {
-    "sandbox": { "...": "..." },
-    "invocation_policy": {
-      "default": "allow",
-      "deny": [
-        { "argv": { "contains": ["--force"] },
-          "reason": "force push is disabled in this sandbox; use --force-with-lease..." },
-        { "argv": { "contains": ["--hard"] },
-          "reason": "hard reset is disabled in this sandbox; it discards uncommitted work." }
-      ]
-    }
-  }}
+  "from": { "git": { "sandbox": { "...": "..." } } }
 }
 ```
 
-`reason` reaches the agent verbatim on stderr, at exit code 126 — see
-`agent-sandbox ai explain` for the full, current list.
+`git`'s wrapper (`internal/safe/git`, invoked as `agent-sandbox safe git`)
+parses the invocation instead of matching argv fragments, which is what lets
+it refuse two routes an `invocation_policy` rule cannot reach: a global
+option placed ahead of the subcommand (`git --no-pager config alias.h "reset
+--hard"` walks a naive prefix matcher straight past the rule looking for
+`reset --hard`), and an alias written directly into `.git/config` with no
+`git` invocation at all — the wrapper resolves an unrecognized leading token
+against the repository's own configured aliases and re-checks the expansion,
+which is the only way to catch that second route. As of this writing the
+rule set refuses, among others: unconditional `--force`/`-f` on push,
+`reset --hard`, `clean -f`, force-deleting a branch, `filter-branch`/
+`filter-repo`, `update-ref -d`/`--delete`, `reflog expire`,
+`gc --prune=now`/`--prune=all`, bypassing hooks or signatures
+(`--no-verify`, `--no-gpg-sign`, `commit -n`), injecting an alias or an
+exec-capable config key via `-c`/`--config-env`, `stash drop`/`clear`,
+changing a remote, deleting a tag, discarding working-tree changes
+(`checkout -- .`/`restore --worktree`), writing config (`git config` reads
+are allowed; anything that is not a read is not), and `--exec-path`.
+`docker`'s wrapper (`internal/safe/dockercompose` and `cmd/safe_docker.go`)
+checks a `compose` invocation against its *resolved* model
+(`docker compose config`) — host-path mounts, the Docker socket,
+`privileged`, host `network`/`pid`/`ipc`, dangerous capabilities, disabled
+seccomp/apparmor — and checks every other invocation at the argv level for
+`run`/`exec`, `--privileged`, and a host-path or Docker-socket bind mount.
+
+Run `agent-sandbox safe git --help` / `agent-sandbox safe docker --help`, or
+read the source, for the exact and current rule set: the list above is a
+snapshot and this document is not what keeps it in sync — the profile
+deliberately carries no second copy of it either, for the same reason.
+
+A refusal from either wrapper prints `blocked: <reason>` or
+`refused: <reason>` to stderr and **exits 1** — it is caught in Go before
+nono is ever involved, so it is not the `invocation_policy` exit code 126 an
+argv-rule denial produces (still true for a command that carries
+`invocation_policy` directly, and for nono's own tool-sandbox refusals, e.g.
+a command absent from `can_use`).
 
 Four properties worth knowing before writing your own:
 
@@ -510,7 +560,14 @@ Four properties worth knowing before writing your own:
   granted as one directory. A pinned `executable` must be the real program,
   never a multi-call host or a version-manager shim — pointing an entry at
   `mise` turns every mise-managed tool into an attempted direct exec of
-  `mise` itself.
+  `mise` itself. Nix's own `docker` package has the identical shape and cost
+  a real debugging session to find: `bin/docker` is a small stub that
+  re-execs `libexec/docker/docker`, the actual CLI binary, and nono's
+  per-command Landlock rule set — built from the pinned executable's own
+  direct library dependencies — does not cover that second, indirectly
+  invoked path. Every invocation crashed with `execve(...) = -1 EACCES`
+  (reported only as "Command exited with code 255", no other output) until
+  `realdocker` was re-pinned at `libexec/docker/docker` directly.
 - **`nono profile validate` checks JSON syntax and group references only** —
   it does not catch every schema mistake (`exec_paths` itself is not in the
   published JSON Schema, though the runtime honours it). Verify a real

@@ -21,7 +21,8 @@ launcher
 ├── nono wrap  --profile <エージェント用プロファイル>    -- claude …   ここにコマンド制御は無い
 └── nono run   --profile <コマンドプロファイル>          -- agent-sandbox broker
                                                             │
-                                                            ├─ exec git  → shim → 専用の子サンドボックス + argv ルール
+                                                            ├─ exec git  → shim → ラッパー (呼び出しを解析)
+                                                            │                    → shim → 実 git、専用の子サンドボックス
                                                             └─ exec rg   → ブローカー自身のサンドボックスで直接実行
 ```
 
@@ -146,13 +147,17 @@ agent-sandbox claude -- --model opus
 カーによって決して実行に回されません — それがこの許可リストのすべてで
 あり、他に確認すべきことはありません:
 
-- **ポリシーコマンド** は、専用の子サンドボックスと argv ルールから成る
-  `invocation_policy` とともにプロファイルへ宣言されます。ブローカーが
-  それを実行に回すのは nono 自身が生成する shim 経由だけです — 絶対パスや
-  シンボリックリンク、その他 shim を迂回するどんな手段によっても回しません。
-  この保証はブローカー自身がどう実行に回すかについてのものであり、*別の*
-  コマンド自身のサンドボックスがなお到達し実行できてしまうものを保証する
-  ものではありません — 詳しくは後述します。
+- **ポリシーコマンド** は、専用の子サンドボックスとともにプロファイルへ
+  宣言されます。nono 自身の `invocation_policy` argv ルールを直接持つものも
+  あれば、このリポジトリ自身のプロファイルの `git` と `docker` のように、
+  ツールの実際の文法を解析して Go で判定するラッパーバイナリに束ねられ、
+  実バイナリはそのラッパー経由でしか到達できないものもあります (詳しくは
+  [コマンドプロファイル](#コマンドプロファイル) を参照)。いずれにせよ、
+  ブローカーがポリシーコマンドを実行に回すのは nono 自身が生成する shim
+  経由だけです — 絶対パスやシンボリックリンク、その他 shim を迂回するどんな
+  手段によっても回しません。この保証はブローカー自身がどう実行に回すかに
+  ついてのものであり、*別の* コマンド自身のサンドボックスがなお到達し実行
+  できてしまうものを保証するものではありません — 詳しくは後述します。
 - **フロアコマンド** はブローカー自身の `exec_paths` に名前が挙がっており、
   ブローカーのサンドボックスの中で直接動きます。自分自身の argv ルールは
   持ちません — 強制すべきものが何も無いので、回避すべき shim もありません。
@@ -437,37 +442,82 @@ nono のスキーマで直接表現されます。
 
 **実例** — このリポジトリ自身のルート直下の `command-profile.json` は、
 `agent-sandbox` 自身をセッションのポリシーコマンドとして宣言しています
-(`can_use: ["git", "go"]`、`exec_paths` は `rg`, `mise`, `gofmt` (ディレクト
-リ丸ごとではなく単一ファイルとして — 下のマルチコールバイナリに関する注記
-を参照)、およびこのリポジトリ自身のワークフローが使う coreutils をカバー)。
-`git` と `go` がその 2 つのポリシーコマンドで、理由はそれぞれ異なります:
-`git` は argv ルールを持ちますが、`go` は持ちません — コンパイラは argv レ
-ベルのルールで有効に縛れる対象ではないからです — それでも `go` は自分自身
-の子サンドボックスを必要とします。`go test` はテストバイナリをコンパイル
-した直後にそれを実行するため、この「書き込んですぐ実行する」ディレクトリ
-は他のどのコマンドからも触れられないようにしなければならないからです。
-コンパイラを列挙すること自体が実際にどれだけの代償を伴うかは、後述します:
+(`can_use: ["git", "go", "docker"]`、`exec_paths` は `rg`, `mise`, `gofmt`
+(ディレクトリ丸ごとではなく単一ファイルとして — 下のマルチコールバイナリに
+関する注記を参照)、およびこのリポジトリ自身のワークフローが使う coreutils
+をカバー)。`git`、`docker`、`go` がその 3 つのポリシーコマンドで、理由は
+それぞれ異なります:
+
+- **`git` と `docker` はラッパーに束ねられており、実バイナリには直接
+  束ねられていません。** プロファイルは `git`(と `docker`)の `executable`
+  を `agent-sandbox` バイナリ自身へ戻し、shim 自身の `argv[0]` の後ろに
+  `argv_prepend: ["safe", "git"]` (または `["safe", "docker"]`) を挿入
+  します。そのため `git status --short` はラッパーに
+  `["safe", "git", "status", "--short"]` として届きます —
+  これはまさに `agent-sandbox safe git` が解析する形です。実バイナリには
+  そのラッパー経由でしか到達できない第二の名前 (`realgit`, `realdocker`)
+  が与えられているため、パーサーを迂回する経路はありません。
+- **`go` はラッパーも `invocation_policy` も持ちません。** コンパイラは
+  argv レベルのルールで有効に縛れる対象ではありませんが、それでも自分自身
+  の子サンドボックスを必要とします。`go test` はテストバイナリをコンパイル
+  した直後にそれを実行するため、この「書き込んですぐ実行する」ディレクトリ
+  は他のどのコマンドからも触れられないようにしなければならないからです。
+
+コンパイラを列挙すること自体が実際にどれだけの代償を伴うかは、後述します。
 
 ```json
 "git": {
+  "executable": "<agent-sandbox バイナリ>",
+  "can_use": ["realgit"],
+  "from": { "agent-sandbox": { "sandbox": {
+    "argv_prepend": ["safe", "git"],
+    "...": "..."
+  } } }
+},
+"realgit": {
   "executable": "/nix/store/…-git-2.54.0/bin/git",
-  "from": { "agent-sandbox": {
-    "sandbox": { "...": "..." },
-    "invocation_policy": {
-      "default": "allow",
-      "deny": [
-        { "argv": { "contains": ["--force"] },
-          "reason": "force push is disabled in this sandbox; use --force-with-lease..." },
-        { "argv": { "contains": ["--hard"] },
-          "reason": "hard reset is disabled in this sandbox; it discards uncommitted work." }
-      ]
-    }
-  }}
+  "from": { "git": { "sandbox": { "...": "..." } } }
 }
 ```
 
-`reason` はそのまま stderr でエージェントに届きます (exit code 126)。
-現在の完全な一覧は `agent-sandbox ai explain` を参照してください。
+`git` のラッパー (`internal/safe/git`。`agent-sandbox safe git` として
+起動される) は argv の断片を照合するのではなく呼び出しそのものを解析
+します。これにより、`invocation_policy` ルールには届かない 2 つの経路を
+拒否できます: サブコマンドより前に置かれたグローバルオプション
+(`git --no-pager config alias.h "reset --hard"` は素朴な prefix マッチャー
+を `reset --hard` を探すルールの手前で素通りさせてしまいます)、そして
+`git` を一切呼び出さずに `.git/config` へ直接書き込まれたエイリアス —
+ラッパーは未知の先頭トークンをそのリポジトリ自身が設定したエイリアスとして
+解決し、展開結果を再チェックします。これがこの第二の経路を捕まえる唯一の
+方法です。本稿執筆時点でこのルールセットが拒否するのは、主に以下です:
+push での無条件の `--force`/`-f`、`reset --hard`、`clean -f`、ブランチの
+強制削除、`filter-branch`/`filter-repo`、`update-ref -d`/`--delete`、
+`reflog expire`、`gc --prune=now`/`--prune=all`、フックや署名の回避
+(`--no-verify`、`--no-gpg-sign`、`commit -n`)、`-c`/`--config-env` 経由の
+エイリアスまたは exec 可能な config キーの注入、`stash drop`/`clear`、
+リモートの変更、タグの削除、作業ツリーの変更の破棄
+(`checkout -- .`/`restore --worktree`)、config への書き込み (`git config`
+の読み取りは許可されますが、読み取りでないものは許可されません)、そして
+`--exec-path`。`docker` のラッパー (`internal/safe/dockercompose` と
+`cmd/safe_docker.go`) は `compose` の呼び出しを *解決済みの* モデル
+(`docker compose config`) に照らしてチェックします — ホストパスのマウント、
+Docker ソケット、`privileged`、ホストの `network`/`pid`/`ipc`、危険な
+capability、無効化された seccomp/apparmor。それ以外のすべての呼び出しは
+argv レベルで `run`/`exec`、`--privileged`、ホストパスまたは Docker
+ソケットへのバインドマウントをチェックします。
+
+正確で最新のルールセットは `agent-sandbox safe git --help` /
+`agent-sandbox safe docker --help` を実行するか、ソースを読んでください。
+上の一覧はある時点のスナップショットであり、これを最新に保つのはこの文書
+の役目ではありません — プロファイル自身も同じ理由で二重のコピーを持たない
+ようにしています。
+
+どちらのラッパーによる拒否も `blocked: <reason>` または
+`refused: <reason>` を stderr に出力して **exit 1** で終了します —
+nono に到達する前に Go の中で捕まえられているため、argv ルールによる拒否の
+`invocation_policy` の exit code 126 (`invocation_policy` を直接持つコマンド
+や、nono 自身の tool-sandbox による拒否 — 例えば `can_use` に含まれていない
+コマンド — では今も 126 のままです) ではありません。
 
 自分で書く前に知っておくべき性質が 4 つあります:
 
@@ -526,7 +576,15 @@ nono のスキーマで直接表現されます。
   固定する `executable` は実プログラムでなければなりません。マルチコールホストや
   バージョンマネージャの shim を指してはいけません — `mise` をエントリに
   指定すると、mise が管理するすべてのツールが `mise` 自身への直接 exec の
-  試みになってしまいます。
+  試みになってしまいます。Nix 自身の `docker` パッケージも同じ形をしており、
+  実際にデバッグセッションを要しました: `bin/docker` は実際の CLI バイナリ
+  である `libexec/docker/docker` に re-exec するだけの小さなスタブで、
+  nono のコマンドごとの Landlock ルールセット (固定した実行ファイル自身の
+  直接的なライブラリ依存関係から構築される) は、この間接的に呼び出される
+  第二のパスを許可しません。`realdocker` を `libexec/docker/docker` に
+  直接固定し直すまで、すべての呼び出しが `execve(...) = -1 EACCES` で
+  クラッシュしていました (他の出力は一切なく、"Command exited with code
+  255" とだけ報告されます)。
 - **`nono profile validate` は JSON の構文とグループ参照だけを検証します** —
   スキーマの誤りすべてを検出するわけではありません (`exec_paths` 自体、
   公開されている JSON Schema には載っていませんが、ランタイムは尊重します)。

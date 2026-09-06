@@ -110,6 +110,11 @@ func TestRules(t *testing.T) {
 		{"checkout discard path", []string{"checkout", "--", "file.go"}, "discard-changes"},
 		{"checkout dot", []string{"checkout", "."}, "discard-changes"},
 		{"checkout branch allowed", []string{"checkout", "topic"}, ""},
+		{"checkout force branch", []string{"checkout", "-f", "main"}, "discard-changes"},
+		{"checkout force long branch", []string{"checkout", "--force", "main"}, "discard-changes"},
+		{"checkout treeish and path, no --", []string{"checkout", "HEAD~1", "src/foo.go"}, "discard-changes"},
+		{"checkout new branch allowed", []string{"checkout", "-b", "newbranch"}, ""},
+		{"checkout new branch from start point allowed", []string{"checkout", "-b", "newbranch", "main"}, ""},
 		{"restore worktree", []string{"restore", "file.go"}, "discard-changes"},
 		{"restore staged allowed", []string{"restore", "--staged", "file.go"}, ""},
 

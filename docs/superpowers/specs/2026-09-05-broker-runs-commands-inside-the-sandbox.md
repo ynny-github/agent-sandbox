@@ -540,3 +540,35 @@ pipes two policy commands together has to interpose, and nothing says so.
 **A worked example profile** for this repository, covering the commands the
 agent actually uses here, belongs with the implementation — it is the artifact
 that shows whether the enumeration cost is tolerable in practice.
+
+**The profile cannot run the repository it ships in, and the obvious fix does
+not work.** `go`'s `command_policies` entry has no `can_use` at all, so
+`go test ./...` run *through the broker* (not on the bare host) fails in
+`internal/safe/git`, `internal/broker`, and `internal/claude` — anything whose
+tests shell out to `git` or another subprocess `go`'s own sandbox cannot
+reach. This is pre-existing, not something this branch's git/docker wiring
+introduced, but the wiring makes it *harder* to close rather than incidental:
+adding `"git"` to `go`'s `can_use` does not make these tests pass, it changes
+how they fail. `git` is now a wrapper-bound name (`argv_prepend: ["safe",
+"git"]`, real binary behind `realgit`), so `exec.LookPath("git")` from inside
+a sandboxed `go test` binary would resolve to nono's `git` shim, not to a
+real git binary — exactly the wrapper-recursion hazard "How a wrapper is
+bound to a command name" describes, except now hit by test fixtures rather
+than the wrapper's own code.
+`internal/safe/git/alias_test.go`'s `withFakeGitReal` fixture does precisely
+this: `exec.LookPath("git")` to find a real git binary, then symlinks it to a
+temporary `realgit` and prepends that directory to `PATH` so production code's
+own `exec.LookPath(git.RealBinary)` finds it. Granted `can_use: ["git"]`, the
+fixture's own `LookPath("git")` would find the wrapper shim instead of the
+real binary and symlink *that*, so the "realgit" production code resolves
+would recurse into `agent-sandbox safe git` rather than reach git at all — a
+straight parser bypass of the fixture's own intent, not a fix. Separately,
+even a fixture that somehow got past that would still fail: these tests
+create their fixture repository under `t.TempDir()`, which lives under `/tmp`,
+and `realgit`'s own `fs_write` is `["$WORKDIR"]` only — `git init` there would
+be refused regardless of what invoked it. Closing this gap needs either
+restructuring these specific tests to not shell out to a real git process
+from inside a sandboxed `go`, or a profile mechanism this document does not
+yet have for granting a test-only, non-recursive path to a real binary. Do
+not "fix" it by widening `go`'s `can_use` to `git` — that is not this gap
+closing, it is a parser bypass wearing this gap's clothes.

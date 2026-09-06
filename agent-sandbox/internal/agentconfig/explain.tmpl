@@ -44,6 +44,21 @@ such a command is listed below, its own grants (not this document's prose
 about tiers) are the real boundary; ask the operator what those are before
 assuming a two-tier model holds for everything it might do.
 
+A wrapper's own rule list (below) is a Go-side denylist on the parsed
+invocation, not a complete boundary by itself: it cannot see a route that
+reaches the same effective setting by writing straight to a file under
+`$WORKDIR` instead of going through the tool's own CLI — that write is one
+of this broker's own shell builtins (see further down), never the wrapper's
+parser, never nono's shim. What actually bounds what a setting reached that
+way can *do* is the policy command's own sandbox grants for the real
+binary — in particular a narrow `exec_paths`, which blocks shelling out to
+run something regardless of whether the wrapper's own denylist happens to
+name that setting. Do not treat a wrapper's rule list as the whole story
+for a command with real, file-backed ambient state (git's repository config
+is the case this profile has); ask what that command's own `exec_paths`
+and filesystem grants actually allow before assuming the parser is holding
+something back that a narrower sandbox grant is really the one enforcing.
+
 **Policy commands and their denials, from `{{.ProfilePath}}`:**
 {{if .PolicyCommands}}{{range .PolicyCommands}}
 - `{{.Name}}`{{if .Wrapper}} routes through `agent-sandbox {{.Wrapper}}`: that
@@ -55,7 +70,18 @@ assuming a two-tier model holds for everything it might do.
   rule cannot. The real binary is reachable only from this wrapper — never
   directly, and never by any other path. Its refusal prints `blocked:
   <reason>` to stderr and exits **1**, decided in Go before nono is ever
-  involved — not nono's own exit 126.{{if .WrapperDenials}} Its rule set,
+  involved — not nono's own exit 126. Two behaviours worth knowing before
+  assuming a refusal here is a bug: a message shaped
+  `blocked: alias "<x>" expands to "<y>", which is blocked: <reason>` means
+  the wrapper resolved an unrecognized leading token as a repository-
+  configured alias and re-checked what it expands to, not a plain rule
+  match; and a message like `<word> is not a git command and its alias
+  could not be resolved` means the wrapper could not resolve the invocation
+  as either a real subcommand or a configured alias at all — a third-party
+  plugin subcommand (`git lfs`, `git town`, any `git-<name>` binary on
+  `PATH`) now refuses this way instead of running, which is a behaviour
+  change from before this wrapper existed, not evidence the plugin is
+  missing or broken.{{if .WrapperDenials}} Its rule set,
   read from the wrapper's own source, not this profile:{{range .WrapperDenials}}
   - {{.}}{{end}}{{else}} This document does not have that wrapper's rule
   source; a `blocked: <reason>` message on refusal is the only place to see
@@ -67,7 +93,10 @@ assuming a two-tier model holds for everything it might do.
   - {{.}}{{end}}{{else}} (no invocations refused){{end}}{{end}}
 {{end -}}
 {{else}}
-- (none declared in the current profile)
+- {{if .BrokerIssue}}{{.BrokerIssue}} — this document could not tell which
+  command is the broker's own entrypoint, so it cannot say which commands
+  are policy-controlled at all. This is not the same as the profile
+  declaring none.{{else}}(none declared in the current profile){{end}}
 {{end}}
 **Floor paths** — every executable inside these (a directory) or the file
 itself (a single path) is a floor command, no argv rules, run at the
@@ -75,7 +104,8 @@ broker's own grants. This lists *where* they live, not their names — `ls`
 the directory (or ask the operator) to see exactly which programs that is:
 {{if .FloorPaths}}{{range .FloorPaths}}- `{{.}}`
 {{end -}}
-{{else}}- (none declared in the current profile)
+{{else}}- {{if .BrokerIssue}}{{.BrokerIssue}} — see above{{else}}(none
+declared in the current profile){{end}}
 {{end}}
 A refusal reaches you one of two ways. A wrapper-bound command's own check
 prints `blocked: <reason>` and exits 1 — the wrapper ran and refused, in Go,

@@ -25,8 +25,18 @@ func init() {
 
 // execGit runs the real git binary with stdio inherited and returns its exit
 // code. It is a package var so tests can replace it.
+//
+// It resolves git.RealBinary ("git-real"), never "git": this wrapper is
+// itself bound to the name "git" in the command profile, so looking up "git"
+// from inside it would resolve back to this wrapper's own shim and recurse
+// without bound. See git.RealBinary for the measurement.
 var execGit = func(ctx context.Context, args []string) int {
-	c := exec.CommandContext(ctx, "git", args...)
+	path, err := exec.LookPath(git.RealBinary)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "safe git: %q not found in PATH; the command profile must grant this wrapper the %q command\n", git.RealBinary, git.RealBinary)
+		return 1
+	}
+	c := exec.CommandContext(ctx, path, args...)
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr

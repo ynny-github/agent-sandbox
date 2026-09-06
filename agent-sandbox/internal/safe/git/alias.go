@@ -1,0 +1,184 @@
+package git
+
+import (
+	"fmt"
+	"os/exec"
+	"strings"
+
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/safe"
+)
+
+// knownSubcommands lists git's own builtin and plumbing command names (git
+// 2.54.0's "git help -a", Main Porcelain / Ancillary / Interacting with
+// Others / Low-level sections; the guide topics under "User-facing" and
+// "Developer-facing" are not invocable as "git <name>" and are excluded).
+//
+// A name that is not in this set is treated as a candidate alias: it cannot
+// be a real git command, so the only way it does anything is a configured
+// alias, and the wrapper must resolve and re-check what it expands to. A
+// future git version adding a command this list does not yet know about
+// fails closed here (refused as an unresolved "alias"), not open.
+var knownSubcommands = map[string]bool{
+	"add": true, "am": true, "annotate": true, "apply": true, "archimport": true,
+	"archive": true, "backfill": true, "bisect": true, "blame": true, "branch": true,
+	"bugreport": true, "bundle": true, "cat-file": true, "check-attr": true,
+	"check-ignore": true, "check-mailmap": true, "checkout": true, "checkout-index": true,
+	"check-ref-format": true, "cherry": true, "cherry-pick": true, "citool": true,
+	"clean": true, "clone": true, "column": true, "commit": true, "commit-graph": true,
+	"commit-tree": true, "config": true, "count-objects": true, "credential": true,
+	"credential-cache": true, "credential-store": true, "cvsexportcommit": true,
+	"cvsimport": true, "cvsserver": true, "daemon": true, "describe": true,
+	"diagnose": true, "diff": true, "diff-files": true, "diff-index": true,
+	"diff-pairs": true, "difftool": true, "diff-tree": true, "fast-export": true,
+	"fast-import": true, "fetch": true, "fetch-pack": true, "filter-branch": true,
+	"fmt-merge-msg": true, "for-each-ref": true, "for-each-repo": true,
+	"format-patch": true, "fsck": true, "gc": true, "get-tar-commit-id": true,
+	"gitk": true, "gitweb": true, "grep": true, "gui": true, "hash-object": true,
+	"help": true, "history": true, "hook": true, "http-backend": true,
+	"imap-send": true, "index-pack": true, "init": true, "instaweb": true,
+	"interpret-trailers": true, "last-modified": true, "log": true, "ls-files": true,
+	"ls-remote": true, "ls-tree": true, "mailinfo": true, "mailsplit": true,
+	"maintenance": true, "merge": true, "merge-base": true, "merge-file": true,
+	"merge-index": true, "merge-one-file": true, "mergetool": true, "merge-tree": true,
+	"mktag": true, "mktree": true, "multi-pack-index": true, "mv": true,
+	"name-rev": true, "notes": true, "p4": true, "pack-objects": true,
+	"pack-redundant": true, "pack-refs": true, "patch-id": true, "prune": true,
+	"prune-packed": true, "pull": true, "push": true, "quiltimport": true,
+	"range-diff": true, "read-tree": true, "rebase": true, "reflog": true,
+	"refs": true, "remote": true, "repack": true, "replace": true, "replay": true,
+	"repo": true, "request-pull": true, "rerere": true, "reset": true,
+	"restore": true, "revert": true, "rev-list": true, "rev-parse": true,
+	"rm": true, "scalar": true, "send-email": true, "send-pack": true,
+	"sh-i18n": true, "shortlog": true, "show": true, "show-branch": true,
+	"show-index": true, "show-ref": true, "sh-setup": true, "sparse-checkout": true,
+	"stash": true, "status": true, "stripspace": true, "submodule": true, "svn": true,
+	"switch": true, "symbolic-ref": true, "tag": true, "unpack-file": true,
+	"unpack-objects": true, "update-index": true, "update-ref": true,
+	"update-server-info": true, "var": true, "verify-commit": true,
+	"verify-pack": true, "verify-tag": true, "version": true, "whatchanged": true,
+	"worktree": true, "write-tree": true,
+}
+
+// maxAliasDepth bounds alias-expansion recursion so a self-referential or
+// mutually recursive pair of aliases is refused rather than looped forever.
+// git itself caps alias nesting; this limit sits well under that.
+const maxAliasDepth = 10
+
+// checkAlias handles the case where inv's first token is not a known git
+// subcommand: it is either a configured alias or nothing at all. Neither
+// -c alias.x=... nor a "git config alias.x ..." invocation is the only way
+// to install one — .git/config is writable directly, with no execve at all —
+// so this is the one place that route is caught, by resolving what the name
+// actually expands to and re-checking that.
+func checkAlias(inv Invocation, depth int) []safe.Violation {
+	if inv.Subcommand == "" || knownSubcommands[inv.Subcommand] {
+		return nil
+	}
+
+	if depth >= maxAliasDepth {
+		return []safe.Violation{{Source: "cli", Setting: fmt.Sprintf(
+			"%q nests more than %d aliases deep; refusing rather than keep expanding", inv.Subcommand, maxAliasDepth)}}
+	}
+
+	value, ok := resolveAlias(inv.Subcommand)
+	if !ok {
+		return []safe.Violation{{Source: "cli", Setting: fmt.Sprintf(
+			"%q is not a git command and its alias could not be resolved (no repository, or git errored)", inv.Subcommand)}}
+	}
+
+	if strings.HasPrefix(value, "!") {
+		return []safe.Violation{{Source: "cli", Setting: fmt.Sprintf(
+			"alias %q runs a shell command (%s); there is no shell in this sandbox to inspect it", inv.Subcommand, value)}}
+	}
+
+	tokens := splitAliasValue(value)
+	if len(tokens) == 0 {
+		return []safe.Violation{{Source: "cli", Setting: fmt.Sprintf(
+			"alias %q resolves to an empty command; refusing", inv.Subcommand)}}
+	}
+
+	expanded := Invocation{
+		Global:     inv.Global,
+		Subcommand: tokens[0],
+		Args:       append(append([]string{}, tokens[1:]...), inv.Args...),
+	}
+
+	inner := checkInvocation(expanded, depth+1)
+	if len(inner) == 0 {
+		return nil
+	}
+	out := make([]safe.Violation, 0, len(inner))
+	for _, v := range inner {
+		out = append(out, safe.Violation{Source: "cli", Setting: fmt.Sprintf(
+			"alias %q expands to %q, which is blocked: %s", inv.Subcommand, strings.Join(tokens, " "), v.Setting)})
+	}
+	return out
+}
+
+// resolveAlias runs "<RealBinary> config --get alias.<name>" in the process's
+// current directory (the repository the wrapper is running against) and
+// returns the alias's raw value. Alias precedence spans repo, global and
+// system config files and include directives, which is exactly why this
+// asks the real git rather than parsing .git/config by hand.
+//
+// It resolves RealBinary ("git-real"), never "git", for the same reason
+// execGit does: this wrapper is itself bound to the name "git".
+func resolveAlias(name string) (string, bool) {
+	path, err := exec.LookPath(RealBinary)
+	if err != nil {
+		return "", false
+	}
+	out, err := exec.Command(path, "config", "--get", "alias."+name).Output()
+	if err != nil {
+		return "", false
+	}
+	return strings.TrimRight(string(out), "\n"), true
+}
+
+// splitAliasValue splits a non-shell alias's value into argv tokens,
+// following git's own simple quoting for aliases: single and double quotes
+// group a token, and a backslash escapes the next character. This is not
+// full shell syntax — there is no shell in this sandbox to run one, which is
+// also why a "!"-prefixed alias is refused outright instead of parsed here.
+func splitAliasValue(value string) []string {
+	var tokens []string
+	var cur strings.Builder
+	has := false
+	var quote byte
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		switch {
+		case quote != 0:
+			switch {
+			case c == quote:
+				quote = 0
+			case c == '\\' && i+1 < len(value):
+				i++
+				cur.WriteByte(value[i])
+			default:
+				cur.WriteByte(c)
+			}
+			has = true
+		case c == '\'' || c == '"':
+			quote = c
+			has = true
+		case c == '\\' && i+1 < len(value):
+			i++
+			cur.WriteByte(value[i])
+			has = true
+		case c == ' ' || c == '\t':
+			if has {
+				tokens = append(tokens, cur.String())
+				cur.Reset()
+				has = false
+			}
+		default:
+			cur.WriteByte(c)
+			has = true
+		}
+	}
+	if has {
+		tokens = append(tokens, cur.String())
+	}
+	return tokens
+}

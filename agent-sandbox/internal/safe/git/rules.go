@@ -21,17 +21,26 @@ type Rule struct {
 func Rules() []Rule { return rules }
 
 // Check parses argv and returns a safe.Violation for every matched rule,
-// in Rules() order. A nil/empty result means the invocation is allowed.
+// in Rules() order, plus anything caught by expanding an unrecognized first
+// token as a configured git alias (see checkAlias). A nil/empty result means
+// the invocation is allowed.
 // (internal/safe/git imports internal/safe; safe does not import git, so there
 // is no package cycle.)
 func Check(argv []string) []safe.Violation {
-	inv := Parse(argv)
+	return checkInvocation(Parse(argv), 0)
+}
+
+// checkInvocation is what Check does for one already-parsed invocation. It is
+// exposed to checkAlias so alias expansion re-checks the expanded invocation
+// through this same rule evaluation rather than a copy of it.
+func checkInvocation(inv Invocation, depth int) []safe.Violation {
 	var out []safe.Violation
 	for _, r := range rules {
 		if r.Match(inv) {
 			out = append(out, safe.Violation{Source: "cli", Setting: r.Message})
 		}
 	}
+	out = append(out, checkAlias(inv, depth)...)
 	return out
 }
 

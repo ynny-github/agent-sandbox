@@ -43,8 +43,10 @@ type explainView struct {
 	// this is a pointer, plus what could be read out of it, not a description
 	// of everything nono's own schema can express.
 	ProfilePath string
-	// PolicyCommands are the commands with their own child sandbox and argv
-	// rules; FloorCommands run in the broker's own sandbox. An agent that knows
+	// PolicyCommands are the commands with their own child sandbox: either
+	// nono's own invocation_policy argv rules, or (see policyCommandView.
+	// Wrapper) a "safe <tool>" wrapper that parses the real invocation in Go.
+	// FloorCommands run in the broker's own sandbox. An agent that knows
 	// which is which can tell a refusal from a bug.
 	PolicyCommands []policyCommandView
 	FloorPaths     []string
@@ -60,6 +62,14 @@ type explainView struct {
 type policyCommandView struct {
 	Name    string
 	Denials []string // each is "<matcher>: <reason>", or just "<matcher>" when the profile carries no reason
+	// Wrapper is the "safe <tool>" subcommand this entry's argv_prepend
+	// inserts (e.g. "safe git"), when the profile binds this name to the
+	// agent-sandbox binary itself rather than to the real tool. Empty for a
+	// command pinned directly at its own binary. A wrapper-bound command's
+	// rule set lives in Go, not in this profile's (possibly absent)
+	// invocation_policy, so Denials alone would understate — or, now that
+	// git's invocation_policy is gone, entirely miss — what it refuses.
+	Wrapper string
 }
 
 // Explain renders a Markdown description of the sandbox environment from cfg,
@@ -101,6 +111,13 @@ type commandProfileSchema struct {
 			From map[string]struct {
 				Sandbox struct {
 					ExecPaths []string `json:"exec_paths"`
+					// ArgvPrepend marks a wrapper-bound command: the profile
+					// pins this name's executable back to the agent-sandbox
+					// binary itself and inserts these tokens (e.g.
+					// ["safe","git"]) after the shim's own argv[0], so the
+					// invocation reaches a "safe <tool>" subcommand that
+					// parses it in Go instead of the real tool.
+					ArgvPrepend []string `json:"argv_prepend"`
 				} `json:"sandbox"`
 				InvocationPolicy struct {
 					Deny []struct {
@@ -147,12 +164,16 @@ func readCommandProfile(path string) ([]policyCommandView, []string) {
 		}
 
 		var denials []string
+		var wrapper string
 		callers := make([]string, 0, len(entry.From))
 		for caller := range entry.From {
 			callers = append(callers, caller)
 		}
 		sort.Strings(callers)
 		for _, caller := range callers {
+			if wrapper == "" && len(entry.From[caller].Sandbox.ArgvPrepend) > 0 {
+				wrapper = strings.Join(entry.From[caller].Sandbox.ArgvPrepend, " ")
+			}
 			for _, rule := range entry.From[caller].InvocationPolicy.Deny {
 				matcher := renderArgvMatcher(rule.Argv)
 				if rule.Reason != "" {
@@ -162,7 +183,7 @@ func readCommandProfile(path string) ([]policyCommandView, []string) {
 				}
 			}
 		}
-		policyCommands = append(policyCommands, policyCommandView{Name: name, Denials: denials})
+		policyCommands = append(policyCommands, policyCommandView{Name: name, Denials: denials, Wrapper: wrapper})
 	}
 	return policyCommands, floorPaths
 }

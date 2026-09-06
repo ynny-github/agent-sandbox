@@ -68,10 +68,44 @@ func TestExplainNamesTheCommandProfileAndBothTiers(t *testing.T) {
 			t.Errorf("Explain() is missing %q\n---\n%s", want, got)
 		}
 	}
-	for _, unwanted := range []string{"allow_commands", "drop_commands", "safe git", "[sandbox.shell]"} {
+	for _, unwanted := range []string{"allow_commands", "drop_commands", "[sandbox.shell]"} {
 		if strings.Contains(got, unwanted) {
 			t.Errorf("Explain() still mentions %q", unwanted)
 		}
+	}
+}
+
+// A command bound to a "safe <tool>" wrapper (argv_prepend, no
+// invocation_policy of its own — the shape "git" and "docker" both use in
+// this repository's own command-profile.json) must be described as routing
+// through that wrapper, not reported as carrying no denials: its rule set
+// lives in Go, not in this profile.
+func TestExplain_WrapperBoundCommand_NamesTheWrapper(t *testing.T) {
+	dir := t.TempDir()
+	profile := filepath.Join(dir, "command-profile.json")
+	writeProfile(t, profile, `{
+	  "command_policies": {
+	    "commands": {
+	      "agent-sandbox": { "can_use": ["git"],
+	        "from": { "session": { "sandbox": { "exec_paths": ["/usr/bin"] } } } },
+	      "git": { "can_use": ["realgit"],
+	        "from": { "agent-sandbox": { "sandbox": { "argv_prepend": ["safe", "git"] } } } },
+	      "realgit": { "from": { "git": { "sandbox": {} } } }
+	    }
+	  }
+	}`)
+	got := agentconfig.Explain(configWithProfile(t, dir, profile), filepath.Join(dir, "agent-sandbox.toml"))
+
+	for _, want := range []string{
+		"agent-sandbox safe git",
+		"reachable only from this wrapper",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Explain() is missing %q for a wrapper-bound command\n---\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "`git` (no invocations refused)") {
+		t.Errorf("Explain() reports the wrapper-bound `git` entry as refusing nothing:\n%s", got)
 	}
 }
 

@@ -16,10 +16,14 @@ a shell directly.
 Every command in your line sorts into one of two tiers:
 
 - **Policy commands** run in their own child sandbox, with their own
-  filesystem/network grants and argv rules. The broker dispatches to one
-  only through nono's own generated shim — never by an absolute path, a
-  symlink, or any other indirection that skips it. That guarantee is about
-  how the broker itself dispatches; it is not a guarantee about what a
+  filesystem/network grants. Some carry nono's own argv rules directly
+  (`invocation_policy`); others — `git` and `docker`, in the current
+  profile — are instead bound to a `safe <tool>` wrapper that parses the
+  real invocation in Go and decides there, with the real binary reachable
+  only from that wrapper. Either way, the broker dispatches to a policy
+  command only through nono's own generated shim — never by an absolute
+  path, a symlink, or any other indirection that skips it. That guarantee is
+  about how the broker itself dispatches; it is not a guarantee about what a
   *different* command's own sandbox can still reach and run — see below.
 - **Floor commands** run directly in the broker's own sandbox, with no argv
   rules of their own.
@@ -42,8 +46,19 @@ assuming a two-tier model holds for everything it might do.
 
 **Policy commands and their denials, from `{{.ProfilePath}}`:**
 {{if .PolicyCommands}}{{range .PolicyCommands}}
-- `{{.Name}}`{{if .Denials}}, refusing:{{range .Denials}}
-  - {{.}}{{end}}{{else}} (no invocations refused){{end}}
+- `{{.Name}}`{{if .Wrapper}} routes through `agent-sandbox {{.Wrapper}}`: that
+  wrapper parses the actual invocation and refuses some forms with a reason,
+  rather than matching argv fragments against the command line the way
+  `invocation_policy` below does — this is what lets it see past a global
+  option placed ahead of the subcommand, or a repository config file written
+  directly rather than through the tool's own CLI, either of which an argv
+  rule cannot. Run `agent-sandbox {{.Wrapper}} --help` for this tool's exact,
+  current rule set. The real binary is reachable only from this wrapper —
+  never directly, and never by any other path.{{if .Denials}} This profile
+  also carries these argv-level denials directly, in addition to the
+  wrapper's own:{{range .Denials}}
+  - {{.}}{{end}}{{end}}{{else}}{{if .Denials}}, refusing:{{range .Denials}}
+  - {{.}}{{end}}{{else}} (no invocations refused){{end}}{{end}}
 {{end -}}
 {{else}}
 - (none declared in the current profile)

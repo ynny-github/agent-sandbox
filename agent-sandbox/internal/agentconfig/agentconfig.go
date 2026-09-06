@@ -11,6 +11,7 @@ import (
 	"text/template"
 
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/safe/git"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandboxhost"
 )
 
@@ -60,16 +61,52 @@ type explainView struct {
 // broker's own (session) entry: a policy command, reachable only through its
 // nono-generated shim.
 type policyCommandView struct {
-	Name    string
-	Denials []string // each is "<matcher>: <reason>", or just "<matcher>" when the profile carries no reason
+	Name string
+	// Denials are this entry's own invocation_policy denials, if any: each
+	// is "<matcher>: <reason>", or just "<matcher>" when the profile
+	// carries no reason. Empty for a wrapper-bound entry with no
+	// invocation_policy of its own (WrapperDenials covers that case).
+	Denials []string
 	// Wrapper is the "safe <tool>" subcommand this entry's argv_prepend
 	// inserts (e.g. "safe git"), when the profile binds this name to the
 	// agent-sandbox binary itself rather than to the real tool. Empty for a
-	// command pinned directly at its own binary. A wrapper-bound command's
-	// rule set lives in Go, not in this profile's (possibly absent)
-	// invocation_policy, so Denials alone would understate — or, now that
-	// git's invocation_policy is gone, entirely miss — what it refuses.
+	// command pinned directly at its own binary.
 	Wrapper string
+	// WrapperDenials are the wrapper's own rule messages, read directly
+	// from the Go package that implements it (see wrapperRuleMessages) —
+	// not from this profile. A wrapper-bound command's rule set lives in
+	// Go, not in invocation_policy, so Denials alone would understate — or,
+	// now that git's invocation_policy is gone, entirely miss — what it
+	// refuses. Populated only when Wrapper is non-empty and this package
+	// knows the wrapper's rule source.
+	WrapperDenials []string
+}
+
+// wrapperRuleMessages returns the human-readable rule messages for a
+// wrapper-bound command name, read from the same Go source the wrapper
+// itself enforces, or nil if this package does not know that wrapper's
+// source.
+//
+// This exists instead of pointing the agent at "agent-sandbox safe <tool>
+// --help": that invocation is unreachable from inside a broker session
+// (agent-sandbox's own command_policies entry has no self edge granting it
+// "agent-sandbox"), and even if it were reachable it would not print a rule
+// set — "safe git"/"safe docker" both set DisableFlagParsing: true, so
+// "--help" passes straight through to the real tool and prints *its* help
+// instead. Reading the rule messages directly, the way this function does,
+// needs neither.
+func wrapperRuleMessages(name string) []string {
+	switch name {
+	case "git":
+		rules := git.Rules()
+		msgs := make([]string, 0, len(rules))
+		for _, r := range rules {
+			msgs = append(msgs, r.Message)
+		}
+		return msgs
+	default:
+		return nil
+	}
 }
 
 // Explain renders a Markdown description of the sandbox environment from cfg,
@@ -152,14 +189,35 @@ func readCommandProfile(path string) ([]policyCommandView, []string) {
 	}
 	sort.Strings(names)
 
+	// brokerName is the command whose own entry has a "session" caller: the
+	// broker itself (e.g. "agent-sandbox"). Only an entry the broker can
+	// reach directly — one naming brokerName among its own callers — is
+	// something the agent can actually invoke and belongs in PolicyCommands.
+	// An entry reachable only from another *policy* command (e.g. "realgit",
+	// named solely in "git"'s own from, not the broker's) is not directly
+	// invocable at all: nono refuses it with "tool 'agent-sandbox' is not
+	// allowed to invoke it". Listing it as though it were a live command the
+	// agent could type is what shipped a false "no invocations refused" line
+	// for it once git's own invocation_policy was removed.
+	var brokerName string
 	var floorPaths []string
-	var policyCommands []policyCommandView
 	for _, name := range names {
-		entry := profile.CommandPolicies.Commands[name]
-		if session, ok := entry.From["session"]; ok {
+		if session, ok := profile.CommandPolicies.Commands[name].From["session"]; ok {
+			brokerName = name
 			// The session's own callee is the broker: what it can exec directly
 			// (exec_paths) is the floor, not a policy command.
 			floorPaths = append(floorPaths, session.Sandbox.ExecPaths...)
+			break
+		}
+	}
+
+	var policyCommands []policyCommandView
+	for _, name := range names {
+		if name == brokerName {
+			continue
+		}
+		entry := profile.CommandPolicies.Commands[name]
+		if _, reachable := entry.From[brokerName]; !reachable {
 			continue
 		}
 
@@ -183,7 +241,13 @@ func readCommandProfile(path string) ([]policyCommandView, []string) {
 				}
 			}
 		}
-		policyCommands = append(policyCommands, policyCommandView{Name: name, Denials: denials, Wrapper: wrapper})
+		var wrapperDenials []string
+		if wrapper != "" {
+			wrapperDenials = wrapperRuleMessages(name)
+		}
+		policyCommands = append(policyCommands, policyCommandView{
+			Name: name, Denials: denials, Wrapper: wrapper, WrapperDenials: wrapperDenials,
+		})
 	}
 	return policyCommands, floorPaths
 }

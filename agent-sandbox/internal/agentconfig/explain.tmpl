@@ -49,15 +49,21 @@ assuming a two-tier model holds for everything it might do.
 - `{{.Name}}`{{if .Wrapper}} routes through `agent-sandbox {{.Wrapper}}`: that
   wrapper parses the actual invocation and refuses some forms with a reason,
   rather than matching argv fragments against the command line the way
-  `invocation_policy` below does — this is what lets it see past a global
-  option placed ahead of the subcommand, or a repository config file written
+  `invocation_policy` does — this is what lets it see past a global option
+  placed ahead of the subcommand, or a repository config file written
   directly rather than through the tool's own CLI, either of which an argv
-  rule cannot. Run `agent-sandbox {{.Wrapper}} --help` for this tool's exact,
-  current rule set. The real binary is reachable only from this wrapper —
-  never directly, and never by any other path.{{if .Denials}} This profile
-  also carries these argv-level denials directly, in addition to the
-  wrapper's own:{{range .Denials}}
-  - {{.}}{{end}}{{end}}{{else}}{{if .Denials}}, refusing:{{range .Denials}}
+  rule cannot. The real binary is reachable only from this wrapper — never
+  directly, and never by any other path. Its refusal prints `blocked:
+  <reason>` to stderr and exits **1**, decided in Go before nono is ever
+  involved — not nono's own exit 126.{{if .WrapperDenials}} Its rule set,
+  read from the wrapper's own source, not this profile:{{range .WrapperDenials}}
+  - {{.}}{{end}}{{else}} This document does not have that wrapper's rule
+  source; a `blocked: <reason>` message on refusal is the only place to see
+  it.{{end}}{{if .Denials}} This profile also carries these argv-level
+  denials directly, in addition to the wrapper's own, refused by nono at
+  exit 126:{{range .Denials}}
+  - {{.}}{{end}}{{end}}{{else}}{{if .Denials}}, refusing (nono's own
+  `invocation_policy`, exit 126):{{range .Denials}}
   - {{.}}{{end}}{{else}} (no invocations refused){{end}}{{end}}
 {{end -}}
 {{else}}
@@ -71,10 +77,14 @@ the directory (or ask the operator) to see exactly which programs that is:
 {{end -}}
 {{else}}- (none declared in the current profile)
 {{end}}
-A refusal always carries a reason on stderr. If a command you need is refused
-with no reason and isn't one of the denials above, it is missing from both
-tiers, not misbehaving — ask the operator to add it to the command profile,
-don't retry it.
+A refusal reaches you one of two ways. A wrapper-bound command's own check
+prints `blocked: <reason>` and exits 1 — the wrapper ran and refused, in Go,
+before nono was ever involved. Everything else nono itself refuses — an
+`invocation_policy` denial, or a command absent from both tiers — carries a
+reason (or, for a command in neither tier, none at all) on stderr and exits
+126. Only the *second* shape with **no** reason at all means the command is
+missing from both tiers; don't retry it, ask the operator to add it to the
+command profile instead.
 
 One thing the two tiers don't cover: the broker's own shell builtins (`echo`,
 `cd`, `test`, `read`, and the others `mvdan.cc/sh` implements) run inside the

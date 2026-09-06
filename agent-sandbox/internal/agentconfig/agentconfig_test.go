@@ -76,10 +76,10 @@ func TestExplainNamesTheCommandProfileAndBothTiers(t *testing.T) {
 }
 
 // A command bound to a "safe <tool>" wrapper (argv_prepend, no
-// invocation_policy of its own — the shape "git" and "docker" both use in
-// this repository's own command-profile.json) must be described as routing
-// through that wrapper, not reported as carrying no denials: its rule set
-// lives in Go, not in this profile.
+// invocation_policy of its own — the shape "git" uses in this repository's
+// own command-profile.json) must be described as routing through that
+// wrapper, not reported as carrying no denials: its rule set lives in Go,
+// not in this profile.
 func TestExplain_WrapperBoundCommand_NamesTheWrapper(t *testing.T) {
 	dir := t.TempDir()
 	profile := filepath.Join(dir, "command-profile.json")
@@ -99,6 +99,9 @@ func TestExplain_WrapperBoundCommand_NamesTheWrapper(t *testing.T) {
 	for _, want := range []string{
 		"agent-sandbox safe git",
 		"reachable only from this wrapper",
+		// The wrapper's own rule set, read from internal/safe/git, not
+		// this synthetic fixture's (nonexistent) invocation_policy.
+		"git reset --hard is not allowed",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("Explain() is missing %q for a wrapper-bound command\n---\n%s", want, got)
@@ -106,6 +109,16 @@ func TestExplain_WrapperBoundCommand_NamesTheWrapper(t *testing.T) {
 	}
 	if strings.Contains(got, "`git` (no invocations refused)") {
 		t.Errorf("Explain() reports the wrapper-bound `git` entry as refusing nothing:\n%s", got)
+	}
+	// realgit is named only in git's own "from" (git → realgit), never the
+	// broker's ("agent-sandbox" → realgit is absent from this fixture): it
+	// is not directly invocable at all, and nono refuses reaching it with
+	// "tool 'agent-sandbox' is not allowed to invoke it". Listing it as a
+	// policy command the agent could type is what shipped a false "no
+	// invocations refused" line for it once git's own invocation_policy was
+	// deleted — regression coverage for that, not just a documentation nit.
+	if strings.Contains(got, "`realgit`") {
+		t.Errorf("Explain() lists `realgit`, which the broker cannot reach directly:\n%s", got)
 	}
 }
 

@@ -485,11 +485,16 @@ rule set refuses, among others: unconditional `--force`/`-f` on push,
 exec-capable config key via `-c`/`--config-env`, `stash drop`/`clear`,
 changing a remote, deleting a tag, discarding working-tree changes
 (`checkout -- .`/`restore --worktree`), writing config (`git config` reads
-are allowed; anything that is not a read is not), and `--exec-path`. Run
-`agent-sandbox safe git --help`, or read the source, for the exact and
-current rule set: the list above is a snapshot and this document is not
-what keeps it in sync — the profile deliberately carries no second copy of
-it either, for the same reason.
+are allowed; anything that is not a read is not), and `--exec-path`. The
+list above is a snapshot; `internal/safe/git/rules.go` is the source, and
+`agent-sandbox ai explain` renders it live from that same source (not from
+this document) for whichever profile is actually running. Do not point an
+agent at `agent-sandbox safe git --help` for this: that invocation is
+unreachable from inside a broker session in the first place (nothing in
+this profile grants `agent-sandbox` a path back to itself), and even
+reachable it would not print a rule set — `safe git` disables its own flag
+parsing, so `--help` passes straight through to real git and prints git's
+own help instead.
 
 A refusal from the wrapper prints `blocked: <reason>` to stderr and
 **exits 1** — it is caught in Go before nono is ever involved, so it is not
@@ -541,7 +546,7 @@ with the identical shape as `git`:
 }
 ```
 
-Two things worth knowing before doing that. First, the `executable` above
+Three things worth knowing before doing that. First, the `executable` above
 is deliberately `libexec/docker/docker`, not the more obvious
 `bin/docker`: on NixOS, `bin/docker` is a small stub that re-execs
 `libexec/docker/docker` by absolute path, and nono's per-command Landlock
@@ -549,14 +554,35 @@ rule set (built from the pinned executable's own direct library
 dependencies) does not cover that second, indirectly invoked path —
 pinning the stub crashes every invocation, silently (`execve(...) = -1
 EACCES`, reported only as "Command exited with code 255"). Second, the
-wrapper's checks (`internal/safe/dockercompose` and `cmd/safe_docker.go`)
-are argv/model-level, not filesystem-level: a `compose` invocation is
-checked against its *resolved* model (`docker compose config`) —
-host-path mounts, the Docker socket, `privileged`, host
-`network`/`pid`/`ipc`, dangerous capabilities, disabled seccomp/apparmor —
-and every other invocation is checked at the argv level for `run`/`exec`,
-`--privileged`, and a host-path or Docker-socket bind mount. Run
-`agent-sandbox safe docker --help` for the exact, current rule set.
+wrapper's checks (`internal/safe/dockercompose` and `cmd/safe_docker.go`;
+read the source for the exact, current rule set — `--help` passes straight
+through to real docker, since the wrapper disables its own flag parsing,
+and prints docker's help instead of the rule set) are argv/model-level,
+not filesystem-level: a `compose` invocation is checked against its
+*resolved* model (`docker compose config`) — host-path mounts, the Docker
+socket, `privileged`, host `network`/`pid`/`ipc`, dangerous capabilities,
+disabled seccomp/apparmor — and every other invocation is checked at the
+argv level for `run`/`exec`, `--privileged`, and a host-path or
+Docker-socket bind mount.
+
+Third, and this is the one that matters most given the socket fact above:
+the wrapper's checks have two known gaps, both accepted only because
+docker was otherwise unreachable — a premise this opt-in block removes the
+moment it is pasted in.
+- `docker create` followed by `docker start` reaches the same running
+  state as `docker run` with none of the dangerous flags present on either
+  individual invocation — `create` is not itself refused (nothing about
+  creating a container without starting it is dangerous on its own), so
+  this is a structural gap across two calls, not a parsing defect the
+  argv check could close in one.
+- `--mount type=volume,volume-opt=device=...,volume-opt=o=bind` is a bind
+  mount in substance (a `local`-driver volume with `o=bind` behaves as a
+  bind mount of `device`'s path) that the mount check does not catch,
+  since it keys on `type=bind` specifically and this spec's `type` is
+  `volume`.
+
+Neither is closed by anything in this repository. An operator enabling
+docker is accepting both until someone closes them.
 
 Four properties worth knowing before writing your own:
 

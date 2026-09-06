@@ -497,10 +497,16 @@ push での無条件の `--force`/`-f`、`reset --hard`、`clean -f`、ブラン
 リモートの変更、タグの削除、作業ツリーの変更の破棄
 (`checkout -- .`/`restore --worktree`)、config への書き込み (`git config`
 の読み取りは許可されますが、読み取りでないものは許可されません)、そして
-`--exec-path`。正確で最新のルールセットは `agent-sandbox safe git --help`
-を実行するか、ソースを読んでください。上の一覧はある時点のスナップショット
-であり、これを最新に保つのはこの文書の役目ではありません — プロファイル
-自身も同じ理由で二重のコピーを持たないようにしています。
+`--exec-path`。上の一覧はある時点のスナップショットです。ソースは
+`internal/safe/git/rules.go` であり、`agent-sandbox ai explain` は
+(この文書からではなく) その同じソースから、実際に動いているプロファイルの
+ためにルールセットをその場でレンダリングします。これを目的に
+`agent-sandbox safe git --help` をエージェントに向けさせないでください:
+そもそもブローカーセッションの内側からはこの呼び出しに到達できません
+(このプロファイルには `agent-sandbox` が自分自身へ戻る経路を与える設定が
+ありません)。仮に到達できたとしてもルールセットは表示されません —
+`safe git` は自分自身のフラグ解析を無効にしているため、`--help` は実 git
+にそのまま通り、git 自身のヘルプが表示されます。
 
 ラッパーによる拒否は `blocked: <reason>` を stderr に出力して
 **exit 1** で終了します — nono に到達する前に Go の中で捕まえられている
@@ -553,7 +559,7 @@ push での無条件の `--force`/`-f`、`reset --hard`、`clean -f`、ブラン
 }
 ```
 
-それをする前に知っておくべきことが 2 つあります。第一に、上の
+それをする前に知っておくべきことが 3 つあります。第一に、上の
 `executable` は意図的に `bin/docker` ではなく `libexec/docker/docker` に
 なっています: NixOS では `bin/docker` は絶対パスで `libexec/docker/docker`
 に re-exec するだけの小さなスタブで、nono のコマンドごとの Landlock ルール
@@ -561,15 +567,36 @@ push での無条件の `--force`/`-f`、`reset --hard`、`clean -f`、ブラン
 はこの間接的に呼び出される第二のパスを許可しません — スタブを固定すると
 すべての呼び出しが黙ってクラッシュします (`execve(...) = -1 EACCES`、
 "Command exited with code 255" としか報告されません)。第二に、ラッパーの
-チェック (`internal/safe/dockercompose` と `cmd/safe_docker.go`) は argv・
+チェック (`internal/safe/dockercompose` と `cmd/safe_docker.go`。正確で
+最新のルールセットはソースを読んでください — ラッパーは自分自身の
+フラグ解析を無効にしているため、`--help` は実 docker にそのまま通り、
+ルールセットではなく docker 自身のヘルプを表示します) は argv・
 モデルレベルであり、ファイルシステムレベルではありません: `compose` の
 呼び出しは *解決済みの* モデル (`docker compose config`) に照らして
 チェックされます — ホストパスのマウント、Docker ソケット、`privileged`、
 ホストの `network`/`pid`/`ipc`、危険な capability、無効化された
 seccomp/apparmor。それ以外のすべての呼び出しは argv レベルで `run`/`exec`、
 `--privileged`、ホストパスまたは Docker ソケットへのバインドマウントを
-チェックします。正確で最新のルールセットは
-`agent-sandbox safe docker --help` を実行してください。
+チェックします。
+
+第三に、これが上のソケットの事実を踏まえると最も重要です:
+ラッパーのチェックには既知の抜け穴が 2 つあり、どちらも docker がそもそも
+到達不能だったからこそ許容されていました — この opt-in ブロックを貼り
+付けた瞬間、その前提は失われます。
+- `docker create` の後に `docker start` を実行すると、個々の呼び出しの
+  どちらにも危険なフラグが現れないまま `docker run` と同じ実行状態に
+  到達します — `create` 自体は拒否対象ではありません (コンテナを作成
+  するだけで起動しないこと自体は危険ではないからです)。これは 1 回の
+  呼び出しで argv チェックが閉じられる構文上の欠陥ではなく、2 回の
+  呼び出しにまたがる構造的な抜け穴です。
+- `--mount type=volume,volume-opt=device=...,volume-opt=o=bind` は実質的に
+  バインドマウントです (`o=bind` を伴う `local` ドライバのボリュームは
+  `device` のパスへのバインドマウントとして振る舞います) が、mount の
+  チェックは `type=bind` だけをキーにしているため、`type` が `volume`
+  であるこの形式は捕まえられません。
+
+このリポジトリのどちらも閉じられていません。docker を有効にするオペレー
+ターは、誰かがこれらを閉じるまでの間、両方を受け入れることになります。
 
 自分で書く前に知っておくべき性質が 4 つあります:
 

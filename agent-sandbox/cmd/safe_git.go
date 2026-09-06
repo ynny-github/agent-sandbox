@@ -26,10 +26,11 @@ func init() {
 // execGit runs the real git binary with stdio inherited and returns its exit
 // code. It is a package var so tests can replace it.
 //
-// It resolves git.RealBinary ("git-real"), never "git": this wrapper is
+// It resolves git.RealBinary ("realgit"), never "git": this wrapper is
 // itself bound to the name "git" in the command profile, so looking up "git"
 // from inside it would resolve back to this wrapper's own shim and recurse
-// without bound. See git.RealBinary for the measurement.
+// without bound. See git.RealBinary for the measurement and for why the
+// resolved name must not start with "git-" either.
 var execGit = func(ctx context.Context, args []string) int {
 	path, err := exec.LookPath(git.RealBinary)
 	if err != nil {
@@ -37,6 +38,14 @@ var execGit = func(ctx context.Context, args []string) int {
 		return 1
 	}
 	c := exec.CommandContext(ctx, path, args...)
+	// argv[0] is forced to "git", not the resolved RealBinary path: belt-and-
+	// braces against git's own argv[0] dispatch (see git.RealBinary) even if
+	// RealBinary is ever misconfigured to a colliding name again, and it
+	// keeps anything git does derive from its own program name (some of its
+	// plumbing, and its multi-call entry points, do) from naming an internal
+	// command the agent cannot run itself. Do not remove this as
+	// apparently-redundant.
+	c.Args[0] = "git"
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr

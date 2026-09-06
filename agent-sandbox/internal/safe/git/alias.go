@@ -121,14 +121,22 @@ func checkAlias(inv Invocation, depth int) []safe.Violation {
 // system config files and include directives, which is exactly why this
 // asks the real git rather than parsing .git/config by hand.
 //
-// It resolves RealBinary ("git-real"), never "git", for the same reason
-// execGit does: this wrapper is itself bound to the name "git".
+// It resolves RealBinary ("realgit"), never "git", for the same reason
+// execGit does: this wrapper is itself bound to the name "git". See
+// git.RealBinary for why the resolved name must not start with "git-"
+// either.
 func resolveAlias(name string) (string, bool) {
 	path, err := exec.LookPath(RealBinary)
 	if err != nil {
 		return "", false
 	}
-	out, err := exec.Command(path, "config", "--get", "alias."+name).Output()
+	cmd := exec.Command(path, "config", "--get", "alias."+name)
+	// argv[0] is forced to "git", not the resolved RealBinary path: belt-and-
+	// braces against git's own argv[0] dispatch (see git.RealBinary), and it
+	// keeps any error git prints naming itself consistent. Do not remove this
+	// as apparently-redundant.
+	cmd.Args[0] = "git"
+	out, err := cmd.Output()
 	if err != nil {
 		return "", false
 	}

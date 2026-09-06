@@ -39,20 +39,22 @@ func appendConfig(t *testing.T, dir, body string) {
 	}
 }
 
-// withFakeGitReal makes git.RealBinary ("git-real") resolvable on PATH for
-// the duration of the test, as a shell shim that re-execs the real "git"
-// binary with argv[0] fixed back to "git". This lets the test exercise the
-// real production lookup path (exec.LookPath(RealBinary) then "git-real
-// config --get ...") without requiring the sandbox's own "git-real" name to
-// exist in the test environment.
+// withFakeGitReal makes git.RealBinary ("realgit") resolvable on PATH for the
+// duration of the test, as a symlink to the real "git" binary. This lets the
+// test exercise the real production lookup path (exec.LookPath(RealBinary)
+// then "realgit config --get ...") without requiring the sandbox's own
+// "realgit" name to exist in the test environment.
 //
-// A plain symlink named "git-real" is not equivalent: git's own dispatch
-// looks at argv[0]'s basename, and a "git-<word>" argv[0] makes git try to
-// run "<word>" as a builtin directly (measured: "git-real config --get x"
-// invoked that way fails with "fatal: cannot handle real as a builtin",
-// silently dropping the real arguments). In production this does not arise
-// because nono's shim hands off to the real binary with its own argv[0], not
-// the invoked command name — this shim reproduces that handoff.
+// A plain symlink is safe to use here only because RealBinary does not start
+// with "git-": an earlier version of this fixture used the name "git-real"
+// and had to work around git's own argv[0] dispatch, which treats a
+// "git-<word>" argv[0] as an attempt to run "<word>" as a builtin directly
+// (measured: "git-real config --get x" invoked that way fails with "fatal:
+// cannot handle real as a builtin", silently dropping the real arguments).
+// resolveAlias also now forces argv[0] to "git" itself before running, which
+// would paper over that even with the old name — this fixture no longer
+// needs to, since RealBinary carries no "git-" prefix to trigger it in the
+// first place.
 func withFakeGitReal(t *testing.T) {
 	t.Helper()
 	real, err := exec.LookPath("git")
@@ -60,17 +62,11 @@ func withFakeGitReal(t *testing.T) {
 		t.Skip("git not found in PATH")
 	}
 	dir := t.TempDir()
-	shim := filepath.Join(dir, git.RealBinary)
-	script := "#!/bin/sh\nexec -a git " + shellQuote(real) + ` "$@"` + "\n"
-	if err := os.WriteFile(shim, []byte(script), 0o755); err != nil {
+	link := filepath.Join(dir, git.RealBinary)
+	if err := os.Symlink(real, link); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-}
-
-// shellQuote wraps s in single quotes for safe use as one /bin/sh word.
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func TestAliasExpansion_DirectConfigWrite_HardResetRefused(t *testing.T) {
@@ -155,7 +151,7 @@ func TestAliasExpansion_NestedAlias_ExpandsAndRefuses(t *testing.T) {
 func TestAliasExpansion_KnownSubcommand_NotTreatedAsAlias(t *testing.T) {
 	dir := initRepo(t)
 	// Do NOT call withFakeGitReal: if "status" were (wrongly) treated as a
-	// candidate alias, resolveAlias would try to LookPath git-real, fail
+	// candidate alias, resolveAlias would try to LookPath realgit, fail
 	// (nothing put it on PATH here), and the invocation would be refused.
 	// Passing here proves known subcommands skip alias resolution entirely.
 	t.Chdir(dir)
@@ -163,5 +159,22 @@ func TestAliasExpansion_KnownSubcommand_NotTreatedAsAlias(t *testing.T) {
 	vs := git.Check([]string{"status"})
 	if len(vs) != 0 {
 		t.Errorf("expected \"status\" to pass without any alias lookup, got %v", vs)
+	}
+}
+
+// TestRealBinary_HasNoGitDashPrefix guards against reintroducing the trap a
+// name like "git-real" is: git's own multi-call dispatch treats an argv[0]
+// of the shape "git-<word>" as an attempt to run "<word>" as a builtin
+// directly, silently ignoring the rest of argv (see the comment on
+// git.RealBinary). A regression here would not fail loudly at compile time
+// or in most manual testing — it only breaks once the real binary is
+// invoked through this exact name — so it is checked directly.
+func TestRealBinary_HasNoGitDashPrefix(t *testing.T) {
+	if strings.HasPrefix(git.RealBinary, "git-") {
+		t.Fatalf(
+			"git.RealBinary = %q must not start with \"git-\": git's own argv[0] "+
+				"dispatch treats \"git-<word>\" as an attempt to run <word> as a "+
+				"builtin directly, which breaks this wrapper's exec target",
+			git.RealBinary)
 	}
 }

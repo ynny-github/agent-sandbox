@@ -132,18 +132,25 @@ func runSafeDockerCompose(cmd *cobra.Command, args []string) error {
 }
 
 // execDockerReal execs the real docker binary (dockercompose.RealBinary,
-// "docker-real") with args appended after this wrapper's own argv[0].
+// "realdocker") with args as everything after argv[0].
 //
 // It resolves RealBinary, never "docker": this wrapper is itself bound to
 // the name "docker" in the command profile, so looking up "docker" from
 // inside it would resolve back to this wrapper's own shim and recurse
-// without bound. See dockercompose.RealBinary for the measurement.
+// without bound. See dockercompose.RealBinary for the measurement and for
+// why the resolved name must not start with "docker-" either.
 func execDockerReal(args []string) error {
 	dockerPath, err := exec.LookPath(dockercompose.RealBinary)
 	if err != nil {
 		return fmt.Errorf("%s not found in PATH; the command profile must grant this wrapper the %q command", dockercompose.RealBinary, dockercompose.RealBinary)
 	}
-	argv := append([]string{dockercompose.RealBinary}, args...)
+	// argv[0] is forced to "docker", not RealBinary: belt-and-braces against
+	// docker ever growing a git-style argv[0] dispatch (see
+	// dockercompose.RealBinary), and independently right for any usage/error
+	// text docker derives from its own program name — without this the agent
+	// would see output naming an internal command it cannot run itself. Do
+	// not remove this as apparently-redundant.
+	argv := append([]string{"docker"}, args...)
 	if err := syscall.Exec(dockerPath, argv, os.Environ()); err != nil {
 		return fmt.Errorf("exec docker: %w", err)
 	}

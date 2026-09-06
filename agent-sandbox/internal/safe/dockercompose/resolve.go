@@ -55,9 +55,17 @@ func DecodeModel(data []byte) (Model, error) {
 // equivalent git case, four levels deep, before the probe was killed). The
 // profile instead gives the real docker binary this second name, resolvable
 // only from the wrapper, so looking it up here reaches the real binary
-// through its own shim with no recursion. Do not change this back to
-// "docker".
-const RealBinary = "docker-real"
+// through its own shim with no recursion.
+//
+// It is also deliberately not "docker-real", or anything else starting with
+// "docker-": git's own multi-call dispatch treats a "git-<word>" argv[0] as
+// an attempt to run "<word>" as a builtin directly (measured; see
+// git.RealBinary), silently discarding the rest of argv. docker is not known
+// to do the same, but naming this the same shape as git.RealBinary anyway is
+// what keeps it from being a trap for whoever copies this pattern next. Do
+// not change this back to "docker", and do not give it a "docker-" prefix
+// either.
+const RealBinary = "realdocker"
 
 // Resolver produces the canonical Compose model for the given global flags.
 type Resolver interface {
@@ -67,7 +75,8 @@ type Resolver interface {
 type execResolver struct{}
 
 // NewResolver returns the default Resolver, which runs
-// `docker-real compose <globalFlags> config --format json`.
+// `realdocker compose <globalFlags> config --format json`, with argv[0] set
+// to "docker" (see the comment in Resolve).
 func NewResolver() Resolver { return execResolver{} }
 
 func (execResolver) Resolve(ctx context.Context, globalFlags []string) (Model, error) {
@@ -81,6 +90,13 @@ func (execResolver) Resolve(ctx context.Context, globalFlags []string) (Model, e
 
 	var stdout, stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, path, args...)
+	// argv[0] is forced to "docker", not the resolved RealBinary path: this is
+	// belt-and-braces against docker ever growing a git-style argv[0] dispatch,
+	// and it is independently right for any usage/error text docker derives
+	// from its own program name — without this the agent would see output
+	// naming an internal command it cannot run itself. Do not remove this as
+	// apparently-redundant.
+	cmd.Args[0] = "docker"
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {

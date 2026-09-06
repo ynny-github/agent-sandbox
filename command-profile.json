@@ -29,7 +29,7 @@
     "commands": {
       "agent-sandbox": {
         "executable": "/home/yn/.local/share/mise/installs/go/1.25.14/bin/agent-sandbox",
-        "can_use": ["git", "go", "docker"],
+        "can_use": ["git", "go"],
         "from": {
           "session": {
             "sandbox": {
@@ -101,38 +101,6 @@
               "exec_paths": [
                 "/nix/store/8yh8zbb0r4na7gkqk0db0gbdid2ax7zm-git-2.54.0/libexec/git-core"
               ]
-            }
-          }
-        }
-      },
-
-      "docker": {
-        "executable": "/home/yn/.local/share/mise/installs/go/1.25.14/bin/agent-sandbox",
-        "can_use": ["realdocker"],
-        "from": {
-          "agent-sandbox": {
-            "sandbox": {
-              "argv_prepend": ["safe", "docker"],
-              "fs_read_file": ["/home/yn/.local/share/mise/installs/go/1.25.14/bin/agent-sandbox"],
-              "fs_read": ["/nix/store", "/run/current-system/sw", "$WORKDIR"],
-              "environment": {
-                "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM"]
-              }
-            }
-          }
-        }
-      },
-
-      "realdocker": {
-        "executable": "/nix/store/k9xql8h1fgvf6mdj4w8h2sfqwh6jr3w2-docker-29.6.2/libexec/docker/docker",
-        "from": {
-          "docker": {
-            "sandbox": {
-              "fs_read_file": ["/nix/store/k9xql8h1fgvf6mdj4w8h2sfqwh6jr3w2-docker-29.6.2/libexec/docker/docker"],
-              "fs_read": ["/nix/store", "/run/current-system/sw", "$WORKDIR"],
-              "environment": {
-                "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM"]
-              }
             }
           }
         }

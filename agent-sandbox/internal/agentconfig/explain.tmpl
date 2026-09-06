@@ -17,10 +17,10 @@ Every command in your line sorts into one of two tiers:
 
 - **Policy commands** run in their own child sandbox, with their own
   filesystem/network grants. Some carry nono's own argv rules directly
-  (`invocation_policy`); others — `git` and `docker`, in the current
-  profile — are instead bound to a `safe <tool>` wrapper that parses the
-  real invocation in Go and decides there, with the real binary reachable
-  only from that wrapper. Either way, the broker dispatches to a policy
+  (`invocation_policy`); others are instead bound to a `safe <tool>`
+  wrapper (`git` is one, in the current profile) that parses the real
+  invocation in Go and decides there, with the real binary reachable only
+  from that wrapper. Either way, the broker dispatches to a policy
   command only through nono's own generated shim — never by an absolute
   path, a symlink, or any other indirection that skips it. That guarantee is
   about how the broker itself dispatches; it is not a guarantee about what a

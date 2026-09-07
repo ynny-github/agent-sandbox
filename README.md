@@ -423,17 +423,36 @@ schema.
 meant, never a literal path — that is what lets one profile serve multiple
 git worktrees.
 
-**Network.** The top-level `network` section is a ceiling for the broker's
-own sandbox and for domain filtering in general. A command_policies child's
-own `network`, measured against this repository's own profile, has exactly
-two effective states: omitting the key blocks it outright, and
-`{"allow_all": true}` grants it unrestricted network — reaching a
-destination even with the top-level ceiling set to `block: true`. A bare
-`network: {}` (present, no `allow_all`) behaves the same as omitting the
-key. A per-command `allow_domain` is not enforced either way, and — unlike
-what "ceiling" implies — narrowing what an `allow_all` child reaches is not
-achievable by narrowing the top-level `network` section: that field does
-not gate it.
+**Network.** The top-level `network` section is a ceiling. When it sets
+`network_profile` or `allow_domain`, nono stands up a loopback proxy and
+injects proxy env vars (`HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` and
+lowercase); `block: true` or `network_profile: null` stands up no proxy at
+all. A command_policies child's own `network` has exactly two effective
+states, measured: omitting the key blocks it outright (a bare `network: {}`
+behaves the same), and `{"allow_all": true}` grants Landlock permission to
+open raw sockets. A per-command `allow_domain` is not enforced either way.
+
+Whether an `allow_all` child's traffic is actually bounded by the ceiling
+then depends on nothing in its own `network` grant — it depends on whether
+the proxy env vars survive to it. Each hop's own `environment.allow_vars`
+filters what it received from its caller, and if any single hop in the
+chain — including the session's own top-level `environment` section —
+omits the proxy vars, they are gone for every hop below it, and the leaf
+falls back to a direct, unmediated connection: `allow_all` without the
+proxy vars means genuinely unbounded, not "up to the ceiling". Measured
+against a synthetic copy of this repository's own three-hop chain
+(`agent-sandbox` → `git` → `realgit`), holding the ceiling at
+`network_profile: "developer"`: with `HTTP_PROXY`/`HTTPS_PROXY` allowed
+through every hop's `allow_vars`, `realgit` got a real proxy denial
+(`CONNECT tunnel failed, response 403`) for a domain outside the developer
+allowlist; with a single hop's `allow_vars` reverted to the narrow list
+below, the same request reached the real host instead. **This repository's
+own profile sets the identical narrow `environment.allow_vars` —
+`["PATH", "HOME", "USER", "LANG", "TERM"]`, no proxy vars — at every hop of
+the `git` chain, including the top-level session.** So `realgit`'s
+`allow_all` is unbounded by the ceiling here, measured identical under
+`network_profile: "developer"` and `network_profile: null`: the ceiling
+choice does not change what `git` can reach.
 
 **A worked example** — this repository's own `command-profile.json` at the
 repo root — declares `agent-sandbox` itself as the session's policy command
@@ -548,14 +567,18 @@ says so: it refuses `remote remove`/`rm`/`set-url` through git's own CLI,
 but `remote add` is explicitly allowed, `remote.origin.url` is settable by
 the same direct `.git/config` write the alias check exists to catch, and
 `realgit`'s own child sandbox carries `"network": {"allow_all": true}`
-regardless — measured, that grant is unrestricted independent of the
-top-level ceiling (it reaches a destination even with the ceiling set to
-`block: true`). This repository's own session ceiling (the top-level
-`network` section) is separately set to `{"network_profile": null}` —
-unbounded, not a named profile — but that is not what leaves git's reach
-unbounded; nothing in this profile bounds it. What git can reach over the
-network is not bounded at all: any destination the host can route to,
-nothing this wrapper checks narrows it further.
+regardless. This repository's session ceiling (the top-level `network`
+section) is `{"network_profile": null}` — unbounded — but that setting is
+not what makes git's reach unbounded: every hop of this chain
+(`agent-sandbox` → `git` → `realgit`, including the session's own
+top-level `environment`) restricts `environment.allow_vars` to
+`["PATH", "HOME", "USER", "LANG", "TERM"]`, which never carries nono's
+proxy env vars to `realgit` regardless of what the ceiling is set to — so
+`realgit` connects directly, unmediated by any proxy, whether the ceiling
+names a domain-filtered profile or not (see "Network" above for the
+measurement). What git can reach over the network is not bounded at all:
+any destination the host can route to, nothing this wrapper checks narrows
+it further.
 
 A refusal from the wrapper prints `blocked: <reason>` to stderr and
 **exits 1** — it is caught in Go before nono is ever involved, so it is not

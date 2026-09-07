@@ -71,18 +71,43 @@ profile anywhere that makes a shell a policy command. Opening that hatch over
 **Per-command network grants do not exist.** The old design grants `go` the Go
 module proxy through `network.allow_domain` on its command entry. Measured, a
 child's `allow_domain` is ignored: a `curl` entry restricted to `pypi.org`
-reached `github.com`. Only `allow_all` (on/off) has any effect on a child.
-Domain filtering (`network_profile` / `allow_domain` in the profile's
-top-level `network` section) governs the session's own direct sandbox; a
-command_policies child with `network: {"allow_all": true}` is not bounded by
-it — measured 2026-09-07 against this repository's own profile, `realgit`
-with `allow_all` reached a domain outside the session's `network_profile`
-allowlist, and reached one even with the top-level `network` set to
-`{"block": true}`. A bare `network: {}` on a child (present, no `allow_all`)
-behaves the same as omitting the key: nothing is reachable. So a
-command_policies child's network is not "on, bounded by the session
-ceiling" — it is either fully open (`allow_all`) or fully closed (anything
-else), with no state in between and nothing that narrows the open state.
+reached `github.com`. Only `allow_all` (on/off) has any effect on a child: a
+bare `network: {}` (present, no `allow_all`) behaves the same as omitting the
+key, and reaches nothing.
+
+Whether an `allow_all` child is bounded by the top-level `network` ceiling is
+not decided by its own `network` grant at all — it is decided by whether
+nono's proxy env vars (`HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` and lowercase)
+reach it. When the ceiling sets `network_profile` or `allow_domain`, nono
+stands up a loopback proxy and injects those vars; `block: true` or
+`network_profile: null` stands up no proxy at all. Each hop's own
+`environment.allow_vars` filters what it received from its caller — omit
+the proxy vars at *any single hop*, including the session's own top-level
+`environment` section, and they are gone for every hop below it, and an
+`allow_all` leaf falls back to a direct, unmediated connection regardless of
+what the ceiling says.
+
+Measured 2026-09-07, against a synthetic profile reproducing this
+repository's own three-hop chain (`agent-sandbox` → `git` → `realgit`, leaf
+`allow_all`, middle hops no `network` key), holding the ceiling at
+`network_profile: "developer"`: with `HTTP_PROXY`/`HTTPS_PROXY` (etc.) added
+to every hop's `allow_vars`, `realgit` got a genuine proxy denial —
+`CONNECT tunnel failed, response 403` — for a domain outside the developer
+allowlist, and reached `github.com` (inside it). Reverting a *single* hop's
+`allow_vars` to the narrow list below made the same denied request reach the
+real host instead. This repository's own `command-profile.json` sets the
+identical narrow `environment.allow_vars` —
+`["PATH", "HOME", "USER", "LANG", "TERM"]`, no proxy vars — at every hop of
+the `git` chain, including the top-level session. Measured against that
+actual profile: `realgit` reaches a domain outside the `developer` profile's
+allowlist and reaches one with the ceiling at `network_profile: null` too —
+identical in both cases, and identical again with the ceiling at
+`{"block": true}`. So for this repository's own chain, a command_policies
+child's network is not "on, bounded by the session ceiling" for either
+ceiling value tried — it is unbounded, because the env-var chain that would
+carry the ceiling's proxy to it is broken at every hop, not because
+`allow_all` is inherently ceiling-blind (a chain that keeps the proxy vars
+end to end *is* bounded, per the paragraph above).
 
 **`exec_paths` is not in the published JSON Schema.** `nono profile schema`
 emits `CommandSandboxConfig` with `additionalProperties: false` and no
@@ -174,22 +199,20 @@ present but refuses every command is the worst failure mode.
 The operator writes `$WORKDIR`; agent-sandbox never rewrites the file. This is
 also what makes one profile work across git worktrees.
 
-**Network.** The top-level `network` section is a ceiling for the session's
-own direct sandbox, and the only place domain filtering works — for that
-sandbox. A command_policies child's `network` is not bounded by it: measured
-2026-09-07 against this repository's own profile, holding the top-level
-`network` fixed and varying only the child, `realgit` with
-`{"allow_all": true}` reached a destination the ceiling's own
-`network_profile` allowlist excluded, and reached one even with the ceiling
-set to `{"block": true}`. A bare `network: {}` on a child (present, no
-`allow_all`) reaches nothing, the same as omitting the key. So a
-command_policies child's network is effectively binary — fully open
-(`allow_all`) or fully closed — and the top-level ceiling does not narrow
-the open state; there is no per-command domain limiting either way. This
-repository's own ceiling is separately set to `{"network_profile": null}`
-(unbounded, not a named profile) as a matter of declared policy, but that
-setting is not what makes `realgit`'s reach unbounded — nothing in this
-profile bounds it. See "Accepted residual" below for the consequence.
+**Network.** The top-level `network` section is a ceiling, enforced through a
+loopback proxy when it sets `network_profile` or `allow_domain`; `block` or
+`network_profile: null` stands up no proxy. A command_policies child's own
+`network` has two states — omitting the key (or a bare `network: {}`)
+reaches nothing, `{"allow_all": true}` grants raw sockets — and whether that
+child is actually bounded by the ceiling depends on whether the proxy's env
+vars survive every hop's own `environment.allow_vars` down to it, not on
+anything in its `network` grant. See "Per-command network grants do not
+exist" above for the measurement (a chain that keeps the proxy vars end to
+end *is* bounded; this repository's actual `git` chain does not, at any
+hop, so `realgit` is unbounded under both `network_profile: "developer"` and
+`network_profile: null` — the ceiling choice does not change what `git` can
+reach). There is no per-command domain limiting in either case. See
+"Accepted residual" below for the consequence.
 
 **Shape.**
 
@@ -602,19 +625,24 @@ config key on that list pointed at a program instead of a shell command.
 
 **The reach through this residual includes the network, and that reach is
 unbounded.** The arbitrary execution above runs as `realgit`'s own child,
-whose `network` grant is `{"allow_all": true}` — measured (see "Network"
-above) unrestricted independent of the top-level ceiling, reaching a
-destination even with that ceiling set to `{"block": true}`. This
-repository's own session ceiling — `command-profile.json`'s top-level
-`network` — is separately set to `{"network_profile": null}` (unbounded,
-not a named profile) as a matter of declared policy, but the ceiling was
-never what bounded this path: an attacker who reaches arbitrary execution
-through this residual has unrestricted network reach regardless of what
-the top-level ceiling is set to. This is the accepted consequence of the
-operator's deliberate choice to manage network per-command by on/off rather
-than by a narrower, domain-filtered ceiling — a choice this profile's own
-mechanics make absolute for any command holding `allow_all`, not merely
-a matter of degree the ceiling's value could still soften.
+whose `network` grant is `{"allow_all": true}`. Measured (see "Network"
+above), that grant is unbounded here specifically because this repository's
+own `git` chain — `agent-sandbox` → `git` → `realgit`, including the
+session's own top-level `environment` — restricts `environment.allow_vars`
+to `["PATH", "HOME", "USER", "LANG", "TERM"]` at every hop, which never
+carries nono's proxy env vars to `realgit`; a chain that kept those vars end
+to end would have its `allow_all` child bounded by the ceiling instead
+(measured, same section). This repository's own session ceiling —
+`command-profile.json`'s top-level `network` — is `{"network_profile": null}`
+(unbounded) as a matter of declared policy, and measured identical to
+`network_profile: "developer"` for this specific chain: an attacker who
+reaches arbitrary execution through this residual has unrestricted network
+reach either way, because the env-var chain that would let a ceiling bind
+`realgit` is broken regardless of which ceiling value is chosen. This is the
+accepted consequence of the operator's deliberate choice to manage network
+per-command by on/off: for this repository's actual profile shape, that
+choice already made `realgit`'s network unbounded before the ceiling was
+set to `null`, and remains so after.
 
 ## Measured constraints
 

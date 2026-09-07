@@ -18,10 +18,10 @@
     "read_file": ["/home/yn/.local/share/mise/installs/go/1.25.14/bin/agent-sandbox"]
   },
   "environment": {
-    "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM"]
+    "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM", "http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "no_proxy", "NO_PROXY"]
   },
   "network": {
-    "network_profile": null
+    "allow_domain": ["github.com", "*.githubusercontent.com"]
   },
 
   "command_policies": {
@@ -46,7 +46,7 @@
               ],
               "fs_write": ["$WORKDIR", "/home/yn/.local/state/agent-sandbox"],
               "environment": {
-                "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM"]
+                "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM", "http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "no_proxy", "NO_PROXY"]
               },
 
               "exec_paths": [
@@ -76,7 +76,7 @@
               "fs_read_file": ["/home/yn/.local/share/mise/installs/go/1.25.14/bin/agent-sandbox"],
               "fs_read": ["/nix/store", "/run/current-system/sw", "$WORKDIR"],
               "environment": {
-                "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM"]
+                "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM", "http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "no_proxy", "NO_PROXY"]
               }
             }
           }
@@ -96,7 +96,7 @@
               "fs_write": ["$WORKDIR"],
               "network": { "allow_all": true },
               "environment": {
-                "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM"]
+                "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM", "http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "no_proxy", "NO_PROXY"]
               },
               "exec_paths": [
                 "/nix/store/8yh8zbb0r4na7gkqk0db0gbdid2ax7zm-git-2.54.0/libexec/git-core"

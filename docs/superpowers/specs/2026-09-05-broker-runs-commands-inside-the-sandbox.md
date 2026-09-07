@@ -71,9 +71,18 @@ profile anywhere that makes a shell a policy command. Opening that hatch over
 **Per-command network grants do not exist.** The old design grants `go` the Go
 module proxy through `network.allow_domain` on its command entry. Measured, a
 child's `allow_domain` is ignored: a `curl` entry restricted to `pypi.org`
-reached `github.com`. Only `allow_all` (on/off) has any effect on a child, and
-domain filtering happens at the session layer, through `network_profile` /
-`allow_domain` in the profile's top-level `network` section.
+reached `github.com`. Only `allow_all` (on/off) has any effect on a child.
+Domain filtering (`network_profile` / `allow_domain` in the profile's
+top-level `network` section) governs the session's own direct sandbox; a
+command_policies child with `network: {"allow_all": true}` is not bounded by
+it — measured 2026-09-07 against this repository's own profile, `realgit`
+with `allow_all` reached a domain outside the session's `network_profile`
+allowlist, and reached one even with the top-level `network` set to
+`{"block": true}`. A bare `network: {}` on a child (present, no `allow_all`)
+behaves the same as omitting the key: nothing is reachable. So a
+command_policies child's network is not "on, bounded by the session
+ceiling" — it is either fully open (`allow_all`) or fully closed (anything
+else), with no state in between and nothing that narrows the open state.
 
 **`exec_paths` is not in the published JSON Schema.** `nono profile schema`
 emits `CommandSandboxConfig` with `additionalProperties: false` and no
@@ -165,12 +174,22 @@ present but refuses every command is the worst failure mode.
 The operator writes `$WORKDIR`; agent-sandbox never rewrites the file. This is
 also what makes one profile work across git worktrees.
 
-**Network.** The top-level `network` section is the ceiling and the only place
-where domain filtering works. A command entry's `network` is on/off:
-`{"allow_all": true}` lets that command reach the ceiling's allowed domains,
-and omitting the key gives it no network at all (both measured, including that
-a command with `allow_all` still could not reach a domain outside the session's
-`developer` profile).
+**Network.** The top-level `network` section is a ceiling for the session's
+own direct sandbox, and the only place domain filtering works — for that
+sandbox. A command_policies child's `network` is not bounded by it: measured
+2026-09-07 against this repository's own profile, holding the top-level
+`network` fixed and varying only the child, `realgit` with
+`{"allow_all": true}` reached a destination the ceiling's own
+`network_profile` allowlist excluded, and reached one even with the ceiling
+set to `{"block": true}`. A bare `network: {}` on a child (present, no
+`allow_all`) reaches nothing, the same as omitting the key. So a
+command_policies child's network is effectively binary — fully open
+(`allow_all`) or fully closed — and the top-level ceiling does not narrow
+the open state; there is no per-command domain limiting either way. This
+repository's own ceiling is separately set to `{"network_profile": null}`
+(unbounded, not a named profile) as a matter of declared policy, but that
+setting is not what makes `realgit`'s reach unbounded — nothing in this
+profile bounds it. See "Accepted residual" below for the consequence.
 
 **Shape.**
 
@@ -183,7 +202,7 @@ a command with `allow_all` still could not reach a domain outside the session's
     "read_file": ["/opt/agent-sandbox/bin/agent-sandbox"]
   },
   "environment": { "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM"] },
-  "network": { "network_profile": "developer" },
+  "network": { "network_profile": null },
 
   "command_policies": {
     "executable_dirs": ["/opt/agent-sandbox/bin"],
@@ -580,6 +599,22 @@ structurally cannot close. Whoever picks this up next should not assume
 `exec_paths` is a complete backstop for `execCapableConfigKeys`: it is not,
 for at least this one interpreter-path route, and probably for any other
 config key on that list pointed at a program instead of a shell command.
+
+**The reach through this residual includes the network, and that reach is
+unbounded.** The arbitrary execution above runs as `realgit`'s own child,
+whose `network` grant is `{"allow_all": true}` — measured (see "Network"
+above) unrestricted independent of the top-level ceiling, reaching a
+destination even with that ceiling set to `{"block": true}`. This
+repository's own session ceiling — `command-profile.json`'s top-level
+`network` — is separately set to `{"network_profile": null}` (unbounded,
+not a named profile) as a matter of declared policy, but the ceiling was
+never what bounded this path: an attacker who reaches arbitrary execution
+through this residual has unrestricted network reach regardless of what
+the top-level ceiling is set to. This is the accepted consequence of the
+operator's deliberate choice to manage network per-command by on/off rather
+than by a narrower, domain-filtered ceiling — a choice this profile's own
+mechanics make absolute for any command holding `allow_all`, not merely
+a matter of degree the ceiling's value could still soften.
 
 ## Measured constraints
 

@@ -423,12 +423,17 @@ schema.
 meant, never a literal path — that is what lets one profile serve multiple
 git worktrees.
 
-**Network.** The top-level `network` section is the ceiling and the only
-place domain filtering works. A command's own `network` is on/off:
-`{"allow_all": true}` lets it reach whatever the ceiling allows, and
-omitting the key gives it no network at all. A per-command `allow_domain` is
-not enforced — narrowing what a command reaches requires narrowing the
-top-level ceiling instead.
+**Network.** The top-level `network` section is a ceiling for the broker's
+own sandbox and for domain filtering in general. A command_policies child's
+own `network`, measured against this repository's own profile, has exactly
+two effective states: omitting the key blocks it outright, and
+`{"allow_all": true}` grants it unrestricted network — reaching a
+destination even with the top-level ceiling set to `block: true`. A bare
+`network: {}` (present, no `allow_all`) behaves the same as omitting the
+key. A per-command `allow_domain` is not enforced either way, and — unlike
+what "ceiling" implies — narrowing what an `allow_all` child reaches is not
+achievable by narrowing the top-level `network` section: that field does
+not gate it.
 
 **A worked example** — this repository's own `command-profile.json` at the
 repo root — declares `agent-sandbox` itself as the session's policy command
@@ -543,10 +548,14 @@ says so: it refuses `remote remove`/`rm`/`set-url` through git's own CLI,
 but `remote add` is explicitly allowed, `remote.origin.url` is settable by
 the same direct `.git/config` write the alias check exists to catch, and
 `realgit`'s own child sandbox carries `"network": {"allow_all": true}`
-regardless. What git can reach over the network is bounded by exactly one
-thing: the session's own `developer` network profile (the top-level
-`network` section's ceiling) — nothing this wrapper checks narrows it
-further.
+regardless — measured, that grant is unrestricted independent of the
+top-level ceiling (it reaches a destination even with the ceiling set to
+`block: true`). This repository's own session ceiling (the top-level
+`network` section) is separately set to `{"network_profile": null}` —
+unbounded, not a named profile — but that is not what leaves git's reach
+unbounded; nothing in this profile bounds it. What git can reach over the
+network is not bounded at all: any destination the host can route to,
+nothing this wrapper checks narrows it further.
 
 A refusal from the wrapper prints `blocked: <reason>` to stderr and
 **exits 1** — it is caught in Go before nono is ever involved, so it is not

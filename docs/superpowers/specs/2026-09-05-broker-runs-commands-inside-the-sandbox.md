@@ -95,19 +95,33 @@ to every hop's `allow_vars`, `realgit` got a genuine proxy denial —
 `CONNECT tunnel failed, response 403` — for a domain outside the developer
 allowlist, and reached `github.com` (inside it). Reverting a *single* hop's
 `allow_vars` to the narrow list below made the same denied request reach the
-real host instead. This repository's own `command-profile.json` sets the
-identical narrow `environment.allow_vars` —
+real host instead. At the time this was written, this repository's own
+`command-profile.json` set the identical narrow `environment.allow_vars` —
 `["PATH", "HOME", "USER", "LANG", "TERM"]`, no proxy vars — at every hop of
-the `git` chain, including the top-level session. Measured against that
-actual profile: `realgit` reaches a domain outside the `developer` profile's
-allowlist and reaches one with the ceiling at `network_profile: null` too —
-identical in both cases, and identical again with the ceiling at
-`{"block": true}`. So for this repository's own chain, a command_policies
-child's network is not "on, bounded by the session ceiling" for either
-ceiling value tried — it is unbounded, because the env-var chain that would
-carry the ceiling's proxy to it is broken at every hop, not because
-`allow_all` is inherently ceiling-blind (a chain that keeps the proxy vars
-end to end *is* bounded, per the paragraph above).
+the `git` chain, including the top-level session, so `realgit` was
+unbounded regardless of the ceiling's value (identical under
+`network_profile: "developer"`, `network_profile: null`, and
+`{"block": true}`) — not because `allow_all` is inherently ceiling-blind,
+but because the env-var chain that would carry the ceiling's proxy to it
+was broken at every hop.
+
+**That is no longer this repository's profile.** The operator's firm
+principle is that no command may have unbounded network, so
+`command-profile.json`'s top-level `network` is now
+`{"allow_domain": ["github.com", "*.githubusercontent.com"]}`, and
+`environment.allow_vars` at every hop — the top-level session,
+`agent-sandbox`, `git`, and `realgit` — includes
+`http_proxy`/`HTTP_PROXY`/`https_proxy`/`HTTPS_PROXY`/`no_proxy`/`NO_PROXY`
+(measured: those six names are sufficient; no `NONO_*` variable had to be
+added). Measured through the real broker against this exact profile:
+`git ls-remote https://github.com/git/git.git HEAD` returns a real ref;
+`git ls-remote https://example.com/x`, a raw IP, and a nonexistent domain
+all fail identically with `CONNECT tunnel failed, response 403`. So
+`realgit`'s `allow_all` now genuinely means "up to the ceiling" — bounded
+to GitHub — because every hop in its chain carries the proxy vars. Losing
+any one hop's proxy vars reopens it to the whole internet silently, exactly
+as the paragraph above records happening once already; that is why all
+four hops need checking together, not just the one being edited.
 
 **`exec_paths` is not in the published JSON Schema.** `nono profile schema`
 emits `CommandSandboxConfig` with `additionalProperties: false` and no
@@ -207,12 +221,14 @@ reaches nothing, `{"allow_all": true}` grants raw sockets — and whether that
 child is actually bounded by the ceiling depends on whether the proxy's env
 vars survive every hop's own `environment.allow_vars` down to it, not on
 anything in its `network` grant. See "Per-command network grants do not
-exist" above for the measurement (a chain that keeps the proxy vars end to
-end *is* bounded; this repository's actual `git` chain does not, at any
-hop, so `realgit` is unbounded under both `network_profile: "developer"` and
-`network_profile: null` — the ceiling choice does not change what `git` can
-reach). There is no per-command domain limiting in either case. See
-"Accepted residual" below for the consequence.
+exist" above for the full measurement and for why this repository's own
+`git` chain now carries the proxy vars at every hop, deliberately: the
+top-level ceiling is `{"allow_domain": ["github.com",
+"*.githubusercontent.com"]}`, and `realgit`'s `allow_all` is bounded to
+that allowlist as a result (measured: GitHub reaches, `example.com` and a
+raw IP both get `CONNECT tunnel failed, response 403`). There is no
+per-command domain limiting beyond the shared ceiling. See "Accepted
+residual" below for the consequence.
 
 **Shape.**
 
@@ -623,26 +639,35 @@ structurally cannot close. Whoever picks this up next should not assume
 for at least this one interpreter-path route, and probably for any other
 config key on that list pointed at a program instead of a shell command.
 
-**The reach through this residual includes the network, and that reach is
-unbounded.** The arbitrary execution above runs as `realgit`'s own child,
-whose `network` grant is `{"allow_all": true}`. Measured (see "Network"
-above), that grant is unbounded here specifically because this repository's
-own `git` chain — `agent-sandbox` → `git` → `realgit`, including the
-session's own top-level `environment` — restricts `environment.allow_vars`
-to `["PATH", "HOME", "USER", "LANG", "TERM"]` at every hop, which never
-carries nono's proxy env vars to `realgit`; a chain that kept those vars end
-to end would have its `allow_all` child bounded by the ceiling instead
-(measured, same section). This repository's own session ceiling —
-`command-profile.json`'s top-level `network` — is `{"network_profile": null}`
-(unbounded) as a matter of declared policy, and measured identical to
-`network_profile: "developer"` for this specific chain: an attacker who
-reaches arbitrary execution through this residual has unrestricted network
-reach either way, because the env-var chain that would let a ceiling bind
-`realgit` is broken regardless of which ceiling value is chosen. This is the
-accepted consequence of the operator's deliberate choice to manage network
-per-command by on/off: for this repository's actual profile shape, that
-choice already made `realgit`'s network unbounded before the ceiling was
-set to `null`, and remains so after.
+**The reach through this residual is bounded to GitHub, not unrestricted.**
+The arbitrary execution above runs as `realgit`'s own child, whose `network`
+grant is `{"allow_all": true}`. That grant is proxy-bound here: this
+repository's own `git` chain — `agent-sandbox` → `git` → `realgit`,
+including the session's own top-level `environment` — carries nono's proxy
+env vars (`http_proxy`/`HTTP_PROXY`/`https_proxy`/`HTTPS_PROXY`/`no_proxy`/
+`NO_PROXY`) in `environment.allow_vars` at every hop, and the top-level
+`network` ceiling is `{"allow_domain": ["github.com",
+"*.githubusercontent.com"]}` — so `realgit`'s traffic is routed through
+nono's proxy and held to that allowlist the same way an ordinary `git`
+invocation's is (measured, see "Network" above). An attacker who reaches
+arbitrary execution through this residual can reach GitHub and
+`*.githubusercontent.com`, and nothing else through this network path.
+
+This bound is not free-standing: it holds only as long as every one of the
+four hops above keeps the proxy vars in its own `allow_vars`. Dropping them
+from any single hop — including the top-level session's own
+`environment` — silently reopens `realgit`, and therefore this residual, to
+the whole internet with no error or warning at startup; `nono profile
+validate` still only warns generically that `realgit` "allows unrestricted
+child network" (see the profile walkthrough), which does not distinguish a
+bounded `allow_all` from an unbounded one. This was measured to actually
+happen on this branch: an earlier revision of this profile left the proxy
+vars out of every hop and, as a result, had an unbounded `realgit`
+regardless of what the top-level ceiling was set to. Whoever changes this
+profile's `environment.allow_vars` or `network` section next should re-run
+the two-request check in "Network" above (a GitHub destination and a
+non-GitHub one) rather than trust that the ceiling's value alone describes
+what `realgit` can reach.
 
 ## Measured constraints
 

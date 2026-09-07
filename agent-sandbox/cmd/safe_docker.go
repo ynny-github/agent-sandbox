@@ -387,7 +387,7 @@ func runSafeDockerCompose(cmd *cobra.Command, args []string) error {
 	}
 	if len(violations) > 0 {
 		for _, v := range violations {
-			fmt.Fprintf(cmd.ErrOrStderr(), "blocked: %s\n", v.Setting)
+			fmt.Fprintf(cmd.ErrOrStderr(), "blocked: %s\n", v)
 		}
 		os.Exit(1)
 	}

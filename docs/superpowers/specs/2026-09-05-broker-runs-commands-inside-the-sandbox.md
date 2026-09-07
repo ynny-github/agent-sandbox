@@ -77,7 +77,7 @@ key, and reaches nothing.
 
 Whether an `allow_all` child is bounded by the top-level `network` ceiling is
 not decided by its own `network` grant at all — it is decided by whether
-nono's proxy env vars (`HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` and lowercase)
+nono's proxy env vars (`http_proxy`/`HTTP_PROXY`/`https_proxy`/`HTTPS_PROXY`/`no_proxy`/`NO_PROXY`)
 reach it. When the ceiling sets `network_profile` or `allow_domain`, nono
 stands up a loopback proxy and injects those vars; `block: true` or
 `network_profile: null` stands up no proxy at all. Each hop's own

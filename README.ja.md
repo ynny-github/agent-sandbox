@@ -436,7 +436,7 @@ nono のスキーマで直接表現されます。
 **ネットワーク。** トップレベルの `network` セクションは上限です。
 `network_profile` か `allow_domain` を設定すると、nono はループバック
 プロキシを立ち上げ、プロキシ用の環境変数
-(`HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` とその小文字版) を注入します。
+(`http_proxy`/`HTTP_PROXY`/`https_proxy`/`HTTPS_PROXY`/`no_proxy`/`NO_PROXY`) を注入します。
 `block: true` や `network_profile: null` はプロキシを一切立ち上げません。
 command_policies の子コマンド自身の `network` は、実測したところ状態が
 実質 2 つしかありません: キーを省略すると完全に遮断され (`network: {}`

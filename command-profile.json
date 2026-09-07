@@ -21,7 +21,7 @@
     "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM"]
   },
   "network": {
-    "network_profile": "developer"
+    "network_profile": null
   },
 
   "command_policies": {

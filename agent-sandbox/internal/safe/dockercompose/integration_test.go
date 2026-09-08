@@ -12,9 +12,14 @@ import (
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/safe/dockercompose"
 )
 
-// dockerComposeAvailable reports whether `docker compose version` succeeds.
+// dockerComposeAvailable reports whether `<RealBinary> compose version`
+// succeeds. This probes RealBinary ("realdocker"), not "docker": the
+// resolver under test (dockercompose.NewResolver) now runs RealBinary itself
+// (see resolve.go), so a skip guard that probed plain "docker" could pass in
+// an environment where "docker" works but "realdocker" is not on PATH,
+// masking every test below with an unrelated failure instead of a skip.
 func dockerComposeAvailable() bool {
-	return exec.Command("docker", "compose", "version").Run() == nil
+	return exec.Command(dockercompose.RealBinary, "compose", "version").Run() == nil
 }
 
 func writeCompose(t *testing.T, dir, body string) {

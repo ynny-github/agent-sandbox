@@ -10,20 +10,16 @@ import (
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/shellquote"
 )
 
-var hookPolicyFile string
-
 var hookCmd = &cobra.Command{
 	Use:   "hook",
 	Short: "PreToolUse adapter: rewrite Bash/Monitor commands to route through the sandbox",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runHookCore(os.Stdin, os.Stdout, hookPolicyFile)
+		return runHookCore(os.Stdin, os.Stdout)
 	},
 }
 
 func init() {
-	hookCmd.Flags().StringVar(&hookPolicyFile, "policy-file", "",
-		"path to the frozen policy snapshot to forward to `agent-sandbox exec`")
 	rootCmd.AddCommand(hookCmd)
 }
 
@@ -37,7 +33,7 @@ type hookInput struct {
 // command, writes a hook response to out that rewrites the command to run
 // through `agent-sandbox exec`. If there is no command, it writes nothing so
 // the tool call proceeds unchanged.
-func runHookCore(in io.Reader, out io.Writer, policyFile string) error {
+func runHookCore(in io.Reader, out io.Writer) error {
 	data, err := io.ReadAll(in)
 	if err != nil {
 		return fmt.Errorf("read hook input: %w", err)
@@ -50,11 +46,7 @@ func runHookCore(in io.Reader, out io.Writer, policyFile string) error {
 		return nil
 	}
 
-	prefix := "agent-sandbox exec"
-	if policyFile != "" {
-		prefix += " --policy-file " + shellquote.Quote(policyFile)
-	}
-	wrapped := prefix + " -- " + shellquote.Quote(input.ToolInput.Command)
+	wrapped := "agent-sandbox exec -- " + shellquote.Quote(input.ToolInput.Command)
 	response := map[string]any{
 		"hookSpecificOutput": map[string]any{
 			"hookEventName":      "PreToolUse",

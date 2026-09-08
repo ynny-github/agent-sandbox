@@ -1,8 +1,19 @@
 # The broker, with command policies
 
 Date: 2026-09-04
-Status: agreed direction, not yet implemented
+Status: SUPERSEDED
+Superseded by: [2026-09-05-broker-runs-commands-inside-the-sandbox.md](2026-09-05-broker-runs-commands-inside-the-sandbox.md)
 Prerequisite reading: [2026-09-04-tool-sandbox-blocked-by-claude.md](2026-09-04-tool-sandbox-blocked-by-claude.md)
+
+Four of this document's claims were measured false: that an
+`invocation_policy` denial cannot be bypassed, that network can be granted per
+command, and that one `bash` entry is a sound whole policy (all measured
+2026-09-05); and, measured 2026-09-06, that leaving the Docker socket out of
+a sandboxed command's filesystem grants keeps that wrapper inert until an
+operator deliberately grants it — nono does not mediate pathname AF_UNIX
+sockets at all, so the socket is reachable the moment the wrapper's binary
+is, filesystem grant or not. Read the superseding document instead; it
+carries forward what survived.
 
 ## The idea
 
@@ -80,9 +91,11 @@ git's dangerous forms can be denied directly by `invocation_policy`, which makes
   them unexpressed is better than denying the whole subcommand.
 
 `safe docker-compose` is different and does **not** move: its rules read the
-compose YAML, which no argv matcher can see. Note that the docker socket is not
-granted to sandboxed commands today, so that wrapper only matters if an operator
-puts docker in `allow_commands`.
+compose YAML, which no argv matcher can see. ~~Note that the docker socket is
+not granted to sandboxed commands today, so that wrapper only matters if an
+operator puts docker in `allow_commands`.~~ **Retracted, measured
+2026-09-06** — see this document's own header: the socket is not
+filesystem-gated at all, so this sentence's premise never held.
 
 **2. The NixOS patch dependency.** nono cannot start tool-sandbox on NixOS
 (unfixed in 0.75.0; see the prerequisite document). Until that lands upstream,

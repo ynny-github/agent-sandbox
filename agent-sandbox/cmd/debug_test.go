@@ -36,6 +36,11 @@ func TestRunDebug_PrintsBrokerSocketGrant(t *testing.T) {
 	if err := os.WriteFile(cfgPath, []byte(cfgBody), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
+	// validate requires a command profile on disk; write the default name
+	// beside the config so this fixture keeps exercising the default path.
+	if err := os.WriteFile(filepath.Join(dir, "command-profile.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatalf("write command profile: %v", err)
+	}
 	orig := configPath
 	configPath = cfgPath
 	t.Cleanup(func() { configPath = orig })
@@ -53,6 +58,40 @@ func TestRunDebug_PrintsBrokerSocketGrant(t *testing.T) {
 	want := "--allow-unix-socket " + wantSocket
 	if !strings.Contains(out, want) {
 		t.Errorf("debug output missing %q; got:\n%s", want, out)
+	}
+}
+
+// The command broker line must print the resolved nono binary, not a literal
+// "nono": debug exists to show the exact invocation the launcher builds, and
+// BrokerArgs now honours whatever path it is given.
+func TestRunDebug_PrintsResolvedNonoPath(t *testing.T) {
+	dir := t.TempDir()
+	nono := filepath.Join(dir, "nono")
+	if err := os.WriteFile(nono, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write fake nono: %v", err)
+	}
+	t.Setenv("PATH", dir)
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+
+	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
+	cfgBody := "[mcp]\ncommand_output_dir = " + toTOMLString(filepath.Join(dir, "out")) + "\n"
+	if err := os.WriteFile(cfgPath, []byte(cfgBody), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "command-profile.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatalf("write command profile: %v", err)
+	}
+	orig := configPath
+	configPath = cfgPath
+	t.Cleanup(func() { configPath = orig })
+
+	out := captureStdout(t, func() {
+		if err := runDebug(debugCmd, nil); err != nil {
+			t.Fatalf("runDebug() error = %v", err)
+		}
+	})
+	if !strings.Contains(out, "command broker:\n  "+nono+" run") {
+		t.Errorf("debug output missing the resolved nono path %q in the broker line; got:\n%s", nono, out)
 	}
 }
 
@@ -106,31 +145,5 @@ func TestFormatGeneratedConfigs_MCPDisabledLabel(t *testing.T) {
 	out := formatGeneratedConfigs("/tmp/p.json", []byte(`{"a":1}`), false, []byte(`{"b":2}`))
 	if !strings.Contains(out, "# github mcp config (disabled; token redacted):") {
 		t.Errorf("expected disabled label; got:\n%s", out)
-	}
-}
-
-func TestFormatShellProfile_NoWarningWithoutProtectedGrants(t *testing.T) {
-	out := formatShellProfile([]byte(`{"meta":{"name":"agent-sandbox shell"}}`), nil)
-	if !strings.Contains(out, "# generated nono profile for the shell sandbox:") {
-		t.Errorf("output missing the shell profile header; got:\n%s", out)
-	}
-	if strings.Contains(out, "warning") {
-		t.Errorf("unexpected warning for a profile with no protected grants; got:\n%s", out)
-	}
-}
-
-// A credential capability declared in the shared [sandbox.shared] instead of
-// [sandbox.agent] hands host keys to every brokered command. Nothing
-// rejects it — it is a legitimate, if unusual, configuration — so debug is
-// where the author gets told.
-func TestFormatShellProfile_WarnsOnProtectedGrants(t *testing.T) {
-	out := formatShellProfile([]byte(`{"a":1}`), []string{"~/.ssh", "~/.ssh/known_hosts"})
-	for _, want := range []string{
-		"# warning: brokered commands can read ~/.ssh, ~/.ssh/known_hosts",
-		"[sandbox.agent]",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("output missing %q; got:\n%s", want, out)
-		}
 	}
 }

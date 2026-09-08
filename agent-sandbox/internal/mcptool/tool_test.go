@@ -13,7 +13,10 @@ func setupTestServer(t *testing.T) *mcp.ClientSession {
 	t.Helper()
 	ctx := context.Background()
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.0.1"}, nil)
-	mcptool.Register(server, mcptool.HandlerConfig{OutputDir: t.TempDir()})
+	mcptool.Register(server, mcptool.HandlerConfig{
+		OutputDir:     t.TempDir(),
+		CommandRunner: &mockRunner{exitCode: 0, stdout: "hi\n"},
+	})
 
 	t1, t2 := mcp.NewInMemoryTransports()
 	if _, err := server.Connect(ctx, t1, nil); err != nil {

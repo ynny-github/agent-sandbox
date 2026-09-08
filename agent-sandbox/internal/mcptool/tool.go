@@ -10,20 +10,11 @@ import (
 
 const maxTimeoutSeconds = int64(1<<63-1) / int64(time.Second)
 
-const runCommandDescription = `Execute a shell command.
+const runCommandDescription = `Execute a shell command inside the sandbox.
 
-Routing:
-- Commands matching allow-patterns run on the host.
-- Commands matching drop-patterns are refused.
-- All other commands run in a sandbox.
-
-Operator handling:
-- Pipe (|): each segment is routed independently; host and sandbox segments
-  may be mixed within the same pipeline.
-- Sequential operators (&&, ||, ;): each pipeline is routed and executed in order.
-- Redirect segments (>, <, >>, 2>) and operators ($(), ` + "`" + `, lone &): run via
-  bash -c on whichever side they are routed to; $(), backtick, and lone &
-  always fall back to the sandbox.`
+The command line is sent to the command broker, which interprets the shell
+language itself (pipes, redirects, sequencing, globbing) and executes each
+simple command, subject to the operator's command profile.`
 
 type RunCommandInput struct {
 	Command        string `json:"command"`

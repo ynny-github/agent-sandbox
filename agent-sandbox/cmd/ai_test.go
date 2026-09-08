@@ -15,6 +15,11 @@ func writeTempConfig(t *testing.T, body string) string {
 	if err := os.WriteFile(p, []byte(body), 0644); err != nil {
 		t.Fatal(err)
 	}
+	// validate requires a command profile on disk; write the default name
+	// beside the config so these fixtures keep exercising the default path.
+	if err := os.WriteFile(filepath.Join(dir, "command-profile.json"), []byte("{}"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	return p
 }
 
@@ -25,12 +30,8 @@ tool_mode = "hook"
 [mcp]
 command_output_dir = "./tmp"
 
-[sandbox.shell]
-allow_domains = ["proxy.golang.org"]
-
 [sandbox.agent]
-allow_commands = ["git *", "go *"]
-drop_commands = [{ pattern = "git push --force*" }]
+capabilities = ["go"]
 `)
 	orig := configPath
 	configPath = cfgPath
@@ -43,10 +44,8 @@ drop_commands = [{ pattern = "git push --force*" }]
 	}
 	for _, want := range []string{
 		"# agent-sandbox environment",
-		"- git *",
-		"- go *",
-		"- git push --force*",
-		"proxy.golang.org",
+		cfgPath,
+		"`go`",
 	} {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("output missing %q\n%s", want, buf.String())
@@ -79,17 +78,36 @@ func TestRunConfigCheck_ValidConfig(t *testing.T) {
 	out, err := runConfigCheckWith(t, `
 tool_mode = "hook"
 
-[sandbox.shared]
-capabilities = ["go"]
-
 [sandbox.agent]
-allow_commands = ["go *"]
+capabilities = ["go"]
 `)
 	if err != nil {
 		t.Fatalf("runConfigCheck: %v", err)
 	}
-	if !strings.Contains(out, "proxy.golang.org") {
-		t.Errorf("output does not summarise the resolved domains:\n%s", out)
+	if !strings.Contains(out, "ok:") {
+		t.Errorf("output does not confirm the config resolves:\n%s", out)
+	}
+}
+
+// config-check must print what the launched agent's own sandbox reaches
+// beyond the baseline: several places in the READMEs and explain.tmpl promise
+// this, so a config-check that only prints "ok:" would make those promises
+// false.
+func TestRunConfigCheck_PrintsFilesystemGrants(t *testing.T) {
+	out, err := runConfigCheckWith(t, `
+tool_mode = "hook"
+
+[sandbox.agent]
+allow = ["/opt/writable"]
+read = ["/opt/readonly"]
+`)
+	if err != nil {
+		t.Fatalf("runConfigCheck: %v", err)
+	}
+	for _, want := range []string{"read+write: /opt/writable", "read-only: /opt/readonly"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q\n%s", want, out)
+		}
 	}
 }
 
@@ -106,7 +124,7 @@ func TestRunConfigCheck_UnknownCapability(t *testing.T) {
 	_, err := runConfigCheckWith(t, `
 tool_mode = "hook"
 
-[sandbox.shared]
+[sandbox.agent]
 capabilities = ["gooo"]
 `)
 	if err == nil {

@@ -48,6 +48,14 @@ def output_dir(tmp_path: Path) -> Path:
 
 @pytest.fixture()
 def lightweight_config(tmp_path: Path, output_dir: Path) -> Path:
+    # config.Load rejects allow_commands/drop_commands and [sandbox.shell]
+    # outright (they moved to the operator's command profile / [sandbox.agent]
+    # when routing was dropped), and separately requires a command profile to
+    # exist on disk, whatever it says — nono is what reads its contents, not
+    # agent-sandbox. Neither matters for these lightweight-mode tests (no
+    # broker is wired up, so nothing here ever reaches nono), but config.Load
+    # still runs the same checks it would for a real launch.
+    (tmp_path / "command-profile.json").write_text("{}\n", encoding="utf-8")
     config = tmp_path / "agent-sandbox.toml"
     config.write_text(
         f"""
@@ -55,12 +63,6 @@ def lightweight_config(tmp_path: Path, output_dir: Path) -> Path:
 command_output_dir = {toml_string(output_dir)}
 
 [sandbox.agent]
-allow_commands = ["echo *", "printf *"]
-drop_commands = []
-
-[sandbox.shell]
-allow_env = []
-allow_domains = []
 """.strip()
         + "\n",
         encoding="utf-8",

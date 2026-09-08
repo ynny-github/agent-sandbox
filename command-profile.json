@@ -1,0 +1,140 @@
+{
+  "meta": {
+    "name": "agent-sandbox commands (this repository)"
+  },
+  "groups": {
+    "include": ["nix_runtime", "git_config", "mise_manager"]
+  },
+  "filesystem": {
+    "allow": ["$WORKDIR", "/home/yn/.local/state/agent-sandbox"],
+    "read": [
+      "/nix/store",
+      "/run/current-system/sw",
+      "/home/yn/.local/share/mise",
+      "/home/yn/.cache/go-build",
+      "/home/yn/go/pkg/mod",
+      "/home/yn/.local/state/agent-sandbox"
+    ],
+    "read_file": ["/home/yn/.local/share/mise/installs/go/1.25.14/bin/agent-sandbox"]
+  },
+  "environment": {
+    "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM", "http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "no_proxy", "NO_PROXY"]
+  },
+  "network": {
+    "allow_domain": ["github.com", "*.githubusercontent.com"]
+  },
+
+  "command_policies": {
+    "executable_dirs": ["/home/yn/.local/share/mise/installs/go/1.25.14/bin"],
+    "commands": {
+      "agent-sandbox": {
+        "executable": "/home/yn/.local/share/mise/installs/go/1.25.14/bin/agent-sandbox",
+        "can_use": ["git", "go"],
+        "from": {
+          "session": {
+            "sandbox": {
+              "fs_read_file": ["/home/yn/.local/share/mise/installs/go/1.25.14/bin/agent-sandbox"],
+              "fs_read": [
+                "/nix/store",
+                "/run/current-system/sw",
+                "/home/yn/.local/share/mise",
+                "/home/yn/.config/mise",
+                "/home/yn/.cache/go-build",
+                "/home/yn/go/pkg/mod",
+                "/home/yn/.local/state/agent-sandbox",
+                "$WORKDIR"
+              ],
+              "fs_write": ["$WORKDIR", "/home/yn/.local/state/agent-sandbox"],
+              "environment": {
+                "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM", "http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "no_proxy", "NO_PROXY"]
+              },
+
+              "exec_paths": [
+                "/nix/store/zc6fy62c341aibk36p4ywff7rf9wn4wx-ripgrep-15.2.0/bin",
+                "/home/yn/.local/share/mise/installs/go/1.25.14/bin/gofmt",
+                "/nix/store/kask8rc5n2vrs492p1sq62vilj1sfdrs-mise-2026.8.6/bin",
+                "/nix/store/q8wvrqkl9x8vfmjflgxl9y0y7bnjlv12-coreutils-full-9.11/bin",
+                "/nix/store/c3pj1yrqn88cc8zkr5hywmvy15m0r6c9-gnused-4.10/bin",
+                "/nix/store/q0n8l9xz66pbpj37fxk5vid6dsfpx5vb-gnugrep-3.12/bin",
+                "/nix/store/i6hlg4ss9m53gvh8jqp0zgac67x6mblg-findutils-4.10.0/bin",
+                "/nix/store/lxzzxlm3dis6as7y13l13ywb0nh1c3h8-diffutils-3.12/bin",
+                "/nix/store/hzqx251825abx40q1zqgd37g6hmkz75g-which-2.23/bin",
+                "/home/yn/.local/share/mise/installs/lefthook/2.1.10"
+              ]
+            }
+          }
+        }
+      },
+
+      "git": {
+        "executable": "/home/yn/.local/share/mise/installs/go/1.25.14/bin/agent-sandbox",
+        "can_use": ["realgit"],
+        "from": {
+          "agent-sandbox": {
+            "sandbox": {
+              "argv_prepend": ["safe", "git"],
+              "fs_read_file": ["/home/yn/.local/share/mise/installs/go/1.25.14/bin/agent-sandbox"],
+              "fs_read": ["/nix/store", "/run/current-system/sw", "$WORKDIR"],
+              "environment": {
+                "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM", "http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "no_proxy", "NO_PROXY"]
+              }
+            }
+          }
+        }
+      },
+
+      "realgit": {
+        "executable": "/nix/store/8yh8zbb0r4na7gkqk0db0gbdid2ax7zm-git-2.54.0/bin/git",
+        "from": {
+          "git": {
+            "sandbox": {
+              "fs_read_file": [
+                "/nix/store/8yh8zbb0r4na7gkqk0db0gbdid2ax7zm-git-2.54.0/bin/git",
+                "/home/yn/.gitconfig"
+              ],
+              "fs_read": ["/nix/store", "/run/current-system/sw"],
+              "fs_write": ["$WORKDIR"],
+              "network": { "allow_all": true },
+              "environment": {
+                "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM", "http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "no_proxy", "NO_PROXY"]
+              },
+              "exec_paths": [
+                "/nix/store/8yh8zbb0r4na7gkqk0db0gbdid2ax7zm-git-2.54.0/libexec/git-core"
+              ]
+            }
+          }
+        }
+      },
+
+      "go": {
+        "executable": "/home/yn/.local/share/mise/installs/go/1.25.14/bin/go",
+        "from": {
+          "agent-sandbox": {
+            "sandbox": {
+              "fs_read_file": ["/home/yn/.local/share/mise/installs/go/1.25.14/bin/go"],
+              "fs_read": [
+                "/home/yn/.local/share/mise/installs/go/1.25.14",
+                "/home/yn/go/pkg/mod",
+                "/home/yn/.cache/go-build",
+                "$WORKDIR"
+              ],
+              "fs_write": [
+                "$WORKDIR",
+                "/home/yn/.cache/go-build",
+                "/home/yn/go/pkg/mod",
+                "/tmp"
+              ],
+              "environment": {
+                "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM"]
+              },
+              "exec_paths": [
+                "/home/yn/.local/share/mise/installs/go/1.25.14/pkg/tool/linux_amd64",
+                "/tmp"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

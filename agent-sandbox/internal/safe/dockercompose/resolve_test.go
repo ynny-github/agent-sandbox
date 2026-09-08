@@ -1,6 +1,7 @@
 package dockercompose_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/safe/dockercompose"
@@ -55,5 +56,22 @@ func TestDecodeModel(t *testing.T) {
 func TestDecodeModel_Invalid(t *testing.T) {
 	if _, err := dockercompose.DecodeModel([]byte("{not json")); err == nil {
 		t.Error("expected error decoding invalid JSON, got nil")
+	}
+}
+
+// TestRealBinary_HasNoDockerDashPrefix guards against picking a second
+// command name of the shape "docker-<word>": git's own multi-call dispatch
+// treats such a name as an attempt to run "<word>" as a builtin directly
+// (measured on the equivalent git.RealBinary case), silently discarding the
+// rest of argv. docker is not known to do the same, but this wrapper is
+// deliberately named the same shape as git's to avoid being a trap for
+// whoever copies this pattern next — see the comment on RealBinary.
+func TestRealBinary_HasNoDockerDashPrefix(t *testing.T) {
+	if strings.HasPrefix(dockercompose.RealBinary, "docker-") {
+		t.Fatalf(
+			"dockercompose.RealBinary = %q must not start with \"docker-\": "+
+				"a git-style argv[0] dispatch on that prefix would break this "+
+				"wrapper's exec target",
+			dockercompose.RealBinary)
 	}
 }

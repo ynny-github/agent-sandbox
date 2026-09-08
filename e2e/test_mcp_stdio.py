@@ -1,15 +1,6 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 from e2e.mcp_client import McpStdioClient
-
-
-def tool_result(result: dict) -> dict:
-    assert result["content"], result
-    text = result["content"][0]["text"]
-    return json.loads(text)
 
 
 def test_tools_list_contains_expected_tools(lightweight_mcp: McpStdioClient) -> None:
@@ -20,31 +11,19 @@ def test_tools_list_contains_expected_tools(lightweight_mcp: McpStdioClient) -> 
     assert "create_directory" not in names
 
 
-def test_run_command_host_route_returns_output_file(lightweight_mcp: McpStdioClient) -> None:
+def test_run_command_without_broker_returns_hint(lightweight_mcp: McpStdioClient) -> None:
+    # There is no host route left at all: every command now goes through the
+    # broker (internal/broker), and the lightweight server this fixture starts
+    # (AGENT_SANDBOX_E2E_LIGHTWEIGHT=1) wires up no CommandRunner, on purpose —
+    # it exists so the MCP server can still start without a live nono session.
+    # `run_command` must therefore fail the same way for *every* command,
+    # including one as trivial as `echo`, with the actionable hint rather than
+    # a raw connection error (see mcptool.HandleRunCommand's nil-CommandRunner
+    # guard and broker.SandboxNotRunningHint).
     result = lightweight_mcp.call_tool("run_command", {"command": "echo e2e-ok"})
-    assert result.get("isError", False) is False
-    body = tool_result(result)
-
-    assert body["exit_code"] == 0
-    stdout_path = Path(body["stdout_path"])
-    assert stdout_path.read_text(encoding="utf-8").strip() == "e2e-ok"
-    assert "stderr_path" not in body
-
-
-def test_run_command_pipeline_needing_sandbox_is_refused(
-    lightweight_mcp: McpStdioClient,
-) -> None:
-    # `echo` is host-allowed but `cat` is not, so the pipeline needs the command
-    # sandbox, which the lightweight server does not wire up. The command must
-    # fail without producing output rather than run partially on the host.
-    result = lightweight_mcp.call_tool("run_command", {"command": "echo e2e-ok | cat"})
-    assert result.get("isError", False) is False
-    body = tool_result(result)
-
-    assert body["exit_code"] == 1
-    stderr_path = Path(body["stderr_path"])
-    assert "no command broker configured" in stderr_path.read_text(encoding="utf-8")
-    assert "stdout_path" not in body
+    assert result.get("isError") is True
+    text = result["content"][0]["text"]
+    assert "command broker is not available" in text
 
 
 def test_run_command_invalid_timeout_returns_tool_error(lightweight_mcp: McpStdioClient) -> None:

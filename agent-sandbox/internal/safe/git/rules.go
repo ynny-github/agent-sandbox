@@ -21,18 +21,33 @@ type Rule struct {
 func Rules() []Rule { return rules }
 
 // Check parses argv and returns a safe.Violation for every matched rule,
-// in Rules() order. A nil/empty result means the invocation is allowed.
+// in Rules() order, plus anything caught by expanding an unrecognized first
+// token as a configured git alias (see checkAlias). A nil/empty result means
+// the invocation is allowed.
 // (internal/safe/git imports internal/safe; safe does not import git, so there
 // is no package cycle.)
 func Check(argv []string) []safe.Violation {
-	inv := Parse(argv)
+	return checkInvocation(Parse(argv), 0)
+}
+
+// checkInvocation is what Check does for one already-parsed invocation. It is
+// exposed to checkAlias so alias expansion re-checks the expanded invocation
+// through this same rule evaluation rather than a copy of it.
+func checkInvocation(inv Invocation, depth int) []safe.Violation {
 	var out []safe.Violation
 	for _, r := range rules {
 		if r.Match(inv) {
 			out = append(out, safe.Violation{Source: "cli", Setting: r.Message})
 		}
 	}
-	return out
+	if len(out) > 0 {
+		// Already refused by a global-level rule (alias-injection,
+		// bypass-hooks and config-exec-injection all match on inv.Global
+		// regardless of Subcommand). No need to also shell out to resolve
+		// Subcommand as an alias just to reach the same "refused" outcome.
+		return out
+	}
+	return append(out, checkAlias(inv, depth)...)
 }
 
 // isGitFalse reports whether v is one of git's boolean-false spellings.
@@ -232,8 +247,14 @@ var rules = []Rule{
 		},
 	},
 	{
-		ID:      "remote-tamper",
-		Message: "changing git remotes is not allowed",
+		ID: "remote-tamper",
+		// Narrow on purpose: "remote add" is allowed, "remote.origin.url" is
+		// still settable by a direct ".git/config" write this wrapper never
+		// sees, and this rule is not a network control at all — realgit's own
+		// sandbox carries "network": {"allow_all": true}, so what git can
+		// reach is bounded solely by the session's own network profile, not
+		// by anything checked here.
+		Message: "removing a git remote or changing its URL via git's own CLI is not allowed (adding one is; this is not a network control)",
 		Match: func(inv Invocation) bool {
 			if inv.Subcommand != "remote" {
 				return false
@@ -255,12 +276,38 @@ var rules = []Rule{
 		Match: func(inv Invocation) bool {
 			switch inv.Subcommand {
 			case "checkout":
+				// "-f"/"--force" discards local modifications outright, even on a
+				// plain branch switch (measured: "checkout -f <branch>" overwrites
+				// uncommitted changes git would otherwise refuse to clobber).
+				if hasLong(inv.Args, "--force") || hasShort(inv.Args, 'f') {
+					return true
+				}
 				for _, a := range inv.Args {
 					if a == "--" || a == "." {
 						return true
 					}
 				}
-				return false
+				// "-b"/"-B <new-branch> [<start-point>]" creates a branch; its extra
+				// positional argument is a start-point, not a pathspec, so it must
+				// not be counted below.
+				if hasShort(inv.Args, 'b') || hasShort(inv.Args, 'B') {
+					return false
+				}
+				// Two or more non-flag args with neither "--" nor a preceding flag
+				// disambiguating them is "checkout <tree-ish> <pathspec>...": git
+				// restores each path from tree-ish unconditionally, discarding any
+				// uncommitted change to it, with no "--" required (measured:
+				// "checkout HEAD~1 src/foo.go" overwrites src/foo.go). A single
+				// non-flag arg is left alone — that is an ordinary branch switch,
+				// which git itself refuses rather than silently overwrites when it
+				// would discard something.
+				nonFlag := 0
+				for _, a := range inv.Args {
+					if !strings.HasPrefix(a, "-") {
+						nonFlag++
+					}
+				}
+				return nonFlag >= 2
 			case "restore":
 				// restore affects the working tree unless it targets only the index.
 				if subAction(inv.Args) == "" && !hasLong(inv.Args, "--source") {
@@ -292,6 +339,20 @@ var rules = []Rule{
 				return false
 			}
 			return true
+		},
+	},
+	{
+		ID: "exec-path-injection",
+		Message: "setting --exec-path is not allowed: it changes where git looks for the " +
+			"binaries behind its own subcommands, including ones it does not recognize as " +
+			"builtins, so a planted binary of that name runs in place of the real one",
+		Match: func(inv Invocation) bool {
+			for _, g := range inv.Global {
+				if g.Name == "--exec-path" {
+					return true
+				}
+			}
+			return false
 		},
 	},
 }

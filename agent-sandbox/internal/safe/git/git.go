@@ -4,6 +4,28 @@ package git
 
 import "strings"
 
+// RealBinary is the second command name the profile binds to the actual git
+// binary, reachable only from this wrapper.
+//
+// It is deliberately not "git": nono puts its shim directory first on PATH,
+// so the wrapper is bound to the name "git" itself. If this wrapper resolved
+// "git" (e.g. via exec.LookPath("git")) to find the real binary, that lookup
+// would land back on the wrapper's own shim, argv_prepend would fire again,
+// and it would recurse without bound — measured four levels deep before the
+// probe that found this was killed. The profile instead gives the real git
+// binary this second name, resolvable only from this wrapper, so looking it
+// up here reaches the real binary through its own shim with no recursion.
+//
+// It is also deliberately not "git-real", or anything else starting with
+// "git-": git's own multi-call dispatch treats an argv[0] of the shape
+// "git-<word>" as an attempt to run "<word>" as a builtin directly, ignoring
+// the rest of argv. Measured: invoking the real git binary with argv[0]
+// "git-real" and args ["config","--get","alias.x"] fails with "fatal: cannot
+// handle real as a builtin" and never looks at "config --get" at all. A name
+// with no "git-" prefix cannot collide with this. Do not change this back to
+// "git", and do not give it a "git-" prefix either.
+const RealBinary = "realgit"
+
 // GlobalOpt is a git global option appearing before the subcommand, e.g.
 // {Name: "-c", Value: "core.hooksPath=/dev/null"} or {Name: "-p"}.
 type GlobalOpt struct {

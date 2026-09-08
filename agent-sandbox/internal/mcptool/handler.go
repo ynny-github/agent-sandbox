@@ -2,42 +2,48 @@ package mcptool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/broker"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/output"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/router"
 )
 
-// CommandRunner is the engine's sandbox-execution interface, re-exported so
-// existing callers (serve.go, tests) keep their import.
-type CommandRunner = router.CommandRunner
-
-// DropRule is the router's drop rule (pattern + optional message), re-exported
-// so callers can build a HandlerConfig without importing router directly.
-type DropRule = router.DropRule
+// CommandRunner is the broker's execution interface, re-exported so existing
+// callers keep their import.
+type CommandRunner = broker.CommandRunner
 
 type HandlerConfig struct {
 	OutputDir     string
-	AllowPatterns []string
-	DropRules     []DropRule
 	CommandRunner CommandRunner
 }
 
 func HandleRunCommand(ctx context.Context, cmd string, cfg HandlerConfig) (*mcp.CallToolResult, any, error) {
+	// A nil CommandRunner means the server was started with no broker
+	// connection at all (cmd/serve.go's lightweight/E2E path builds
+	// HandlerConfig{} directly, without even unavailableRunner). Guard here
+	// rather than let the call below panic the whole MCP server process.
+	if cfg.CommandRunner == nil {
+		return errorResult(broker.SandboxNotRunningHint), nil, nil
+	}
+
 	files, err := output.CreateFiles(cfg.OutputDir)
 	if err != nil {
 		return errorResult(fmt.Sprintf("output: %v", err)), nil, nil
 	}
 
-	exitCode, runErr := router.New(router.Config{
-		AllowPatterns: cfg.AllowPatterns,
-		DropRules:     cfg.DropRules,
-		CommandRunner: cfg.CommandRunner,
-	}).Run(ctx, cmd, files.Stdout, files.Stderr)
+	exitCode, runErr := cfg.CommandRunner.RunCommand(ctx, cmd, nil, files.Stdout, files.Stderr)
 
 	closeErr := files.Close()
 	if runErr != nil {
+		// The broker being unreachable is actionable in a way its raw error
+		// text is not (it names an env var and a connection failure, neither
+		// of which tells the agent what to do); every other RunCommand error
+		// is command-specific and reads fine verbatim.
+		if errors.Is(runErr, broker.ErrBrokerUnavailable) {
+			return errorResult(broker.SandboxNotRunningHint), nil, nil
+		}
 		return errorResult(runErr.Error()), nil, nil
 	}
 	if closeErr != nil {

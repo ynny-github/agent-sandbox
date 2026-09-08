@@ -2,23 +2,26 @@
 go = "1.25"
 lefthook = "latest"
 
-# agent-sandbox is deliberately not pinned as a tool: this repo *is*
-# agent-sandbox, and a released build would shadow the working tree — which is
-# what made every local change need a binary at an absolute path to test.
-#
-# bin/ goes on PATH instead, so `agent-sandbox` inside this project means the
-# working tree and nothing else. Nothing rebuilds it for you: run `mise run
-# build` after changing the source. A stale bin/agent-sandbox is the failure
-# mode to watch for, and deleting it leaves no fallback, since dropping the pin
-# is what buys the guarantee that no released copy can win the PATH race.
-[env]
-_.path = ["{{config_root}}/bin"]
-
+# agent-sandbox is deliberately not pinned as a tool, and this project no
+# longer puts a working-tree bin/ on PATH either. Both would put the built
+# binary somewhere BrokerArgs' base-name PATH resolution could land on *and*
+# the command profile's fs_write also reaches ($WORKDIR) — exactly the
+# writable-and-executable state nono refuses the broker's own entrypoint for
+# (see doctor's checkCommandProfile and the README's "installed binary's
+# directory" note). `mise run build` instead runs `go install`, which lands
+# outside $WORKDIR either way: GOBIN if set, GOPATH/bin otherwise. Measured
+# here as GOBIN, because mise's own Go plugin points it at that Go version's
+# own bin/ (already on PATH) rather than leaving it unset — this repository's
+# command-profile.json currently pins that exact resolved path as
+# agent-sandbox's "executable", so a build here and a session launched here
+# agree on which binary is the broker. That pin can drift from `go install`'s
+# actual target (a toolchain upgrade renumbers the path; GOBIN can also just
+# change) — see the Development section in README.md for what to do then.
 [tasks.build]
-description = "Build agent-sandbox into bin/ so this project runs the working tree"
-# -buildvcs=false because go build otherwise shells out to git to stamp the
-# revision, and git needs configuration the shell sandbox does not grant — the
-# task would only work when run outside it. A dev build gains nothing from the
-# stamp, so the dependency is not worth carrying.
-run = "go build -buildvcs=false -o bin/agent-sandbox ."
+description = "Build agent-sandbox and install it outside the working tree (go install)"
+# -buildvcs=false because go build/install otherwise shells out to git to
+# stamp the revision, and git needs configuration the shell sandbox does not
+# grant — the task would only work when run outside it. A dev build gains
+# nothing from the stamp, so the dependency is not worth carrying.
+run = "go install -buildvcs=false ."
 

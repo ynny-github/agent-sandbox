@@ -6,13 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/claude"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/envflag"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/policysnapshot"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandboxhost"
 )
 
@@ -43,16 +43,6 @@ func runDebug(cmd *cobra.Command, args []string) error {
 	// Agent section, matching cmd/claude.go: --env is for the launched agent.
 	cfg.Sandbox.Agent.AllowEnv = append(cfg.Sandbox.Agent.AllowEnv, envKeys...)
 
-	var snapshotPath string
-	if cfg.ToolMode == "hook" {
-		path, cleanup, werr := policysnapshot.Write(cfg)
-		if werr != nil {
-			return fmt.Errorf("policy snapshot: %w", werr)
-		}
-		defer cleanup()
-		snapshotPath = path
-	}
-
 	r, err := sandboxhost.Resolve(cfg, "claude")
 	if err != nil {
 		return err
@@ -71,11 +61,23 @@ func runDebug(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	_, nonoArgs, err := claude.BuildArgs(cfg, opts, snapshotPath, "", profilePath, r.DenyRules, brokerSocket)
+	_, nonoArgs, err := claude.BuildArgs(cfg, opts, "", profilePath, r.DenyRules, brokerSocket)
 	if err != nil {
 		return err
 	}
 	fmt.Println(strings.Join(nonoArgs, " "))
+
+	selfPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate agent-sandbox: %w", err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("getwd: %w", err)
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), "command broker:")
+	fmt.Fprintln(cmd.OutOrStdout(), "  "+strings.Join(
+		claude.BrokerArgs(cfg, nonoPathForDisplay(), selfPath, brokerSocket, cwd), " "))
 
 	profileJSON, err := r.ProfileJSON()
 	if err != nil {
@@ -86,42 +88,18 @@ func runDebug(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	fmt.Print(formatGeneratedConfigs(profilePath, profileJSON, claude.GithubMCPEnabled(), mcpJSON))
-
-	// The shell profile is the other half of the policy: same expansion, fed by
-	// [sandbox.shared] + [sandbox.shell] instead of [sandbox.agent]. Printing
-	// both is what makes the split inspectable — the difference between them is
-	// exactly what the two sections declare.
-	cwd, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("getwd: %w", err)
-	}
-	shellResolved, err := sandboxhost.ResolveShell(cfg, cwd)
-	if err != nil {
-		return err
-	}
-	shellJSON, err := shellResolved.ProfileJSON()
-	if err != nil {
-		return err
-	}
-	fmt.Print(formatShellProfile(shellJSON, shellResolved.ProtectedGrants()))
 	return nil
 }
 
-// formatShellProfile renders the shell sandbox's nono profile, warning when it
-// grants a protected path. Raw grants cannot produce one, so such a path always
-// comes from a credential capability (docker/ssh) declared in the shared
-// [sandbox.shared] instead of [sandbox.agent] — host keys reachable from any
-// sandboxed command, which is rarely what the author meant.
-func formatShellProfile(profileJSON []byte, protected []string) string {
-	var b strings.Builder
-	b.WriteString("\n# generated nono profile for the shell sandbox:\n")
-	b.WriteString(indentJSON(profileJSON))
-	b.WriteString("\n")
-	if len(protected) > 0 {
-		fmt.Fprintf(&b, "\n# warning: brokered commands can read %s\n", strings.Join(protected, ", "))
-		b.WriteString("#          move the capability granting it to [sandbox.agent]\n")
+// nonoPathForDisplay resolves nono the same way the launcher does, so debug
+// prints the binary that will actually run rather than an unresolved literal.
+// It falls back to "nono" when lookup fails: debug must still print something
+// useful when nono is missing, which is itself worth being able to see here.
+func nonoPathForDisplay() string {
+	if path, err := exec.LookPath("nono"); err == nil {
+		return path
 	}
-	return b.String()
+	return "nono"
 }
 
 // formatGeneratedConfigs renders the generated nono profile (no secrets) and

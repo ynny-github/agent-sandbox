@@ -110,6 +110,11 @@ func TestRules(t *testing.T) {
 		{"checkout discard path", []string{"checkout", "--", "file.go"}, "discard-changes"},
 		{"checkout dot", []string{"checkout", "."}, "discard-changes"},
 		{"checkout branch allowed", []string{"checkout", "topic"}, ""},
+		{"checkout force branch", []string{"checkout", "-f", "main"}, "discard-changes"},
+		{"checkout force long branch", []string{"checkout", "--force", "main"}, "discard-changes"},
+		{"checkout treeish and path, no --", []string{"checkout", "HEAD~1", "src/foo.go"}, "discard-changes"},
+		{"checkout new branch allowed", []string{"checkout", "-b", "newbranch"}, ""},
+		{"checkout new branch from start point allowed", []string{"checkout", "-b", "newbranch", "main"}, ""},
 		{"restore worktree", []string{"restore", "file.go"}, "discard-changes"},
 		{"restore staged allowed", []string{"restore", "--staged", "file.go"}, ""},
 
@@ -119,6 +124,10 @@ func TestRules(t *testing.T) {
 		{"config unset", []string{"config", "--unset", "user.name"}, "config-write"},
 		{"config get allowed", []string{"config", "--get", "user.name"}, ""},
 		{"config list allowed", []string{"config", "--list"}, ""},
+
+		// exec-path injection (R28)
+		{"exec-path attached blocked", []string{"--exec-path=/tmp/x", "svn", "--version"}, "exec-path-injection"},
+		{"exec-path separate blocked", []string{"--exec-path", "/tmp/x", "status"}, "exec-path-injection"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

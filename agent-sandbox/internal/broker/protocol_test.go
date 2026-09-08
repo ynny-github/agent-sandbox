@@ -9,22 +9,18 @@ import (
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/broker"
 )
 
-func TestRequestRoundTrip(t *testing.T) {
+func TestRequestRoundTripsACommandLine(t *testing.T) {
 	var buf bytes.Buffer
-	want := broker.Request{
-		Argv:      []string{"go", "build", "./..."},
-		Cwd:       "/work/project",
-		WithStdin: true,
-	}
+	want := broker.Request{Command: "rg -n foo . | head -5", Cwd: "/w", WithStdin: true}
 	if err := broker.WriteRequest(&buf, want); err != nil {
-		t.Fatalf("WriteRequest() error = %v", err)
+		t.Fatalf("WriteRequest: %v", err)
 	}
 	got, err := broker.ReadRequest(&buf)
 	if err != nil {
-		t.Fatalf("ReadRequest() error = %v", err)
+		t.Fatalf("ReadRequest: %v", err)
 	}
-	if got.Cwd != want.Cwd || len(got.Argv) != 3 || got.Argv[2] != "./..." || !got.WithStdin {
-		t.Errorf("ReadRequest() = %+v, want %+v", got, want)
+	if got != want {
+		t.Errorf("round trip = %+v, want %+v", got, want)
 	}
 }
 

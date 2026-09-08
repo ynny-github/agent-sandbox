@@ -5,49 +5,143 @@
 - Command output is returned inline in the tool result.
 {{else}}- The Bash and Monitor tools are disabled; use the `run_command` MCP tool to run shell commands.
 - Command output is written to files; read the returned stdout/stderr paths.
-{{end}}- Allowed commands run directly on the host; all others run through a host-side command broker, each in its own `nono run` sandbox scoped to the working directory.
+{{end}}
+There is no shell in the loop. The command broker parses your command line
+itself (pipelines, `&&`/`||`/`;`, redirections, globbing, `$(…)`, `for`/`if`,
+`cd` and the other shell builtins all work), and executes each simple command
+directly — never through `bash` or `sh`. The broker never dispatches a
+shell, and no shell is in either tier, so nothing the broker runs gives you
+a shell directly.
 
-## Filesystem: the same paths everywhere
-There is no container and no bind mount — sandboxed commands run directly on the host filesystem, restricted to the current working directory (read+write):
-- Host commands (the allow list below) run in the real project directory using real host absolute paths.
-- Sandboxed commands run in that same directory at that same absolute path — no translation needed. HOME keeps its real host value.
-- Paths outside the working directory are reachable only where the config grants them to the shell sandbox: `[sandbox.shared]` (shared with the agent) or `[sandbox.shell]`. Anything declared under `[sandbox.agent]` — typically the credential capabilities `docker` and `ssh` — belongs to the launched agent alone and is not reachable from a sandboxed command.
-{{if .Resolved}}{{if or .OutsideWrite .OutsideRead}}- Resolved from the active config, a sandboxed command also reaches:
-{{range .OutsideWrite}}  - `{{.}}` (read+write)
-{{end}}{{range .OutsideRead}}  - `{{.}}` (read-only)
-{{end}}{{else}}- Resolved from the active config: nothing outside the working directory. Anything else you need must be granted in `agent-sandbox.toml` by the operator.
-{{end}}{{end}}{{if .Safe}}
-## Safe command wrappers
-Prefer these validated wrappers over running the tool directly; each refuses known-dangerous invocations before running:
-{{range .Safe}}- `agent-sandbox safe {{.Use}}` — {{.Short}}
-{{end}}{{end}}
-## Commands that run on the host (allow)
-{{range .Allow}}- {{.}}
-{{else}}- (none)
+Every command in your line sorts into one of two tiers:
+
+- **Policy commands** run in their own child sandbox, with their own
+  filesystem/network grants. Some carry nono's own argv rules directly
+  (`invocation_policy`); others are instead bound to a `safe <tool>`
+  wrapper (`git` is one, in the current profile) that parses the real
+  invocation in Go and decides there, with the real binary reachable only
+  from that wrapper. Either way, the broker dispatches to a policy
+  command only through nono's own generated shim — never by an absolute
+  path, a symlink, or any other indirection that skips it. That guarantee is
+  about how the broker itself dispatches; it is not a guarantee about what a
+  *different* command's own sandbox can still reach and run — see below.
+- **Floor commands** run directly in the broker's own sandbox, with no argv
+  rules of their own.
+
+A program in neither tier is never dispatched by the broker — refused
+before it starts, the same way an unknown command would be. This allowlist
+is absolute about *what the broker itself will dispatch*, not about which
+programs can execute: it says nothing about what a command the broker does
+dispatch can go on to do once it runs. See the next paragraph.
+
+A toolchain in either tier that can compile and immediately execute code you
+give it is bounded only by what *its own* sandbox can reach — not by argv
+rules, and not by which other tools are or are not enumerated elsewhere in
+this profile — and it can run whatever those grants reach, including a copy
+of a program neither tier names, made and executed entirely inside its own
+sandbox without ever going through the broker's dispatch or nono's shim. If
+such a command is listed below, its own grants (not this document's prose
+about tiers) are the real boundary; ask the operator what those are before
+assuming a two-tier model holds for everything it might do.
+
+A wrapper's own rule list (below) is a Go-side denylist on the parsed
+invocation, not a complete boundary by itself: it cannot see a route that
+reaches the same effective setting by writing straight to a file under
+`$WORKDIR` instead of going through the tool's own CLI — that write is one
+of this broker's own shell builtins (see further down), never the wrapper's
+parser, never nono's shim. What actually bounds what a setting reached that
+way can *do* is the policy command's own sandbox grants for the real
+binary — in particular a narrow `exec_paths`, which blocks shelling out to
+run something regardless of whether the wrapper's own denylist happens to
+name that setting. Do not treat a wrapper's rule list as the whole story
+for a command with real, file-backed ambient state (git's repository config
+is the case this profile has); ask what that command's own `exec_paths`
+and filesystem grants actually allow before assuming the parser is holding
+something back that a narrower sandbox grant is really the one enforcing.
+
+**Policy commands and their denials, from `{{.ProfilePath}}`:**
+{{if .PolicyCommands}}{{range .PolicyCommands}}
+- `{{.Name}}`{{if .Wrapper}} routes through `agent-sandbox {{.Wrapper}}`: that
+  wrapper parses the actual invocation and refuses some forms with a reason,
+  rather than matching argv fragments against the command line the way
+  `invocation_policy` does — this is what lets it see past a global option
+  placed ahead of the subcommand, or a repository config file written
+  directly rather than through the tool's own CLI, either of which an argv
+  rule cannot. The real binary is reachable only from this wrapper — never
+  directly, and never by any other path. Its refusal prints `blocked:
+  <reason>` to stderr and exits **1**, decided in Go before nono is ever
+  involved — not nono's own exit 126. Two behaviours worth knowing before
+  assuming a refusal here is a bug: a message shaped
+  `blocked: alias "<x>" expands to "<y>", which is blocked: <reason>` means
+  the wrapper resolved an unrecognized leading token as a repository-
+  configured alias and re-checked what it expands to, not a plain rule
+  match; and a message like `<word> is not a git command and its alias
+  could not be resolved` means the wrapper could not resolve the invocation
+  as either a real subcommand or a configured alias at all — a third-party
+  plugin subcommand (`git lfs`, `git town`, any `git-<name>` binary on
+  `PATH`) now refuses this way instead of running, which is a behaviour
+  change from before this wrapper existed, not evidence the plugin is
+  missing or broken.{{if .WrapperDenials}} Its rule set,
+  read from the wrapper's own source, not this profile:{{range .WrapperDenials}}
+  - {{.}}{{end}}{{else}} This document does not have that wrapper's rule
+  source; a `blocked: <reason>` message on refusal is the only place to see
+  it.{{end}}{{if .Denials}} This profile also carries these argv-level
+  denials directly, in addition to the wrapper's own, refused by nono at
+  exit 126:{{range .Denials}}
+  - {{.}}{{end}}{{end}}{{else}}{{if .Denials}}, refusing (nono's own
+  `invocation_policy`, exit 126):{{range .Denials}}
+  - {{.}}{{end}}{{else}} (no invocations refused){{end}}{{end}}
+{{end -}}
+{{else}}
+- {{if .BrokerIssue}}{{.BrokerIssue}} — this document could not tell which
+  command is the broker's own entrypoint, so it cannot say which commands
+  are policy-controlled at all. This is not the same as the profile
+  declaring none.{{else}}(none declared in the current profile){{end}}
 {{end}}
-## Refused commands (drop)
-These run on neither host nor sandbox:
-{{range .Drop}}- {{.Pattern}}{{if .Message}} — {{.Message}}{{end}}
-{{else}}- (none)
+**Floor paths** — every executable inside these (a directory) or the file
+itself (a single path) is a floor command, no argv rules, run at the
+broker's own grants. This lists *where* they live, not their names — `ls`
+the directory (or ask the operator) to see exactly which programs that is:
+{{if .FloorPaths}}{{range .FloorPaths}}- `{{.}}`
+{{end -}}
+{{else}}- {{if .BrokerIssue}}{{.BrokerIssue}} — see above{{else}}(none
+declared in the current profile){{end}}
 {{end}}
-## Sandboxed command network
-Every sandboxed command runs under nono's "developer" network profile (LLM APIs, package registries, GitHub, sigstore, documentation).
-{{if .AllowDomains}}Extra allowed domains:
-{{range .AllowDomains}}- {{.}}
-{{end}}{{else}}No extra domains beyond the developer profile.
-{{end}}
+A refusal reaches you one of two ways. A wrapper-bound command's own check
+prints `blocked: <reason>` and exits 1 — the wrapper ran and refused, in Go,
+before nono was ever involved. Everything else nono itself refuses — an
+`invocation_policy` denial, or a command absent from both tiers — carries a
+reason (or, for a command in neither tier, none at all) on stderr and exits
+126. Only the *second* shape with **no** reason at all means the command is
+missing from both tiers; don't retry it, ask the operator to add it to the
+command profile instead.
+
+One thing the two tiers don't cover: the broker's own shell builtins (`echo`,
+`cd`, `test`, `read`, and the others `mvdan.cc/sh` implements) run inside the
+broker itself, at the broker's own filesystem grants — they never reach either
+tier. A redirect or glob you write is bounded by those same grants, not by
+whichever command's output it's attached to.
+
+Which commands may run, what each may touch, and which invocations are
+refused is not `agent-sandbox.toml`'s concern — it is the command profile's,
+written in nono's own schema, resolved at `{{.ProfilePath}}`.
 
 ## Changing the config
 The sandbox is configured by `{{.ConfigPath}}`. You may edit it directly.
 
-Editing it **does not affect the current session**: in hook mode commands route
-through a policy snapshot frozen at launch, and the nono profiles are generated
-once when the session starts. An edit takes effect the next time the operator
-runs `agent-sandbox claude`.
+Editing it **does not affect the current session**: the agent's nono profile is
+generated once when the session starts. An edit takes effect the next time the
+operator runs `agent-sandbox claude`. The same is true of the command profile
+at `{{.ProfilePath}}`: it is read once, when the broker starts.
 
 After editing, run `agent-sandbox ai config-check` — it loads the config and
-resolves both profiles exactly as launch does, so a passing check means the
-config will not be what breaks the next launch.
+resolves the agent profile exactly as launch does, so a passing check means the
+config will not be what breaks the next launch. `agent-sandbox doctor` checks
+the command profile itself: that it exists, that `nono profile validate`
+passes on it, that it does not grant write access to the broker's own
+binary, that resolving the broker's own name through this process's PATH
+lands back on that exact binary, and — when the profile pins the entrypoint's
+`executable` — that the pinned path also names that exact binary.
 
 Schema:
 
@@ -57,26 +151,16 @@ tool_mode = "hook"                    # "hook" | "mcp"
 [mcp]
 command_output_dir = "..."            # mcp tool_mode only: where command output is written
 
-# Host access. [sandbox.shared] reaches both the agent and sandboxed commands;
-# [sandbox.agent] and [sandbox.shell] reach exactly one. Nothing is inherited
-# between the two sides, so a grant reaches a side only if written where that
-# side can see it. All six keys below are valid in all three sections.
-[sandbox.shared]
+# Host access for the launched agent — the only profile agent-sandbox
+# generates. The sandbox a command runs in is the command profile at the path
+# above, configured separately by the operator (see above).
+[sandbox.agent]
 capabilities = []                     # named bundles; see the list below
 allow        = []                     # directories, read+write
 read         = []                     # directories, read-only
 allow_file   = []                     # single files, read+write
 read_file    = []                     # single files, read-only
 allow_env    = []                     # environment variable names
-
-[sandbox.agent]
-allow_commands = ["go *"]             # glob patterns that run without the command sandbox
-drop_commands  = [                    # patterns refused on both host and sandbox
-  { pattern = "git *", message = "optional; replaces the default refusal line" },
-]
-
-[sandbox.shell]
-allow_domains = []                    # extra domains on top of the developer network profile
 ```
 
 Capability names: {{range $i, $c := .Capabilities}}{{if $i}}, {{end}}`{{$c}}`{{end}}.

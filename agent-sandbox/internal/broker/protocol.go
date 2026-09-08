@@ -1,12 +1,11 @@
 // Package broker carries command execution across the sandbox boundary. The
-// in-sandbox client sends a command over a unix socket; the host-side server,
-// which lives in the launcher process outside the sandbox, runs it under its
-// own nono sandbox and streams the output back.
+// in-sandbox client sends a command line over a unix socket; the server, which
+// runs outside the agent's own sandbox, interprets the shell language itself
+// and streams the output back.
 //
 // The wire format is one request per connection, followed by length-prefixed
 // frames in both directions. Frames keep stdout and stderr separate so a
-// caller can route them independently, which the router's mixed host/sandbox
-// pipelines rely on.
+// caller can route them independently.
 package broker
 
 import (
@@ -36,16 +35,26 @@ const maxPayload = 1 << 20
 
 // Request is the first message on a connection: what to run and where.
 //
+// It carries a command *line*, not an argv. The broker interprets the shell
+// language itself and executes each simple command, so splitting it here would
+// duplicate that work in the one place that cannot see the result.
+//
 // There is deliberately no environment field. The command's environment is a
-// policy decision owned by the launcher, which resolves it outside the sandbox
-// from the command profile's allow_vars (see NonoExecutor.ProcessEnv). A
-// request-supplied environment could not work — the agent's nono profile
-// strips those variables long before the router could report them — and must
-// not work, because the request originates inside the sandbox it configures.
+// policy decision owned by the command profile: the broker's own environment is
+// filtered by nono before it starts, and each command's is decided by its entry.
+// A request-supplied environment could not work — the agent's nono profile
+// strips those variables long before they could be reported — and must not
+// work, because the request originates inside the sandbox it would configure.
 type Request struct {
-	Argv      []string `json:"argv"`
-	Cwd       string   `json:"cwd"`
-	WithStdin bool     `json:"with_stdin"`
+	Command string `json:"command"`
+	// Cwd is client-controlled: it comes straight from the sandboxed agent's
+	// own working directory (see Client.RunCommand's workingDir helper). It
+	// reaches the interpreter's Dir option and, through it, --workdir of the
+	// commands the interpreter execs, but nothing in this package bounds it to
+	// any particular root — see ShellExecutor.Execute for where that bound
+	// actually lives.
+	Cwd       string `json:"cwd"`
+	WithStdin bool   `json:"with_stdin"`
 }
 
 // Frame is one decoded frame.

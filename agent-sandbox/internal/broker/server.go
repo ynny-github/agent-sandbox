@@ -10,16 +10,25 @@ import (
 	"sync"
 )
 
-// Executor runs one command. The production implementation spawns nono; tests
-// substitute a fake so the server can be exercised without a sandbox.
+// Executor runs one command line. The production implementation is
+// ShellExecutor; tests substitute a fake so the server can be exercised
+// without spawning anything.
 type Executor interface {
 	Execute(ctx context.Context, req Request, stdin io.Reader,
 		stdout, stderr io.Writer) (int, error)
 }
 
 // Server accepts one command per connection on a unix socket. It runs in the
-// launcher process, outside the sandbox, which is the whole point: a process
-// inside the sandbox cannot create a new sandbox boundary.
+// dedicated broker process — outside the agent's own sandbox, but inside a
+// nono session of its own — which is the point: a process cannot create a
+// new sandbox boundary around itself, so the broker needs a boundary of its
+// own rather than borrowing the agent's, or worse, running with the
+// unsandboxed launcher's own reach.
+//
+// That session is started by internal/claude.startCommandBroker, which runs
+// `nono run --profile <command profile> -- agent-sandbox broker --socket
+// <path>` (see claude.BrokerArgs) as a sibling of the agent's own sandbox, not
+// a child of it — nono refuses to nest.
 type Server struct {
 	listener net.Listener
 	sockPath string

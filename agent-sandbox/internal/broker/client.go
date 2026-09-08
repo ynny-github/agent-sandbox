@@ -38,9 +38,8 @@ func NewClientFromEnv() (*Client, error) {
 	return NewClient(path), nil
 }
 
-// RunSandboxed sends one command to the broker and streams its output back.
-// It matches the router's runner interface.
-func (c *Client) RunSandboxed(ctx context.Context, argv []string,
+// RunCommand sends one command line to the broker and streams its output back.
+func (c *Client) RunCommand(ctx context.Context, command string,
 	stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", c.sockPath)
@@ -61,7 +60,7 @@ func (c *Client) RunSandboxed(ctx context.Context, argv []string,
 		}
 	}()
 
-	req := Request{Argv: argv, Cwd: workingDir(), WithStdin: stdin != nil}
+	req := Request{Command: command, Cwd: workingDir(), WithStdin: stdin != nil}
 	if err := WriteRequest(conn, req); err != nil {
 		return 0, err
 	}
@@ -118,3 +117,17 @@ func workingDir() string {
 	}
 	return wd
 }
+
+// CommandRunner executes one command line inside the sandbox. The broker client
+// is the production implementation; tests substitute their own.
+type CommandRunner interface {
+	RunCommand(ctx context.Context, command string, stdin io.Reader,
+		stdout, stderr io.Writer) (int, error)
+}
+
+// SandboxNotRunningHint is the actionable message shown when the broker is not
+// reachable. It is exported because the situation is detected before any
+// command runs: `agent-sandbox exec` and the MCP server both fail to build a
+// client when AGENT_SANDBOX_BROKER_SOCKET is unset, and must print this rather
+// than a raw dial error.
+const SandboxNotRunningHint = "command broker is not available; run Claude via `agent-sandbox claude`, which starts it automatically"

@@ -15,9 +15,9 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/broker"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/policysnapshot"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandboxhost"
 )
 
 var errDoctorChecksFailed = errors.New("doctor: checks failed")
@@ -77,14 +77,54 @@ type checkResult struct {
 }
 
 var (
-	lookPath   = exec.LookPath
-	runCommand = defaultRunCommand
+	lookPath      = exec.LookPath
+	runCommand    = defaultRunCommand
+	runCommandEnv = defaultRunCommandEnv
 )
 
 func defaultRunCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+}
+
+// defaultRunCommandEnv runs a command with extra environment on top of this
+// process's own. It is separate from defaultRunCommand because its only
+// caller starts a sandbox, which is slower than the profile queries the
+// five-second budget was sized for.
+func defaultRunCommandEnv(ctx context.Context, env []string, name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Env = append(os.Environ(), env...)
+	return cmd.CombinedOutput()
+}
+
+// brokerSocketProbeValue is the sentinel checkBrokerSocketVar looks for. Any
+// value would do; an obviously synthetic one keeps a failure legible.
+const brokerSocketProbeValue = "agent-sandbox-doctor-probe"
+
+// checkBrokerSocketVar measures whether the agent profile forwards
+// AGENT_SANDBOX_BROKER_SOCKET into the sandbox. nono cannot be asked: `nono
+// profile show` does not report environment.allow_vars, and `nono why` has no
+// env query. Without the variable the agent never reaches the broker and every
+// command fails for a reason nothing on screen explains, so this is measured
+// rather than assumed.
+//
+// --allow-cwd is required because nono refuses working-directory access in
+// non-interactive mode, which is how doctor runs.
+func checkBrokerSocketVar(profilePath string) error {
+	out, err := runCommandEnv(context.Background(),
+		[]string{broker.SocketEnvVar + "=" + brokerSocketProbeValue},
+		"nono", "wrap", "--silent", "--allow-cwd", "--profile", profilePath,
+		"--", "sh", "-c", "echo $"+broker.SocketEnvVar)
+	if err != nil {
+		return fmt.Errorf("could not run the probe: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	if !strings.Contains(string(out), brokerSocketProbeValue) {
+		return fmt.Errorf("the profile does not forward %s into the sandbox", broker.SocketEnvVar)
+	}
+	return nil
 }
 
 func firstLine(s string) string {
@@ -165,67 +205,47 @@ func checkBrokerSocketDir() checkResult {
 // anywhere without moving a real file.
 var selfPath = os.Executable
 
-// checkProfiles reports whether the two nono profiles a launch depends on are
-// present and accepted by nono, and whether the command profile leaves the
-// broker's own binary replaceable.
+// checkProfiles validates both nono profiles and measures the one thing nono
+// cannot report. agent-sandbox generates neither file, so every check here is
+// either nono's own answer or a direct measurement.
 //
-// Both profiles are handed to `nono profile validate` rather than parsed here.
-// An earlier version read the command profile's JSON directly, which was both
-// fragile and incomplete: it could not see a grant that arrives through a
-// policy group (whose paths live in nono's policy.json, not in the profile), it
-// skipped every entry containing a "$" because expansion is nono's job, and it
-// broke outright once the profile grew comments — nono accepts JSONC, Go's
-// encoding/json does not. Asking nono is the only way to get answers in nono's
-// own semantics.
-//
-// What validate covers is narrow, measured: JSON syntax and group references,
-// nothing else. A grant over a protected path, a malformed domain and a
-// nonexistent path all pass it. That is why the writable-binary question is
-// asked separately, through `nono why`, which resolves groups, "~"/"$XDG_*"
-// expansion and bypass_protection before answering.
-//
-// The agent profile is included because nothing else validates it: `ai
-// config-check` resolves the config through sandboxhost but never hands the
-// JSON it generates to nono.
-//
-// Each failure here otherwise produces a session that refuses every command
-// with an error the agent cannot act on: nono's own failure arrives on the
-// broker's stderr long after the launcher has returned.
+// Each failure otherwise produces a session that refuses every command with an
+// error the agent cannot act on: nono's own failure arrives on the broker's
+// stderr long after the launcher has returned.
 func checkProfiles(cfg *config.Config) checkResult {
 	r := checkResult{name: "profiles"}
-	path := cfg.CommandProfilePath()
-	r.details = append(r.details, "command profile: "+path)
+	agentPath := cfg.AgentProfilePath("claude")
+	cmdPath := cfg.CommandProfilePath()
+	r.details = append(r.details, "agent profile: "+agentPath, "command profile: "+cmdPath)
 
-	if _, err := os.Stat(path); err != nil {
+	if err := validateProfile(agentPath); err != nil {
+		r.details = append(r.details, "agent profile: "+err.Error())
+		r.hint = "write the agent profile, or point [agents.claude].profile at it, " +
+			"until `nono profile validate` passes"
+		return r
+	}
+	if err := validateProfile(cmdPath); err != nil {
+		r.details = append(r.details, "command profile: "+err.Error())
 		r.hint = "write the profile, or point command_profile at it"
 		return r
 	}
-	if out, err := runCommand(context.Background(), "nono", "profile", "validate", path); err != nil {
-		r.details = append(r.details, "nono profile validate: "+strings.TrimSpace(string(out)))
-		r.hint = "fix the command profile until `nono profile validate` passes"
-		return r
-	}
 
-	resolved, err := sandboxhost.Resolve(cfg, "claude")
-	if err != nil {
-		r.details = append(r.details, fmt.Sprintf("error: could not resolve the agent profile: %v", err))
-		r.hint = "fix [sandbox.agent] until `agent-sandbox ai config-check` passes"
-		return r
+	switch {
+	case os.Getenv(broker.SocketEnvVar) != "":
+		// Running inside a session: the probe would nest one nono sandbox in
+		// another. Say so rather than report a failure nobody can act on.
+		r.details = append(r.details,
+			"broker socket variable: skipped (running inside a session; run doctor on the host)")
+	default:
+		if err := checkBrokerSocketVar(agentPath); err != nil {
+			r.details = append(r.details, "broker socket variable: "+err.Error())
+			r.hint = "add " + broker.SocketEnvVar + " to the agent profile's " +
+				"environment.allow_vars; without it the agent cannot reach the broker " +
+				"and every command fails"
+			return r
+		}
+		r.details = append(r.details, "broker socket variable: forwarded")
 	}
-	agentPath, cleanup, err := resolved.WriteProfile()
-	if err != nil {
-		r.details = append(r.details, fmt.Sprintf("error: could not write the agent profile: %v", err))
-		r.hint = "could not validate the agent profile; fix the error above and re-run doctor"
-		return r
-	}
-	defer cleanup()
-	if out, err := runCommand(context.Background(), "nono", "profile", "validate", agentPath); err != nil {
-		r.details = append(r.details, "agent profile: "+strings.TrimSpace(string(out)))
-		r.hint = "the profile generated from [sandbox.agent] is not accepted by nono; " +
-			"see `agent-sandbox debug` for the JSON it produced"
-		return r
-	}
-	r.details = append(r.details, "agent profile: generated from [sandbox.agent], validated")
 
 	self, err := selfPath()
 	if err != nil {
@@ -237,7 +257,7 @@ func checkProfiles(cfg *config.Config) checkResult {
 			"investigate why os.Executable() failed and re-run doctor"
 		return r
 	}
-	writable, werr := profileAllowsWrite(path, self)
+	writable, werr := profileAllowsWrite(cmdPath, self)
 	if werr != nil {
 		r.details = append(r.details, fmt.Sprintf("error: could not ask nono whether %s is writable: %v", self, werr))
 		r.hint = "could not verify the broker binary is not writable through the command profile; " +
@@ -248,7 +268,7 @@ func checkProfiles(cfg *config.Config) checkResult {
 		r.details = append(r.details, "broker binary: "+self)
 		r.hint = "the command profile grants write access to the broker's own binary, so a command could " +
 			"replace what the next launch runs; narrow the grant that covers it (`nono why --profile " +
-			path + " --path " + self + " --op write` names it)"
+			cmdPath + " --path " + self + " --op write` names it)"
 		return r
 	}
 

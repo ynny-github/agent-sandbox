@@ -9,10 +9,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/broker"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 )
 
@@ -51,6 +53,31 @@ func stubRunCommand(rc func(context.Context, string, ...string) ([]byte, error))
 	orig := runCommand
 	runCommand = rc
 	return func() { runCommand = orig }
+}
+
+func stubRunCommandEnv(rc func(context.Context, []string, string, ...string) ([]byte, error)) func() {
+	orig := runCommandEnv
+	runCommandEnv = rc
+	return func() { runCommandEnv = orig }
+}
+
+// configWithBothProfiles writes a config plus both profiles beside it.
+func configWithBothProfiles(t *testing.T, dir string) *config.Config {
+	t.Helper()
+	for _, name := range []string{"command-profile.json", "claude-profile.json"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("{}"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
+	if err := os.WriteFile(cfgPath, []byte("tool_mode = \"hook\"\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	return cfg
 }
 
 func TestCheckNono_NotInPath(t *testing.T) {
@@ -109,11 +136,7 @@ func TestRunDoctor_AllOK(t *testing.T) {
 	stubAllSeamsOK(t)
 
 	dir := t.TempDir()
-	profile := filepath.Join(dir, "command-profile.json")
-	if err := os.WriteFile(profile, []byte(`{"filesystem":{"allow":["$WORKDIR"]}}`), 0o600); err != nil {
-		t.Fatalf("write profile: %v", err)
-	}
-	configWithProfile(t, dir, profile) // writes dir/agent-sandbox.toml
+	configWithBothProfiles(t, dir) // writes dir/agent-sandbox.toml
 	origConfigPath := configPath
 	configPath = filepath.Join(dir, "agent-sandbox.toml")
 	t.Cleanup(func() { configPath = origConfigPath })
@@ -121,6 +144,10 @@ func TestRunDoctor_AllOK(t *testing.T) {
 	// is never covered by the profile's filesystem.allow above.
 	restoreSelf := stubSelfPath(filepath.Join(t.TempDir(), "agent-sandbox"))
 	defer restoreSelf()
+	restoreEnv := stubRunCommandEnv(func(context.Context, []string, string, ...string) ([]byte, error) {
+		return []byte(brokerSocketProbeValue), nil
+	})
+	defer restoreEnv()
 
 	var buf bytes.Buffer
 	doctorCmd.SetOut(&buf)
@@ -141,6 +168,18 @@ func TestRunDoctor_NonoNG(t *testing.T) {
 	)
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 
+	dir := t.TempDir()
+	configWithBothProfiles(t, dir)
+	origConfigPath := configPath
+	configPath = filepath.Join(dir, "agent-sandbox.toml")
+	t.Cleanup(func() { configPath = origConfigPath })
+	restoreSelf := stubSelfPath(filepath.Join(t.TempDir(), "agent-sandbox"))
+	defer restoreSelf()
+	restoreEnv := stubRunCommandEnv(func(context.Context, []string, string, ...string) ([]byte, error) {
+		return []byte(brokerSocketProbeValue), nil
+	})
+	defer restoreEnv()
+
 	var buf bytes.Buffer
 	doctorCmd.SetOut(&buf)
 	t.Cleanup(func() { doctorCmd.SetOut(nil) })
@@ -160,6 +199,18 @@ func TestRunDoctor_RunsAllChecksEvenOnEarlyFailure(t *testing.T) {
 		func(context.Context, string, ...string) ([]byte, error) { return nil, nil },
 	)
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	dir := t.TempDir()
+	configWithBothProfiles(t, dir)
+	origConfigPath := configPath
+	configPath = filepath.Join(dir, "agent-sandbox.toml")
+	t.Cleanup(func() { configPath = origConfigPath })
+	restoreSelf := stubSelfPath(filepath.Join(t.TempDir(), "agent-sandbox"))
+	defer restoreSelf()
+	restoreEnv := stubRunCommandEnv(func(context.Context, []string, string, ...string) ([]byte, error) {
+		return []byte(brokerSocketProbeValue), nil
+	})
+	defer restoreEnv()
 
 	var buf bytes.Buffer
 	doctorCmd.SetOut(&buf)
@@ -185,6 +236,9 @@ func TestRunDoctor_MissingCommandProfileReportsActionableHint(t *testing.T) {
 
 	dir := t.TempDir()
 	missing := filepath.Join(dir, "command-profile.json") // never written
+	if err := os.WriteFile(filepath.Join(dir, "claude-profile.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatalf("write claude profile: %v", err)
+	}
 	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
 	body := "tool_mode = \"hook\"\ncommand_profile = " + strconv.Quote(missing) + "\n"
 	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
@@ -358,18 +412,105 @@ func stubSelfPath(path string) func() {
 	return func() { selfPath = prev }
 }
 
+// The agent profile must be validated too: it is now hand-written, so nono
+// rejecting it is a launch failure doctor exists to catch first.
+func TestCheckProfiles_ValidatesTheAgentProfile(t *testing.T) {
+	dir := t.TempDir()
+	cfg := configWithBothProfiles(t, dir)
+	var validated []string
+	restoreRun := stubRunCommand(func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "nono" && len(args) == 3 && args[1] == "validate" {
+			validated = append(validated, args[2])
+		}
+		return []byte(`{"status":"denied"}`), nil
+	})
+	defer restoreRun()
+	restoreEnv := stubRunCommandEnv(func(context.Context, []string, string, ...string) ([]byte, error) {
+		return []byte(brokerSocketProbeValue), nil
+	})
+	defer restoreEnv()
+	defer stubSelfPath("/usr/local/bin/agent-sandbox")()
+
+	got := checkProfiles(cfg)
+	if !got.ok {
+		t.Fatalf("checkProfiles ok = false, want true; details %v hint %q", got.details, got.hint)
+	}
+	if !slices.Contains(validated, filepath.Join(dir, "claude-profile.json")) {
+		t.Errorf("the agent profile was not validated; validated %v", validated)
+	}
+}
+
+// A profile that does not forward the broker socket variable produces a
+// session where every command fails for a reason nothing on screen explains.
+// nono cannot report env grants, so doctor measures instead.
+func TestCheckProfiles_FailsWhenTheSocketVarIsNotForwarded(t *testing.T) {
+	dir := t.TempDir()
+	cfg := configWithBothProfiles(t, dir)
+	restoreRun := stubRunCommand(func(context.Context, string, ...string) ([]byte, error) {
+		return []byte(`{"status":"denied"}`), nil
+	})
+	defer restoreRun()
+	restoreEnv := stubRunCommandEnv(func(context.Context, []string, string, ...string) ([]byte, error) {
+		return []byte("\n"), nil
+	})
+	defer restoreEnv()
+	defer stubSelfPath("/usr/local/bin/agent-sandbox")()
+
+	got := checkProfiles(cfg)
+	if got.ok {
+		t.Error("checkProfiles ok = true, want false when the socket variable is stripped")
+	}
+	if !strings.Contains(strings.Join(got.details, "\n"), broker.SocketEnvVar) {
+		t.Errorf("details must name the variable: %v", got.details)
+	}
+	if got.hint == "" {
+		t.Error("a failing check must carry a hint")
+	}
+}
+
+// Inside a session the probe would nest one nono sandbox in another. Skip it
+// and say so, rather than reporting a failure the operator cannot act on.
+func TestCheckProfiles_SkipsTheProbeInsideASession(t *testing.T) {
+	t.Setenv(broker.SocketEnvVar, "/tmp/some-broker.sock")
+	dir := t.TempDir()
+	cfg := configWithBothProfiles(t, dir)
+	restoreRun := stubRunCommand(func(context.Context, string, ...string) ([]byte, error) {
+		return []byte(`{"status":"denied"}`), nil
+	})
+	defer restoreRun()
+	probed := false
+	restoreEnv := stubRunCommandEnv(func(context.Context, []string, string, ...string) ([]byte, error) {
+		probed = true
+		return nil, nil
+	})
+	defer restoreEnv()
+	defer stubSelfPath("/usr/local/bin/agent-sandbox")()
+
+	got := checkProfiles(cfg)
+	if probed {
+		t.Error("the probe must not run inside a session")
+	}
+	if !got.ok {
+		t.Errorf("a skipped probe is not a failure; details %v hint %q", got.details, got.hint)
+	}
+	if !strings.Contains(strings.Join(got.details, "\n"), "skipped") {
+		t.Errorf("details must say the probe was skipped: %v", got.details)
+	}
+}
+
 func TestCheckProfiles_FailsWhenValidateRejects(t *testing.T) {
 	dir := t.TempDir()
-	profile := filepath.Join(dir, "command-profile.json")
-	if err := os.WriteFile(profile, []byte("{ not json"), 0o600); err != nil {
-		t.Fatalf("write profile: %v", err)
-	}
+	cfg := configWithBothProfiles(t, dir)
 	restore := stubRunCommand(func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		return []byte("JSON syntax invalid"), fmt.Errorf("exit status 1")
 	})
 	defer restore()
+	restoreEnv := stubRunCommandEnv(func(context.Context, []string, string, ...string) ([]byte, error) {
+		return []byte(brokerSocketProbeValue), nil
+	})
+	defer restoreEnv()
 
-	got := checkProfiles(configWithProfile(t, dir, profile))
+	got := checkProfiles(cfg)
 	if got.ok {
 		t.Errorf("checkProfiles ok = true, want false for a profile nono rejects")
 	}
@@ -383,6 +524,9 @@ func TestCheckProfiles_FailsWhenTheFileIsMissing(t *testing.T) {
 	present := filepath.Join(dir, "command-profile.json")
 	if err := os.WriteFile(present, []byte("{}"), 0o600); err != nil {
 		t.Fatalf("write profile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "claude-profile.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatalf("write claude profile: %v", err)
 	}
 	// config.Load itself already refuses a missing profile (validate's
 	// ErrCommandProfileMissing) — see TestRunDoctor_MissingCommandProfileReportsActionableHint
@@ -410,19 +554,20 @@ func TestCheckProfiles_FailsWhenTheFileIsMissing(t *testing.T) {
 // treated as "the binary is not writable".
 func TestCheckProfiles_FailsWhenSelfPathErrors(t *testing.T) {
 	dir := t.TempDir()
-	profile := filepath.Join(dir, "command-profile.json")
-	if err := os.WriteFile(profile, []byte(`{"filesystem":{"allow":["$WORKDIR"]}}`), 0o600); err != nil {
-		t.Fatalf("write profile: %v", err)
-	}
+	cfg := configWithBothProfiles(t, dir)
 	restoreRun := stubRunCommand(func(context.Context, string, ...string) ([]byte, error) {
 		return []byte("valid"), nil
 	})
 	defer restoreRun()
+	restoreEnv := stubRunCommandEnv(func(context.Context, []string, string, ...string) ([]byte, error) {
+		return []byte(brokerSocketProbeValue), nil
+	})
+	defer restoreEnv()
 	prevSelf := selfPath
 	selfPath = func() (string, error) { return "", fmt.Errorf("os.Executable: not implemented on this platform") }
 	defer func() { selfPath = prevSelf }()
 
-	got := checkProfiles(configWithProfile(t, dir, profile))
+	got := checkProfiles(cfg)
 	if got.ok {
 		t.Errorf("checkProfiles ok = true, want false when selfPath errors")
 	}
@@ -439,20 +584,21 @@ func TestCheckProfiles_FailsWhenSelfPathErrors(t *testing.T) {
 // writable": doctor reports what it could not determine instead of passing.
 func TestCheckProfiles_FailsWhenTheWriteQueryErrors(t *testing.T) {
 	dir := t.TempDir()
-	profile := filepath.Join(dir, "command-profile.json")
-	if err := os.WriteFile(profile, []byte(`{"filesystem":{"allow":["$WORKDIR"]}}`), 0o600); err != nil {
-		t.Fatalf("write profile: %v", err)
-	}
+	cfg := configWithBothProfiles(t, dir)
 	// Every nono call answers with something unparseable as a why result, so
 	// validate still passes and this exercises the query step alone.
 	restoreRun := stubRunCommand(func(context.Context, string, ...string) ([]byte, error) {
 		return []byte("Result: valid"), nil
 	})
 	defer restoreRun()
+	restoreEnv := stubRunCommandEnv(func(context.Context, []string, string, ...string) ([]byte, error) {
+		return []byte(brokerSocketProbeValue), nil
+	})
+	defer restoreEnv()
 	restoreSelf := stubSelfPath(filepath.Join(t.TempDir(), "agent-sandbox"))
 	defer restoreSelf()
 
-	got := checkProfiles(configWithProfile(t, dir, profile))
+	got := checkProfiles(cfg)
 	if got.ok {
 		t.Errorf("checkProfiles ok = true, want false when the writability query cannot be answered")
 	}
@@ -510,79 +656,50 @@ func nonoAnswers(validateErr error, whyStatus string) func(context.Context, stri
 	}
 }
 
-func TestCheckProfiles_ValidatesBothProfiles(t *testing.T) {
-	dir := t.TempDir()
-	profile := filepath.Join(dir, "command-profile.json")
-	if err := os.WriteFile(profile, []byte(`{"filesystem":{"allow":["$WORKDIR"]}}`), 0o600); err != nil {
-		t.Fatalf("write profile: %v", err)
-	}
-	var validated []string
-	restore := stubRunCommand(func(_ context.Context, _ string, args ...string) ([]byte, error) {
-		if len(args) > 2 && args[0] == "profile" && args[1] == "validate" {
-			validated = append(validated, args[2])
-			return []byte("Result: valid"), nil
-		}
-		return []byte("{\"status\":\"denied\"}"), nil
-	})
-	defer restore()
-	restoreSelf := stubSelfPath(filepath.Join(t.TempDir(), "agent-sandbox"))
-	defer restoreSelf()
-
-	got := checkProfiles(configWithProfile(t, dir, profile))
-	if !got.ok {
-		t.Fatalf("checkProfiles ok = false: details=%v hint=%q", got.details, got.hint)
-	}
-	// The agent profile is generated into a temp file, so its path is not
-	// predictable — what matters is that two distinct profiles were validated
-	// and the operator's own is one of them.
-	if len(validated) != 2 {
-		t.Fatalf("validated %d profiles, want 2: %v", len(validated), validated)
-	}
-	if validated[0] != profile {
-		t.Errorf("first validated profile = %q, want the command profile %q", validated[0], profile)
-	}
-	if validated[1] == profile {
-		t.Errorf("second validated profile = %q, want the generated agent profile", validated[1])
-	}
-}
-
 func TestCheckProfiles_FailsWhenTheAgentProfileIsRejected(t *testing.T) {
 	dir := t.TempDir()
-	profile := filepath.Join(dir, "command-profile.json")
-	if err := os.WriteFile(profile, []byte(`{"filesystem":{"allow":["$WORKDIR"]}}`), 0o600); err != nil {
-		t.Fatalf("write profile: %v", err)
-	}
+	cfg := configWithBothProfiles(t, dir)
+	commandProfile := filepath.Join(dir, "command-profile.json")
 	restore := stubRunCommand(func(_ context.Context, _ string, args ...string) ([]byte, error) {
-		if len(args) > 2 && args[0] == "profile" && args[1] == "validate" && args[2] != profile {
+		if len(args) > 2 && args[0] == "profile" && args[1] == "validate" && args[2] != commandProfile {
 			return []byte("Group 'nope' not found in policy.json"), fmt.Errorf("exit status 1")
 		}
 		return []byte("Result: valid"), nil
 	})
 	defer restore()
+	restoreEnv := stubRunCommandEnv(func(context.Context, []string, string, ...string) ([]byte, error) {
+		return []byte(brokerSocketProbeValue), nil
+	})
+	defer restoreEnv()
 	restoreSelf := stubSelfPath(filepath.Join(t.TempDir(), "agent-sandbox"))
 	defer restoreSelf()
 
-	got := checkProfiles(configWithProfile(t, dir, profile))
+	got := checkProfiles(cfg)
 	if got.ok {
-		t.Fatal("checkProfiles ok = true, want false when nono rejects the generated agent profile")
+		t.Fatal("checkProfiles ok = true, want false when nono rejects the agent profile")
 	}
-	if !strings.Contains(got.hint, "[sandbox.agent]") {
-		t.Errorf("hint = %q, want it to point at the config section that produced the profile", got.hint)
+	if !strings.Contains(got.hint, "[agents.claude].profile") {
+		t.Errorf("hint = %q, want it to point at the config field that names the profile", got.hint)
 	}
 }
 
 func TestCheckProfiles_FailsWhenNonoSaysTheBinaryIsWritable(t *testing.T) {
 	dir := t.TempDir()
-	profile := filepath.Join(dir, "command-profile.json")
-	if err := os.WriteFile(profile, []byte(`{"filesystem":{"allow":["`+dir+`"]}}`), 0o600); err != nil {
+	cfg := configWithBothProfiles(t, dir)
+	commandProfile := filepath.Join(dir, "command-profile.json")
+	if err := os.WriteFile(commandProfile, []byte(`{"filesystem":{"allow":["`+dir+`"]}}`), 0o600); err != nil {
 		t.Fatalf("write profile: %v", err)
 	}
 	restore := stubRunCommand(nonoAnswers(nil, "allowed"))
 	defer restore()
+	restoreEnv := stubRunCommandEnv(func(context.Context, []string, string, ...string) ([]byte, error) {
+		return []byte(brokerSocketProbeValue), nil
+	})
+	defer restoreEnv()
 	restoreSelf := stubSelfPath(filepath.Join(dir, "agent-sandbox"))
 	defer restoreSelf()
 
-	got := checkProfiles(configWithProfile(t, dir, profile))
+	got := checkProfiles(cfg)
 	if got.ok {
 		t.Fatal("checkProfiles ok = true, want false when nono reports the broker binary writable")
 	}

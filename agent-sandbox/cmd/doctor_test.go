@@ -525,9 +525,26 @@ func TestCheckProfiles_FailsWhenTheFileIsMissing(t *testing.T) {
 	if err := os.WriteFile(present, []byte("{}"), 0o600); err != nil {
 		t.Fatalf("write profile: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "claude-profile.json"), []byte("{}"), 0o600); err != nil {
+	agentProfile := filepath.Join(dir, "claude-profile.json")
+	if err := os.WriteFile(agentProfile, []byte("{}"), 0o600); err != nil {
 		t.Fatalf("write claude profile: %v", err)
 	}
+	// The agent profile exists and must validate cleanly so the failure this
+	// test pins is unambiguously the command profile's. Stub runCommand so no
+	// real nono process is invoked for that agent-profile validate call: the
+	// checkProfiles path here (broker socket probe, self path, writability
+	// query) never runs, because command profile validation fails on its
+	// missing-file os.Stat before any of that, but the agent-profile validate
+	// call above it does reach runCommand.
+	var validated []string
+	restoreRun := stubRunCommand(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if len(args) == 3 && args[1] == "validate" {
+			validated = append(validated, args[2])
+		}
+		return []byte("Result: valid"), nil
+	})
+	defer restoreRun()
+
 	// config.Load itself already refuses a missing profile (validate's
 	// ErrCommandProfileMissing) — see TestRunDoctor_MissingCommandProfileReportsActionableHint
 	// for that path through runDoctor. Build the *Config while the file still
@@ -545,6 +562,19 @@ func TestCheckProfiles_FailsWhenTheFileIsMissing(t *testing.T) {
 	}
 	if got.hint == "" {
 		t.Errorf("a failing check must carry a hint")
+	}
+	joined := strings.Join(got.details, "\n")
+	if !strings.Contains(joined, "command profile: not found: "+present) {
+		t.Errorf("expected the failure to name the missing command profile %q, got details %v", present, got.details)
+	}
+	if strings.Contains(joined, "agent profile: not found") {
+		t.Errorf("the agent profile exists and should validate cleanly, got details %v", got.details)
+	}
+	if !slices.Contains(validated, agentProfile) {
+		t.Errorf("expected the agent profile to be validated through the stub, got %v", validated)
+	}
+	if slices.Contains(validated, present) {
+		t.Errorf("the command profile is missing, so its os.Stat failure must short-circuit before any nono call: got %v", validated)
 	}
 }
 

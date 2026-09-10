@@ -669,9 +669,7 @@ Four properties worth knowing before writing your own:
   resolving the session entrypoint at all. This also means PATH resolution
   finds whichever `agent-sandbox` comes first on it, not necessarily the one
   you meant: a stale copy or an unrelated program sharing the name, earlier
-  on that PATH, would silently become the broker instead. `agent-sandbox
-  doctor` checks that resolving the entrypoint through this process's own
-  PATH lands back on this exact binary.
+  on that PATH, would silently become the broker instead.
 - **Enumerating every runnable command is the real cost of this design.**
   The broker will not *dispatch* a program absent from both tiers, which is
   the allowlist working as intended — and also the profile's recurring

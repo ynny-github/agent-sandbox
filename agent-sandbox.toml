@@ -3,6 +3,13 @@
   # injects at launch via --settings (nothing is stored in .claude/settings.json).
   tool_mode = "hook"
 
+  # The nono profile the launched agent runs under, resolved beside this file.
+  # "claude-profile.json" is the default name for the "claude" agent, so this
+  # key could be omitted; it is written out because the file it names is the
+  # whole of the agent's host access.
+  [agents.claude]
+  profile = "claude-profile.json"
+
   # [sandbox.agent] is the only profile agent-sandbox generates: the host
   # access of the launched agent process itself (its own file tools, and any
   # MCP server it spawns as a direct child — those are not brokered, so a

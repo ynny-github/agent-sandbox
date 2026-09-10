@@ -16,13 +16,12 @@ func denyReadRule(absPath string) string {
 
 // settingsJSON builds the compact Claude Code settings JSON injected via
 // `claude --settings`. In hook mode it registers the PreToolUse hook for Bash
-// and Monitor, routing through `agent-sandbox hook`. denyRules
-// (capability-derived permission deny rules) are merged into permissions.deny.
-// When mcpConfigPath is non-empty (the github MCP is active) it also adds the
-// deny rule that blocks reading the generated MCP config file (it embeds the
-// token) plus the github repos write-tool deny rules. It returns "" when
-// nothing applies, signaling the caller to inject no --settings flag.
-func settingsJSON(mcpConfigPath string, hookMode bool, denyRules []string) (string, error) {
+// and Monitor, routing through `agent-sandbox hook`. When mcpConfigPath is
+// non-empty (the github MCP is active) it also adds the deny rule that blocks
+// reading the generated MCP config file (it embeds the token) plus the github
+// repos write-tool deny rules. It returns "" when nothing applies, signaling
+// the caller to inject no --settings flag.
+func settingsJSON(mcpConfigPath string, hookMode bool) (string, error) {
 	settings := map[string]any{}
 	if hookMode {
 		entry := func(matcher string) map[string]any {
@@ -36,7 +35,7 @@ func settingsJSON(mcpConfigPath string, hookMode bool, denyRules []string) (stri
 		}
 	}
 
-	deny := append([]string{}, denyRules...)
+	var deny []string
 	if mcpConfigPath != "" {
 		deny = append(deny, denyReadRule(mcpConfigPath))
 		// The github MCP is active: block its repos write tools so the agent

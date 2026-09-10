@@ -61,7 +61,7 @@ func runDebug(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	_, nonoArgs, err := claude.BuildArgs(cfg, opts, "", profilePath, r.DenyRules, brokerSocket)
+	_, nonoArgs, err := claude.BuildArgs(cfg, opts, "", profilePath, brokerSocket)
 	if err != nil {
 		return err
 	}

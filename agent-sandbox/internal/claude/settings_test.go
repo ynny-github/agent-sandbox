@@ -7,7 +7,7 @@ import (
 )
 
 func TestHookSettingsJSON(t *testing.T) {
-	got, err := settingsJSON("", true, nil)
+	got, err := settingsJSON("", true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestHookSettingsJSON(t *testing.T) {
 }
 
 func TestSettingsJSON_DenyRuleForMCPPath(t *testing.T) {
-	got, err := settingsJSON("/tmp/asb-mcp-1.json", false, nil)
+	got, err := settingsJSON("/tmp/asb-mcp-1.json", false)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestSettingsJSON_DenyRuleForMCPPath(t *testing.T) {
 }
 
 func TestSettingsJSON_HookAndDenyCombined(t *testing.T) {
-	got, err := settingsJSON("/tmp/asb-mcp-1.json", true, nil)
+	got, err := settingsJSON("/tmp/asb-mcp-1.json", true)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestSettingsJSON_HookAndDenyCombined(t *testing.T) {
 }
 
 func TestSettingsJSON_EmptyWhenNothing(t *testing.T) {
-	got, err := settingsJSON("", false, nil)
+	got, err := settingsJSON("", false)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -89,30 +89,8 @@ func TestDenyReadRule(t *testing.T) {
 	}
 }
 
-func TestSettingsJSON_DenyRulesFromCapabilities(t *testing.T) {
-	got, err := settingsJSON("", false, []string{"Read(~/.ssh/**)", "Grep(~/.ssh/**)"})
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
-	if !strings.Contains(got, `"deny"`) ||
-		!strings.Contains(got, "Read(~/.ssh/**)") ||
-		!strings.Contains(got, "Grep(~/.ssh/**)") {
-		t.Errorf("expected capability deny rules; got %q", got)
-	}
-}
-
-func TestSettingsJSON_MergesCapabilityAndMCPDeny(t *testing.T) {
-	got, err := settingsJSON("/tmp/asb-mcp-1.json", false, []string{"Read(~/.ssh/**)"})
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
-	if !strings.Contains(got, "Read(~/.ssh/**)") || !strings.Contains(got, "Read(//tmp/asb-mcp-1.json)") {
-		t.Errorf("expected both capability and mcp deny rules; got %q", got)
-	}
-}
-
 func TestSettingsJSON_EmptyWhenNoDenyNoHook(t *testing.T) {
-	got, err := settingsJSON("", false, nil)
+	got, err := settingsJSON("", false)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -122,7 +100,7 @@ func TestSettingsJSON_EmptyWhenNoDenyNoHook(t *testing.T) {
 }
 
 func TestSettingsJSON_BlocksGithubRepoWritesWhenMCPActive(t *testing.T) {
-	got, err := settingsJSON("/tmp/asb-mcp-1.json", false, nil)
+	got, err := settingsJSON("/tmp/asb-mcp-1.json", false)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -141,7 +119,7 @@ func TestSettingsJSON_BlocksGithubRepoWritesWhenMCPActive(t *testing.T) {
 }
 
 func TestSettingsJSON_NoGithubDenyWithoutMCP(t *testing.T) {
-	got, err := settingsJSON("", true, nil)
+	got, err := settingsJSON("", true)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}

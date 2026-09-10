@@ -68,7 +68,7 @@ func TestValidatePassthrough_MCPConfigAllowedWhenDisabled(t *testing.T) {
 func TestBuildArgs_NonoNotInPath(t *testing.T) {
 	t.Setenv("PATH", "")
 	cfg := &config.Config{}
-	if _, _, err := BuildArgs(cfg, Options{}, "", "", nil, ""); err == nil {
+	if _, _, err := BuildArgs(cfg, Options{}, "", "", ""); err == nil {
 		t.Fatal("expected error when nono not in PATH, got nil")
 	}
 }
@@ -137,7 +137,7 @@ func argsIndex(args []string, target string) int {
 func TestBuildArgs_AlwaysUsesWrap(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{}
-	_, args, err := BuildArgs(cfg, Options{}, "", "", nil, "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestBuildArgs_AlwaysUsesWrap(t *testing.T) {
 func TestBuildArgs_McpMode_DisablesTools(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{}, "", "", nil, "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestBuildArgs_McpMode_DisablesTools(t *testing.T) {
 func TestBuildArgs_HookMode_InjectsSettings(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "hook"}
-	_, args, err := BuildArgs(cfg, Options{}, "", "", nil, "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -194,7 +194,7 @@ func TestBuildArgs_HookMode_InjectsSettings(t *testing.T) {
 func TestBuildArgs_McpMode_NoReadFile(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{}, "", "", nil, "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestBuildArgs_McpMode_NoReadFile(t *testing.T) {
 func TestBuildArgs_InjectsProfileBeforeClaude(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{}, "", "/tmp/asb-profile-1.json", nil, "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "/tmp/asb-profile-1.json", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -220,23 +220,10 @@ func TestBuildArgs_InjectsProfileBeforeClaude(t *testing.T) {
 	}
 }
 
-func TestBuildArgs_InjectsCapabilityDeny(t *testing.T) {
-	makeFakeNono(t)
-	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{}, "", "/tmp/p.json", []string{"Read(~/.ssh/**)"}, "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	si := argsIndex(args, "--settings")
-	if si < 0 || !strings.Contains(args[si+1], "Read(~/.ssh/**)") {
-		t.Errorf("expected --settings with capability deny rule; got %v", args)
-	}
-}
-
 func TestBuildArgs_ClaudeOptsAfterClaude(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{ClaudeOpts: []string{"--model", "opus"}}, "", "", nil, "")
+	_, args, err := BuildArgs(cfg, Options{ClaudeOpts: []string{"--model", "opus"}}, "", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -253,7 +240,7 @@ func TestBuildArgs_ClaudeOptsAfterClaude(t *testing.T) {
 func TestBuildArgs_InjectsSystemPrompt(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{}, "", "", nil, "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -272,7 +259,7 @@ func TestBuildArgs_InjectsSystemPrompt(t *testing.T) {
 func TestBuildArgs_InjectsMCPConfig(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{}, "/tmp/asb-mcp-1.json", "", nil, "")
+	_, args, err := BuildArgs(cfg, Options{}, "/tmp/asb-mcp-1.json", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -298,7 +285,7 @@ func TestBuildArgs_InjectsMCPConfig(t *testing.T) {
 func TestBuildArgs_HookMode_MCPConfig_DenyAndHooks(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "hook"}
-	_, args, err := BuildArgs(cfg, Options{}, "/tmp/asb-mcp-1.json", "", nil, "")
+	_, args, err := BuildArgs(cfg, Options{}, "/tmp/asb-mcp-1.json", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -315,7 +302,7 @@ func TestBuildArgs_HookMode_MCPConfig_DenyAndHooks(t *testing.T) {
 func TestBuildArgs_NoMCPConfig_Unchanged(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{}, "", "", nil, "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -399,7 +386,7 @@ func TestParseArgs_EnvRefs(t *testing.T) {
 func TestBuildArgs_GrantsBrokerSocket(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "hook"}
-	_, args, err := BuildArgs(cfg, Options{}, "", "", nil, "/tmp/b.sock")
+	_, args, err := BuildArgs(cfg, Options{}, "", "", "/tmp/b.sock")
 	if err != nil {
 		t.Fatalf("BuildArgs() error = %v", err)
 	}
@@ -461,8 +448,8 @@ func TestRun_StartBrokerFailure_DoesNotLaunch(t *testing.T) {
 	superviseCalls := 0
 	exitCalls := 0
 	err := run(&config.Config{ToolMode: "mcp"}, Options{}, runDeps{
-		writeProfile: func(*config.Config) (string, []string, func(), error) {
-			return "/tmp/asb-profile-1.json", nil, func() {}, nil
+		agentProfile: func(*config.Config) (string, error) {
+			return "/tmp/asb-profile-1.json", nil
 		},
 		startBroker: func(*config.Config) (string, func(), error) {
 			return "", nil, errors.New("broker start error")
@@ -485,8 +472,8 @@ func TestRun_ExitReceivesSuperviseCode(t *testing.T) {
 	makeFakeNono(t)
 	gotExit := -1
 	err := run(&config.Config{ToolMode: "mcp"}, Options{}, runDeps{
-		writeProfile: func(*config.Config) (string, []string, func(), error) {
-			return "/tmp/asb-profile-1.json", nil, func() {}, nil
+		agentProfile: func(*config.Config) (string, error) {
+			return "/tmp/asb-profile-1.json", nil
 		},
 		startBroker: testBrokerStart("/tmp/test.sock", nil),
 		supervise:   func(string, []string) int { return 3 },
@@ -505,8 +492,8 @@ func TestRun_BrokerCleanupBeforeExit(t *testing.T) {
 	cleaned := 0
 	cleanedBeforeExit := false
 	err := run(&config.Config{ToolMode: "mcp"}, Options{}, runDeps{
-		writeProfile: func(*config.Config) (string, []string, func(), error) {
-			return "/tmp/asb-profile-1.json", nil, func() {}, nil
+		agentProfile: func(*config.Config) (string, error) {
+			return "/tmp/asb-profile-1.json", nil
 		},
 		startBroker: testBrokerStart("/tmp/test.sock", &cleaned),
 		supervise:   func(string, []string) int { return 0 },
@@ -529,8 +516,8 @@ func TestRun_SetsBrokerSocketEnvBeforeSupervise(t *testing.T) {
 	const wantSocket = "/tmp/test-env-handoff.sock"
 	var gotEnv string
 	err := run(&config.Config{ToolMode: "mcp"}, Options{}, runDeps{
-		writeProfile: func(*config.Config) (string, []string, func(), error) {
-			return "/tmp/asb-profile-1.json", nil, func() {}, nil
+		agentProfile: func(*config.Config) (string, error) {
+			return "/tmp/asb-profile-1.json", nil
 		},
 		startBroker: testBrokerStart(wantSocket, nil),
 		supervise: func(string, []string) int {
@@ -558,8 +545,8 @@ func TestRun_GithubMCPEnabled_WritesAndCleansConfig(t *testing.T) {
 			wrote++
 			return "/tmp/asb-mcp-1.json", func() { cleaned++ }, nil
 		},
-		writeProfile: func(*config.Config) (string, []string, func(), error) {
-			return "/tmp/asb-profile-1.json", nil, func() {}, nil
+		agentProfile: func(*config.Config) (string, error) {
+			return "/tmp/asb-profile-1.json", nil
 		},
 		startBroker: testBrokerStart("/tmp/test.sock", nil),
 		supervise:   func(string, []string) int { return 0 },
@@ -582,8 +569,8 @@ func TestRun_GithubMCPDisabled_SkipsConfig(t *testing.T) {
 	wrote := 0
 	err := run(&config.Config{ToolMode: "mcp"}, Options{}, runDeps{
 		writeMCPConfig: func(*config.Config) (string, func(), error) { wrote++; return "", func() {}, nil },
-		writeProfile: func(*config.Config) (string, []string, func(), error) {
-			return "/tmp/asb-profile-1.json", nil, func() {}, nil
+		agentProfile: func(*config.Config) (string, error) {
+			return "/tmp/asb-profile-1.json", nil
 		},
 		startBroker: testBrokerStart("/tmp/test.sock", nil),
 		supervise:   func(string, []string) int { return 0 },
@@ -878,4 +865,69 @@ func loadConfigWithCommandProfile(t *testing.T, dir, profile string) *config.Con
 		t.Fatalf("Load: %v", err)
 	}
 	return cfg
+}
+
+// writeLaunchFixture writes a loadable config plus the two profiles beside it
+// and returns the directory and the loaded config.
+func writeLaunchFixture(t *testing.T, withAgentProfile bool) (string, *config.Config) {
+	t.Helper()
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
+	body := "tool_mode = \"mcp\"\n\n[mcp]\ncommand_output_dir = \"/tmp/asb-out\"\n"
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "command-profile.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatalf("write command profile: %v", err)
+	}
+	if withAgentProfile {
+		if err := os.WriteFile(filepath.Join(dir, "claude-profile.json"), []byte("{}"), 0o600); err != nil {
+			t.Fatalf("write agent profile: %v", err)
+		}
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	return dir, cfg
+}
+
+func TestRun_PassesTheConfiguredAgentProfileToNono(t *testing.T) {
+	makeFakeNono(t)
+	dir, cfg := writeLaunchFixture(t, true)
+
+	var gotArgs []string
+	err := run(cfg, Options{}, runDeps{
+		agentProfile: defaultAgentProfile,
+		startBroker:  testBrokerStart("/tmp/test.sock", nil),
+		supervise:    func(_ string, args []string) int { gotArgs = args; return 0 },
+		exit:         func(int) {},
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	want := filepath.Join(dir, "claude-profile.json")
+	i := argsIndex(gotArgs, "--profile")
+	if i < 0 || i+1 >= len(gotArgs) || gotArgs[i+1] != want {
+		t.Errorf("--profile must name the configured agent profile %q; got %v", want, gotArgs)
+	}
+}
+
+func TestRun_MissingAgentProfileFailsBeforeLaunch(t *testing.T) {
+	makeFakeNono(t)
+	_, cfg := writeLaunchFixture(t, false)
+
+	supervised := 0
+	err := run(cfg, Options{}, runDeps{
+		agentProfile: defaultAgentProfile,
+		startBroker:  testBrokerStart("/tmp/test.sock", nil),
+		supervise:    func(string, []string) int { supervised++; return 0 },
+		exit:         func(int) {},
+	})
+	if !errors.Is(err, config.ErrAgentProfileMissing) {
+		t.Fatalf("run error = %v, want ErrAgentProfileMissing", err)
+	}
+	if supervised != 0 {
+		t.Errorf("claude must not be launched when the agent profile is missing")
+	}
 }

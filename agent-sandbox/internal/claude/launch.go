@@ -18,7 +18,6 @@ import (
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/gitutil"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/policysnapshot"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandboxhost"
 )
 
 // agentName identifies the launched agent for host-policy resolution. Only
@@ -96,13 +95,13 @@ func ValidatePassthrough(claudeOpts []string, githubMCPEnabled bool) error {
 }
 
 // BuildArgs constructs the nono executable path and the argv used to launch
-// Claude under the sandbox for cfg. It injects the generated profile at
+// Claude under the sandbox for cfg. It injects the operator's profile at
 // profilePath via `--profile` (no user nono options are forwarded) and, in
 // hook mode, injects the PreToolUse hook via `claude --settings`; otherwise it
-// disables the Bash and Monitor tools. denyRules are folded into the injected
-// settings as additional capability denies.
+// disables the Bash and Monitor tools. The injected settings carry the hook
+// and the GitHub MCP denies only; the profile contributes nothing to them.
 func BuildArgs(cfg *config.Config, opts Options, mcpConfigPath,
-	profilePath string, denyRules []string, brokerSocket string) (string, []string, error) {
+	profilePath string, brokerSocket string) (string, []string, error) {
 	nonoPath, err := exec.LookPath("nono")
 	if err != nil {
 		return "", nil, fmt.Errorf("nono not found in PATH: %w", err)
@@ -129,7 +128,7 @@ func BuildArgs(cfg *config.Config, opts Options, mcpConfigPath,
 	args = append(args, "claude")
 	args = append(args, "--append-system-prompt", agentconfig.Pointer())
 
-	settingsStr, err := settingsJSON(mcpConfigPath, cfg.ToolMode == "hook", denyRules)
+	settingsStr, err := settingsJSON(mcpConfigPath, cfg.ToolMode == "hook")
 	if err != nil {
 		return "", nil, err
 	}
@@ -151,10 +150,24 @@ func BuildArgs(cfg *config.Config, opts Options, mcpConfigPath,
 // touching the command broker, the real process, or os.Exit.
 type runDeps struct {
 	writeMCPConfig func(*config.Config) (string, func(), error)
-	writeProfile   func(*config.Config) (path string, deny []string, cleanup func(), err error)
-	startBroker    func(*config.Config) (socket string, cleanup func(), err error)
-	supervise      func(path string, args []string) int
-	exit           func(code int)
+	// agentProfile resolves — and existence-checks — the nono profile the
+	// launched agent runs under. It stays a dependency so tests can drive run
+	// without touching the filesystem.
+	agentProfile func(*config.Config) (string, error)
+	startBroker  func(*config.Config) (socket string, cleanup func(), err error)
+	supervise    func(path string, args []string) int
+	exit         func(code int)
+}
+
+// defaultAgentProfile resolves the launched agent's profile path from cfg and
+// fails when it is not on disk. Nothing here opens the file: nono reads it at
+// launch, and doctor asks nono to validate it. agent-sandbox only names it.
+func defaultAgentProfile(c *config.Config) (string, error) {
+	path := c.AgentProfilePath(agentName)
+	if _, err := os.Stat(path); err != nil {
+		return "", fmt.Errorf("%w: %s", config.ErrAgentProfileMissing, path)
+	}
+	return path, nil
 }
 
 // Run generates the sandbox profile, starts the command broker, launches
@@ -164,20 +177,10 @@ type runDeps struct {
 func Run(cfg *config.Config, opts Options) error {
 	return run(cfg, opts, runDeps{
 		writeMCPConfig: writeGithubMCPConfig,
-		writeProfile: func(c *config.Config) (string, []string, func(), error) {
-			r, err := sandboxhost.Resolve(c, agentName)
-			if err != nil {
-				return "", nil, nil, err
-			}
-			path, cleanup, err := r.WriteProfile()
-			if err != nil {
-				return "", nil, nil, err
-			}
-			return path, r.DenyRules, cleanup, nil
-		},
-		startBroker: startCommandBroker,
-		supervise:   superviseProcess,
-		exit:        os.Exit,
+		agentProfile:   defaultAgentProfile,
+		startBroker:    startCommandBroker,
+		supervise:      superviseProcess,
+		exit:           os.Exit,
 	})
 }
 
@@ -198,15 +201,10 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 		}
 	}()
 
-	profilePath, denyRules, cleanupProfile, err := d.writeProfile(cfg)
+	profilePath, err := d.agentProfile(cfg)
 	if err != nil {
-		return fmt.Errorf("sandbox host profile: %w", err)
+		return err
 	}
-	defer func() {
-		if cleanupProfile != nil {
-			cleanupProfile()
-		}
-	}()
 
 	brokerSocket, cleanupBroker, err := d.startBroker(cfg)
 	if err != nil {
@@ -218,7 +216,7 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 		}
 	}()
 
-	nonoPath, nonoArgs, err := BuildArgs(cfg, opts, mcpConfigPath, profilePath, denyRules, brokerSocket)
+	nonoPath, nonoArgs, err := BuildArgs(cfg, opts, mcpConfigPath, profilePath, brokerSocket)
 	if err != nil {
 		return err
 	}
@@ -232,10 +230,6 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 	if cleanupMCP != nil {
 		cleanupMCP()
 		cleanupMCP = nil
-	}
-	if cleanupProfile != nil {
-		cleanupProfile()
-		cleanupProfile = nil
 	}
 	if cleanupBroker != nil {
 		cleanupBroker()

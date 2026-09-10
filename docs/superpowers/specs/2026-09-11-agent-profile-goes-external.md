@@ -331,11 +331,25 @@ Added:
 With the deny rules gone, `~/.docker/config.json` — which holds registry
 credentials — is readable through the agent's own Read tool, because GitHub MCP
 needs the directory and the profile must grant it. This is the only credential
-path that survives the trim; `~/.ssh`, `~/.cargo`, and `~/.dart-tool` are no
-longer granted at all, so their deny rules had nothing left to protect.
+path this repository's own profile grants directly; `~/.ssh` and
+`~/.dart-tool` are not granted at all, so their deny rules had nothing left to
+protect.
 
 An operator who does not use GitHub MCP removes the two `read` entries and the
 `bypass_protection` line, and the residual is gone.
+
+## Accepted residual: `~/.cargo/credentials.toml` is readable, from the base profile
+
+`claude-profile.json` declares `"extends": "claude"`, nono's own base profile
+for this agent. That base grants `group:rust_runtime`, which reaches all of
+`~/.cargo` — credentials file included — and nothing in this document's config
+surface can narrow it; measured directly with `nono why --profile
+claude-profile.json --path ~/.cargo/credentials.toml --op read`, which answers
+`ALLOWED` (`Source: group:rust_runtime`). This is not something agent-sandbox
+writes, and not a regression from before this branch: the old generated
+profile also set `extends: "claude"` (`internal/sandboxhost`, deleted by this
+branch), so the same base, and the same grant, applied under the generator
+too.
 
 ## Follow-on work
 
@@ -344,3 +358,7 @@ An operator who does not use GitHub MCP removes the two `read` entries and the
 - If hand-written agent profiles drift into repetition across projects, nono's
   own named profiles (`~/.config/nono/profiles/`) are the place to factor them —
   `extends` accepts a profile name, and *measured*, it does not accept a path.
+- A doctor check that fails if `AGENT_SANDBOX_BROKER_SOCKET` survives into the
+  command sandbox — the inverse of the probe this branch added, which checks
+  that the variable *does* reach the agent profile — was considered and
+  deferred.

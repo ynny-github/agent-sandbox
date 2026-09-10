@@ -209,7 +209,7 @@ func validate(cfg *Config) (*Config, error) {
 
 	if _, err := os.Stat(cfg.CommandProfilePath()); err != nil {
 		// Unlike the other validate failures below, cfg itself is returned
-		// alongside this error: doctor's checkCommandProfile needs
+		// alongside this error: doctor's checkProfiles needs
 		// cfg.CommandProfilePath() to report the dedicated, actionable
 		// "write the profile, or point command_profile at it" hint instead of
 		// the generic "fix the config first" one — see cmd/doctor.go.

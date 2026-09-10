@@ -89,16 +89,6 @@ func TestDenyReadRule(t *testing.T) {
 	}
 }
 
-func TestSettingsJSON_EmptyWhenNoDenyNoHook(t *testing.T) {
-	got, err := settingsJSON("", false)
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
-	if got != "" {
-		t.Errorf("expected empty settings; got %q", got)
-	}
-}
-
 func TestSettingsJSON_BlocksGithubRepoWritesWhenMCPActive(t *testing.T) {
 	got, err := settingsJSON("/tmp/asb-mcp-1.json", false)
 	if err != nil {

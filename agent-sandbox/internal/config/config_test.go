@@ -107,7 +107,7 @@ func TestValidateRejectsMissingCommandProfile(t *testing.T) {
 		t.Fatalf("Load error = %v, want ErrCommandProfileMissing", err)
 	}
 	// Unlike every other validate failure, this one still returns cfg: doctor's
-	// checkCommandProfile (cmd/doctor.go) needs cfg.CommandProfilePath() to
+	// checkProfiles (cmd/doctor.go) needs cfg.CommandProfilePath() to
 	// report its own dedicated, actionable hint instead of the generic
 	// "fix the config first" one.
 	if cfg == nil {

@@ -5,6 +5,11 @@ tool_mode = "mcp"
 
 # The nono profile every brokered command runs under. Default name, resolved
 # beside this file. agent-sandbox does not generate or read it.
+#
+# NEVER add AGENT_SANDBOX_BROKER_SOCKET to this profile's
+# environment.allow_vars (nor a wildcard that would match it). A command that
+# can reach the broker socket can recurse into the broker, which spawns
+# handlers with no concurrency cap — a host-side fork bomb.
 command_profile = "command-profile.json"
 
 [mcp]

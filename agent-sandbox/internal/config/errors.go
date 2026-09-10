@@ -22,9 +22,9 @@ var ErrMovedCommandTiers = errors.New("sandbox.agent.allow_commands / drop_comma
 
 // ErrMovedSharedToAgent fires on [sandbox.shared], which existed only because
 // agent-sandbox used to generate two profiles that both needed some of the
-// same grants. Now it generates one — the agent's — so there is nothing left
-// for a shared base to feed.
-var ErrMovedSharedToAgent = errors.New("sandbox.shared is no longer supported: it existed to feed both profiles, and only the agent profile is generated now; write its keys under [sandbox.agent]")
+// same grants. It generates neither now — both are files the operator writes
+// in nono's own schema — so there is nothing left for a shared base to feed.
+var ErrMovedSharedToAgent = errors.New("sandbox.shared is no longer supported: agent-sandbox does not generate nono profiles; write the grants in the profile named by [agents.<name>].profile")
 
 // ErrMovedShellToProfile fires on [sandbox.shell]. The sandbox it used to
 // configure — the one each brokered command ran in — no longer exists as
@@ -33,10 +33,10 @@ var ErrMovedSharedToAgent = errors.New("sandbox.shared is no longer supported: i
 var ErrMovedShellToProfile = errors.New("sandbox.shell is no longer supported: the sandbox brokered commands run in is the command profile, which you write")
 
 // ErrCommandProfileMissing fires when the nono profile the broker runs under is
-// not on disk. There is deliberately no built-in fallback: a static default
-// cannot absorb the host differences the capability catalog handles for the
-// agent profile (/nix/store versus /usr/bin), and a profile that looks present
-// but refuses every command is the worst failure mode available.
+// not on disk. There is deliberately no built-in fallback: agent-sandbox does
+// not generate profiles, a static default cannot absorb host differences
+// (/nix/store versus /usr/bin), and a profile that looks present but refuses
+// every command is the worst failure mode available.
 var ErrCommandProfileMissing = errors.New("command profile not found; write it, or point command_profile at it")
 
 // ErrAgentProfileMissing fires when the nono profile the launched agent runs

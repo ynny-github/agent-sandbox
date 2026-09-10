@@ -188,6 +188,12 @@ func TestBuildArgs_HookMode_InjectsSettings(t *testing.T) {
 	if si < ci {
 		t.Errorf("--settings must appear after claude; got %v", args)
 	}
+	// With no MCP config path (the "" passed to BuildArgs above), there is no
+	// GitHub-MCP deny rule to add, so the settings JSON must carry the hook
+	// and nothing else — in particular no "permissions" key at all.
+	if strings.Contains(val, `"permissions"`) {
+		t.Errorf("--settings value should have no permissions key without an MCP config path; got %q", val)
+	}
 }
 
 func TestBuildArgs_McpMode_NoReadFile(t *testing.T) {
@@ -351,8 +357,8 @@ func TestParseArgs_Empty(t *testing.T) {
 
 func TestParseArgs_ProfileRejected(t *testing.T) {
 	_, _, err := ParseArgs([]string{"--profile", "nono.jsonc"}, "default.toml")
-	if err == nil || !strings.Contains(err.Error(), "sandbox.host") {
-		t.Fatalf("expected --profile rejection pointing to [sandbox.host], got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "[agents.") {
+		t.Fatalf("expected --profile rejection pointing to [agents.<name>].profile, got %v", err)
 	}
 }
 

@@ -48,12 +48,12 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	case cfgErr == nil, errors.Is(cfgErr, config.ErrCommandProfileMissing) && cfg != nil:
 		// config.Load returns cfg alongside ErrCommandProfileMissing
 		// specifically (unlike every other validate failure, which leaves cfg
-		// nil), so checkCommandProfile can still run and report its own
+		// nil), so checkProfiles can still run and report its own
 		// dedicated, actionable hint ("write the profile, or point
-		// command_profile at it") instead of the generic one below, which
-		// config.go:204 made otherwise unreachable for this, the headline
-		// case doctor exists to catch.
-		results = append(results, checkProfiles(cfg))
+		// command_profile at it") instead of the generic one below, which the
+		// os.Stat check in validate (internal/config/config.go) made otherwise
+		// unreachable for this, the headline case doctor exists to catch.
+		results = append(results, checkProfiles(ctx, cfg))
 	default:
 		results = append(results, checkResult{
 			name: "profiles",
@@ -113,8 +113,8 @@ const brokerSocketProbeValue = "agent-sandbox-doctor-probe"
 //
 // --allow-cwd is required because nono refuses working-directory access in
 // non-interactive mode, which is how doctor runs.
-func checkBrokerSocketVar(profilePath string) error {
-	out, err := runCommandEnv(context.Background(),
+func checkBrokerSocketVar(ctx context.Context, profilePath string) error {
+	out, err := runCommandEnv(ctx,
 		[]string{broker.SocketEnvVar + "=" + brokerSocketProbeValue},
 		"nono", "wrap", "--silent", "--allow-cwd", "--profile", profilePath,
 		"--", "sh", "-c", "echo $"+broker.SocketEnvVar)
@@ -212,7 +212,7 @@ var selfPath = os.Executable
 // Each failure otherwise produces a session that refuses every command with an
 // error the agent cannot act on: nono's own failure arrives on the broker's
 // stderr long after the launcher has returned.
-func checkProfiles(cfg *config.Config) checkResult {
+func checkProfiles(ctx context.Context, cfg *config.Config) checkResult {
 	r := checkResult{name: "profiles"}
 	agentPath := cfg.AgentProfilePath("claude")
 	cmdPath := cfg.CommandProfilePath()
@@ -237,7 +237,7 @@ func checkProfiles(cfg *config.Config) checkResult {
 		r.details = append(r.details,
 			"broker socket variable: skipped (running inside a session; run doctor on the host)")
 	default:
-		if err := checkBrokerSocketVar(agentPath); err != nil {
+		if err := checkBrokerSocketVar(ctx, agentPath); err != nil {
 			r.details = append(r.details, "broker socket variable: "+err.Error())
 			r.hint = "add " + broker.SocketEnvVar + " to the agent profile's " +
 				"environment.allow_vars; without it the agent cannot reach the broker " +
@@ -257,7 +257,7 @@ func checkProfiles(cfg *config.Config) checkResult {
 			"investigate why os.Executable() failed and re-run doctor"
 		return r
 	}
-	writable, werr := profileAllowsWrite(cmdPath, self)
+	writable, werr := profileAllowsWrite(ctx, cmdPath, self)
 	if werr != nil {
 		r.details = append(r.details, fmt.Sprintf("error: could not ask nono whether %s is writable: %v", self, werr))
 		r.hint = "could not verify the broker binary is not writable through the command profile; " +
@@ -284,8 +284,8 @@ func checkProfiles(cfg *config.Config) checkResult {
 // nono writes warnings (a bypass_protection entry naming a path that does not
 // exist on this host, for one) to stderr, and runCommand combines the streams,
 // so the JSON object is found rather than assumed to start at byte zero.
-func profileAllowsWrite(profilePath, binPath string) (bool, error) {
-	out, err := runCommand(context.Background(), "nono", "why", "--json",
+func profileAllowsWrite(ctx context.Context, profilePath, binPath string) (bool, error) {
+	out, err := runCommand(ctx, "nono", "why", "--json",
 		"--profile", profilePath, "--path", binPath, "--op", "write")
 	if err != nil {
 		return false, fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))

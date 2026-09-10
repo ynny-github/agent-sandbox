@@ -37,8 +37,8 @@ type Options struct {
 // "--config=<val>" and "--env <ref>" / "--env=<ref>"
 // are accepted before "--"; any other pre-"--" token is an
 // error, because agent-sandbox no longer forwards options to nono (the sandbox
-// profile is configured in [sandbox.host]). defaultConfig is used when no
-// "--config" is given.
+// profile is configured via [agents.<name>].profile in agent-sandbox.toml).
+// defaultConfig is used when no "--config" is given.
 func ParseArgs(args []string, defaultConfig string) (string, Options, error) {
 	configFile := defaultConfig
 	var opts Options
@@ -70,7 +70,7 @@ func ParseArgs(args []string, defaultConfig string) (string, Options, error) {
 		case strings.HasPrefix(a, "--env="):
 			opts.EnvRefs = append(opts.EnvRefs, strings.TrimPrefix(a, "--env="))
 		case a == "--profile" || a == "-p" || strings.HasPrefix(a, "--profile="):
-			return "", Options{}, fmt.Errorf("--profile is no longer accepted; configure the sandbox profile in [sandbox.host] of agent-sandbox.toml")
+			return "", Options{}, fmt.Errorf("--profile is no longer accepted; configure the sandbox profile via [agents.<name>].profile in agent-sandbox.toml")
 		default:
 			return "", Options{}, fmt.Errorf("unexpected option %q before \"--\": agent-sandbox no longer forwards options to nono; only --config and --env are accepted before \"--\", and claude options go after \"--\"", a)
 		}

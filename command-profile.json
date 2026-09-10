@@ -1,12 +1,13 @@
 {
-  // Every capability defined in agent-sandbox/internal/sandboxhost/catalog.go,
-  // expanded by hand into one flat nono profile. There are exactly ten; the
-  // section headings below name each one, so a grant can always be traced back
-  // to the bundle it came from.
+  // Written by hand, in nono's own schema: agent-sandbox does not generate,
+  // read, or validate this file. What a brokered command may access is
+  // decided by this file alone, together with nono's own base profiles.
   //
-  // Written by hand on purpose: agent-sandbox generates only the agent's own
-  // profile, never this one. That means this file does NOT track catalog.go —
-  // when a bundle gains a path, this file has to be edited too.
+  // The section headings below group the grants the same way the deleted
+  // capability catalog used to (go, python, node, rust, dart, flutter,
+  // docker, ssh, mise, bashrc), so a grant can still be traced back to the
+  // toolchain it serves. There is no longer a catalog.go this file tracks —
+  // when a toolchain needs a new path, this file is where it gets added.
 
   "meta": { "name": "agent-sandbox commands (this repository)" },
 
@@ -50,16 +51,18 @@
       // -- capability: rust
       "~/.cargo/registry",
       "~/.cargo/git",
-      // NOTE: rust_runtime grants all of ~/.cargo, publish token included. In the
-      // agent's profile that token is kept from Claude's file tools by a denyRead
-      // rule; this profile has no such layer, so a brokered command can read it.
+      // NOTE: rust_runtime grants all of ~/.cargo, publish token included, so
+      // a brokered command can read it. There is no deny layer on this side
+      // (or the agent's) that would hide it — this file is the only thing
+      // that decides what a brokered command may read.
 
       // -- capability: dart
       "~/.pub-cache",
       "~/.dart",
       "~/.dart-tool",                          // dartdev writes analytics config here on startup
-      // NOTE: ~/.dart-tool also holds pub-tokens.json (private repo credentials).
-      // Same as rust: no denyRead counterpart exists on this side.
+      // NOTE: ~/.dart-tool also holds pub-tokens.json (private repo
+      // credentials), same as rust above — read access to it is decided by
+      // this file alone.
 
       // -- capability: flutter
       "~/.config/flutter",

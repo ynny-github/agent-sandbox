@@ -166,9 +166,11 @@ You may edit any of the three files directly.
   as a direct child — is `{{.AgentProfilePath}}`.
 - The sandbox every shell command runs in is `{{.ProfilePath}}`.
 
-Both are written in nono's own schema. agent-sandbox does not generate, read,
-or validate either one; it hands each path to nono. So this document cannot
-tell you what they grant — nono can:
+Both are written in nono's own schema. agent-sandbox generates and validates
+neither one; it hands each path to nono. The only part of either file it
+reads is what this document showed you above — the policy commands and floor
+paths from the command profile. Beyond that, this document cannot tell you
+what they grant — nono can:
 
 - `nono profile show <path>` resolves a profile, groups expanded and `~` and
   `$XDG_CACHE_HOME` filled in.

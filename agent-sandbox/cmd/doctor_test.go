@@ -229,7 +229,7 @@ func TestRunDoctor_RunsAllChecksEvenOnEarlyFailure(t *testing.T) {
 // config can be trusted), so this is the case doctor most needs to get
 // right — and until config.Load started returning cfg alongside
 // ErrCommandProfileMissing, runDoctor's cfgErr branch could not reach
-// checkCommandProfile at all here, so this exact scenario always fell back
+// checkProfiles at all here, so this exact scenario always fell back
 // to the generic "fix the config first" hint instead of the dedicated one.
 func TestRunDoctor_MissingCommandProfileReportsActionableHint(t *testing.T) {
 	stubAllSeamsOK(t)
@@ -258,7 +258,7 @@ func TestRunDoctor_MissingCommandProfileReportsActionableHint(t *testing.T) {
 	}
 	out := buf.String()
 	if !strings.Contains(out, "write the profile, or point command_profile at it") {
-		t.Errorf("output missing checkCommandProfile's dedicated hint:\n%s", out)
+		t.Errorf("output missing checkProfiles's dedicated hint:\n%s", out)
 	}
 	if strings.Contains(out, "fix the config first") {
 		t.Errorf("output still uses the generic cfgErr hint for the missing-profile case:\n%s", out)
@@ -431,7 +431,7 @@ func TestCheckProfiles_ValidatesTheAgentProfile(t *testing.T) {
 	defer restoreEnv()
 	defer stubSelfPath("/usr/local/bin/agent-sandbox")()
 
-	got := checkProfiles(cfg)
+	got := checkProfiles(context.Background(), cfg)
 	if !got.ok {
 		t.Fatalf("checkProfiles ok = false, want true; details %v hint %q", got.details, got.hint)
 	}
@@ -456,7 +456,7 @@ func TestCheckProfiles_FailsWhenTheSocketVarIsNotForwarded(t *testing.T) {
 	defer restoreEnv()
 	defer stubSelfPath("/usr/local/bin/agent-sandbox")()
 
-	got := checkProfiles(cfg)
+	got := checkProfiles(context.Background(), cfg)
 	if got.ok {
 		t.Error("checkProfiles ok = true, want false when the socket variable is stripped")
 	}
@@ -486,7 +486,7 @@ func TestCheckProfiles_SkipsTheProbeInsideASession(t *testing.T) {
 	defer restoreEnv()
 	defer stubSelfPath("/usr/local/bin/agent-sandbox")()
 
-	got := checkProfiles(cfg)
+	got := checkProfiles(context.Background(), cfg)
 	if probed {
 		t.Error("the probe must not run inside a session")
 	}
@@ -510,7 +510,7 @@ func TestCheckProfiles_FailsWhenValidateRejects(t *testing.T) {
 	})
 	defer restoreEnv()
 
-	got := checkProfiles(cfg)
+	got := checkProfiles(context.Background(), cfg)
 	if got.ok {
 		t.Errorf("checkProfiles ok = true, want false for a profile nono rejects")
 	}
@@ -548,7 +548,7 @@ func TestCheckProfiles_FailsWhenTheFileIsMissing(t *testing.T) {
 	// config.Load itself already refuses a missing profile (validate's
 	// ErrCommandProfileMissing) — see TestRunDoctor_MissingCommandProfileReportsActionableHint
 	// for that path through runDoctor. Build the *Config while the file still
-	// exists, then remove it, to exercise checkCommandProfile's own
+	// exists, then remove it, to exercise checkProfiles's own
 	// defensive os.Stat directly here — covering the window between Load
 	// succeeding and the profile disappearing before launch.
 	cfg := configWithProfile(t, dir, present)
@@ -556,7 +556,7 @@ func TestCheckProfiles_FailsWhenTheFileIsMissing(t *testing.T) {
 		t.Fatalf("remove profile: %v", err)
 	}
 
-	got := checkProfiles(cfg)
+	got := checkProfiles(context.Background(), cfg)
 	if got.ok {
 		t.Errorf("checkProfiles ok = true, want false when the profile file is missing")
 	}
@@ -597,7 +597,7 @@ func TestCheckProfiles_FailsWhenSelfPathErrors(t *testing.T) {
 	selfPath = func() (string, error) { return "", fmt.Errorf("os.Executable: not implemented on this platform") }
 	defer func() { selfPath = prevSelf }()
 
-	got := checkProfiles(cfg)
+	got := checkProfiles(context.Background(), cfg)
 	if got.ok {
 		t.Errorf("checkProfiles ok = true, want false when selfPath errors")
 	}
@@ -628,7 +628,7 @@ func TestCheckProfiles_FailsWhenTheWriteQueryErrors(t *testing.T) {
 	restoreSelf := stubSelfPath(filepath.Join(t.TempDir(), "agent-sandbox"))
 	defer restoreSelf()
 
-	got := checkProfiles(cfg)
+	got := checkProfiles(context.Background(), cfg)
 	if got.ok {
 		t.Errorf("checkProfiles ok = true, want false when the writability query cannot be answered")
 	}
@@ -704,7 +704,7 @@ func TestCheckProfiles_FailsWhenTheAgentProfileIsRejected(t *testing.T) {
 	restoreSelf := stubSelfPath(filepath.Join(t.TempDir(), "agent-sandbox"))
 	defer restoreSelf()
 
-	got := checkProfiles(cfg)
+	got := checkProfiles(context.Background(), cfg)
 	if got.ok {
 		t.Fatal("checkProfiles ok = true, want false when nono rejects the agent profile")
 	}
@@ -729,7 +729,7 @@ func TestCheckProfiles_FailsWhenNonoSaysTheBinaryIsWritable(t *testing.T) {
 	restoreSelf := stubSelfPath(filepath.Join(dir, "agent-sandbox"))
 	defer restoreSelf()
 
-	got := checkProfiles(cfg)
+	got := checkProfiles(context.Background(), cfg)
 	if got.ok {
 		t.Fatal("checkProfiles ok = true, want false when nono reports the broker binary writable")
 	}
@@ -741,7 +741,7 @@ func TestCheckProfiles_FailsWhenNonoSaysTheBinaryIsWritable(t *testing.T) {
 func TestProfileAllowsWrite_ReadsStatusPastWarnings(t *testing.T) {
 	restore := stubRunCommand(nonoAnswers(nil, "allowed"))
 	defer restore()
-	allowed, err := profileAllowsWrite("/p.json", "/bin/agent-sandbox")
+	allowed, err := profileAllowsWrite(context.Background(), "/p.json", "/bin/agent-sandbox")
 	if err != nil {
 		t.Fatalf("profileAllowsWrite: %v", err)
 	}
@@ -755,7 +755,7 @@ func TestProfileAllowsWrite_ErrorsOnUnparseableOutput(t *testing.T) {
 		return []byte("no json here"), nil
 	})
 	defer restore()
-	if _, err := profileAllowsWrite("/p.json", "/bin/agent-sandbox"); err == nil {
+	if _, err := profileAllowsWrite(context.Background(), "/p.json", "/bin/agent-sandbox"); err == nil {
 		t.Error("profileAllowsWrite err = nil, want an error when nono prints no JSON")
 	}
 }

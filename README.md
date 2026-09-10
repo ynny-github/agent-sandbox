@@ -209,7 +209,7 @@ them to `nono`. See
 |---|---|
 | `agent-sandbox claude -- [claude args...]` | Launch Claude under nono, with the command broker running as a sibling session |
 | `agent-sandbox exec -- <command>` | Send one command to the broker and stream its output |
-| `agent-sandbox doctor` | Check that `nono` works, the broker socket can bind, both profiles exist and validate, the agent profile forwards `AGENT_SANDBOX_BROKER_SOCKET`, the command profile does not grant write access to the broker's own binary, and the broker's own name resolves back to itself. Exit 0 / 1 |
+| `agent-sandbox doctor` | Check that `nono` works, the broker socket can bind, both profiles exist and validate, the agent profile forwards `AGENT_SANDBOX_BROKER_SOCKET`, and the command profile does not grant write access to the broker's own binary. Exit 0 / 1 |
 | `agent-sandbox debug -- [claude args...]` | Print the `nono` invocations for both sessions and the GitHub MCP config (token redacted) — without running anything |
 | `agent-sandbox ai explain` | Agent-facing description of the sandbox: how commands run, both tiers, and every denial's reason |
 | `agent-sandbox ai config-check` | Validate `agent-sandbox.toml` and both nono profiles the way launch reads them |
@@ -233,10 +233,6 @@ MCP is enabled.
 `doctor` checks what a launch depends on:
 
 - `nono` is on `PATH` and `nono --version` runs.
-- `nono` can actually start tool-sandbox on this host — a real, short-lived
-  probe session, not just a version check. An unpatched nono on NixOS cannot
-  start tool-sandbox at all, so presence of the binary says nothing about
-  this.
 - The command broker can **bind a unix socket** in its socket directory
   (`$XDG_STATE_HOME/agent-sandbox`, or `~/.local/state/agent-sandbox`). A
   plain write check is not enough — binding also catches the ~104-byte
@@ -254,26 +250,8 @@ MCP is enabled.
   inside a session — nono refuses to nest a sandbox inside a sandbox, so the
   probe is only meaningful run from the host.
 - The command profile does not grant write access to the broker's own
-  binary — checking both the top-level `filesystem.allow` and every
-  `command_policies` command's own `fs_write`. The one Critical finding that
-  actually matches this check's
-  own shape — a write grant over the broker's own binary — lived in a
-  command's own `fs_write`, not the top-level list, so checking only the
-  top level would have missed it. This does not cover a separate class of
-  finding from the same review: a directory that is both writable and
-  executable lets a copy of some other program be staged and executed
-  directly, with nothing to do with the broker's own binary path — doctor
-  has no writable-and-executable intersection check of any kind. A grant
-  expressed purely through `$WORKDIR` is also still not something this
-  check can see — nono itself is the final word on that at launch.
-- Resolving the broker's own base name through this process's own `PATH` —
-  the same lookup the launcher's `BrokerArgs` relies on — lands back on this
-  exact binary. A different `agent-sandbox` earlier on `PATH` would silently
-  become the broker instead.
-- When the profile pins `command_policies.commands["agent-sandbox"].executable`,
-  that path also names this exact binary — a profile and a binary
-  disagreeing about which file the entrypoint is is not a state to launch
-  from, even when PATH alone resolves correctly.
+  binary. doctor asks `nono why --profile <command profile> --path <broker
+  binary> --op write` and fails if the answer is allowed.
 
 If any of these fail, `agent-sandbox claude` will not launch Claude at all.
 
@@ -324,6 +302,12 @@ matching how the command profile behaves. See
 [The two profiles](#the-two-profiles) for what this file must grant, and
 [User-scope config](#user-scope-config) for how the key behaves when set in
 `~/.config/agent-sandbox/config.toml`.
+
+Because it is hand-written, this file can name any path nono's schema
+allows — including protected prefixes such as `~/.aws`, `~/.gnupg`,
+`~/.config/gh`, and `~/.kube` via `bypass_protection` — where the deleted
+capability catalog only ever offered a fixed set of bundles. Review both
+profile files in `git diff` like any other code.
 
 ### The two profiles
 
@@ -759,8 +743,13 @@ hand-written by the operator. A variable loaded by `--env` reaches the
 launched agent only if the agent profile's `environment.allow_vars` names it
 — a glob such as `MISE*` covers a family in one line. Exposing the same
 variable to a brokered command is a separate, explicit edit to the command
-profile's `environment.allow_vars`. A value silently not reaching the agent
-is exactly the failure this paragraph exists to pre-empt.
+profile's `environment.allow_vars` — with one exception:
+`AGENT_SANDBOX_BROKER_SOCKET` must **never** appear in the command profile's
+`environment.allow_vars`, under any name or wildcard that would match it. A
+command that can reach the broker socket can recurse into the broker, which
+spawns handlers with no concurrency cap — a host-side fork bomb. A value
+silently not reaching the agent is exactly the failure this paragraph exists
+to pre-empt.
 
 ## GitHub MCP
 
@@ -784,28 +773,19 @@ go build ./...
 mise run build         # install a working-tree build via `go install`
 ```
 
-**Building this project's own binary no longer puts it on `PATH`.** `agent-sandbox
-claude` resolves its own broker entrypoint by base name through the launcher's
-PATH (see [the two profiles](#the-two-profiles)), and a build that
-landed in this working tree would sit inside the same directory the command
-profile grants `fs_write` — the writable-and-executable combination nono
-refuses a policy command's binary for. `mise run build` runs `go install`
-instead, which installs to `$(go env GOBIN)` when it is set and to
-`$(go env GOPATH)/bin` otherwise — outside `$WORKDIR` either way. That
-resolved path (measured here as `$(go env GOBIN)`, because this repository's
-own mise-managed Go sets `GOBIN` to its own version-scoped `bin/`, itself
-already on the developer's `PATH`) is also the exact path this repository's
-own `command-profile.json` currently pins as `agent-sandbox`'s `executable`
-and `command_policies.executable_dirs` — a build here and a session launched
-here agree on which binary is the broker. **The profile's pin and `go
-install`'s actual output directory can drift** (a Go toolchain upgrade under
-mise renumbers that path, or a `GOBIN` change moves it outright); re-run
-`go env GOBIN` (or `GOPATH`) and update `command-profile.json` to match
-whenever `agent-sandbox doctor`'s command-profile check starts failing with
-an entrypoint mismatch. Run `mise run build` after every change you want to
-exercise, then launch as usual (`agent-sandbox claude`). `go run .` cannot
-stand in for this: its output binary is staged under `$TMPDIR` at run time,
-on no reliable footing with the profile at all.
+**Building this project's own binary no longer puts it on `PATH`.**
+`agent-sandbox claude` resolves its own broker entrypoint by base name
+through the launcher's PATH (see [the two profiles](#the-two-profiles)), and
+a build that landed in this working tree would sit inside the same directory
+the command profile grants `fs_write` — the writable-and-executable
+combination nono refuses an entrypoint binary for. `mise run build` runs
+`go install` instead, which installs to `$(go env GOBIN)` when it is set and
+to `$(go env GOPATH)/bin` otherwise — outside `$WORKDIR` either way, and
+already on the developer's `PATH` (this repository's own mise-managed Go sets
+`GOBIN` to its own version-scoped `bin/`). Run `mise run build` after every
+change you want to exercise, then launch as usual (`agent-sandbox claude`).
+`go run .` cannot stand in for this: its output binary is staged under
+`$TMPDIR` at run time, on no reliable footing with the profile at all.
 
 End-to-end suites live in `e2e` (Python/pytest, MCP stdio).
 

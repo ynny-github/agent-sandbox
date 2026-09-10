@@ -304,13 +304,6 @@ tool_mode = "hook"
 	}
 }
 
-// TestLoad_Compose_ListUnion exercises all six HostConfig list fields, not
-// just Allow/AllowEnv: cloneHost and unionHost enumerate them by hand, so a
-// field dropped from either would silently stop unioning across scopes while
-// every other field's test kept passing — the same "quietly stops having an
-// effect" failure this task exists to close off, aimed at the loader itself
-// rather than at a removed key.
-
 func TestLoad_Compose_NoHome_ProjectOnly(t *testing.T) {
 	t.Setenv("HOME", "")
 	project := writeToml(t, validBase)
@@ -361,9 +354,6 @@ tool_mode = "mcp"
 		t.Errorf("err = %v, want ErrMissingMCPCommandOutputDir", err)
 	}
 }
-
-// NONO_* reconfigures the sandbox the broker runs commands in, so it is
-// refused in the agent's allow_env — the only host section left.
 
 // Every key that moved as the sandbox sections were reorganized. Loading an old
 // spelling must say where it went rather than silently ignoring it — a config

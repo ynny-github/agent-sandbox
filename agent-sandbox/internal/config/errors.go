@@ -11,7 +11,7 @@ var ErrMovedNetworkSection = errors.New("sandbox.network has moved: it only ever
 var ErrMovedEnvPassthrough = errors.New("sandbox.command.env_passthrough has moved: env passthrough for a command is the command profile's own concern now")
 var ErrMovedCommandNetwork = errors.New("sandbox.command.network has moved: network reach for a command is the command profile's top-level network section")
 var ErrMovedCommandHost = errors.New("sandbox.command.host has moved: a command's host access is now expressed in the command profile, which agent-sandbox does not generate")
-var ErrMovedAgentHost = errors.New("sandbox.agent.host has moved: write its keys directly under [sandbox.agent]")
+var ErrMovedAgentHost = errors.New("sandbox.agent.host is no longer supported: agent-sandbox does not generate nono profiles; write the grants in the profile named by [agents.<name>].profile")
 
 // ErrMovedCommandTiers fires on the two keys that used to decide, per command,
 // whether it ran on the host or in the shell sandbox. That decision is now

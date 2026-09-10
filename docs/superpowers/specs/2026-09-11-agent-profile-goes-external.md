@@ -30,6 +30,40 @@ After this change the answer to "where is nono configured?" has exactly one
 form: in a file, by path, next to the project config. Today it has two, because
 the agent's half is still generated from `[sandbox.agent]`.
 
+## The delegation rule
+
+Everything below follows from four sentences. They are not new: `e69e92b` ("ask
+nono instead of parsing profiles") and the 2026-09-10 decision to hand-write the
+command profile already said them for one half of the system. This design says
+them for the other half.
+
+**One authority.** The truth about permissions lives in the profile files and in
+nono. agent-sandbox keeps no copy of it — does not generate it, does not parse
+it, does not restate it. A second representation always drifts, and when it
+does, agent-sandbox's answer is the one that is confidently wrong. The deleted
+grant listing in `ai config-check` was exactly that shape.
+
+**Measure, do not read.** When a decision needs an answer, ask nono or run the
+thing and observe, rather than parsing JSON. Parsing means reimplementing nono's
+resolution rules — group expansion, `~` and `$XDG_CACHE_HOME`, base inheritance,
+platform differences — which is a copy by another name. doctor's `nono why`
+check and its broker-socket probe are both this rule.
+
+**agent-sandbox speaks only where nono cannot.** Meaning is ours: which profile
+governs which sandbox, that the broker socket variable is load-bearing, that an
+edit takes effect at the next launch. Facts are nono's, and we point at the
+command that states them.
+
+**Close gaps by measuring, never by reimplementing.** `nono profile show` does
+not report `environment.allow_vars`. The fix is a probe that observes whether
+the variable survives into the sandbox — not a reader that prints the file back.
+Reading it would break the first two rules to satisfy the third.
+
+The accepted cost: the catalog's hard-won notes (that dart will not start unless
+`~/.dart-tool` is writable, and its kin) are lost, and transcription drift
+becomes the operator's responsibility. The counterweight is that all diagnosis
+collects in one place — `doctor` — so a mistake surfaces early and by name.
+
 ## What agent-sandbox stops knowing
 
 Three things go with the generator, each deliberately.

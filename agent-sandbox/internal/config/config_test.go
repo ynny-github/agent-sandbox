@@ -647,3 +647,75 @@ func TestLoadRejectsShellSection(t *testing.T) {
 		t.Fatalf("Load error = %v, want ErrMovedShellToProfile", err)
 	}
 }
+
+func TestAgentProfilePathDefaultsBesideConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
+	writeFile(t, cfgPath, "tool_mode = \"hook\"\n")
+	writeFile(t, filepath.Join(dir, "command-profile.json"), "{}")
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := filepath.Join(dir, "claude-profile.json")
+	if got := cfg.AgentProfilePath("claude"); got != want {
+		t.Errorf("AgentProfilePath = %q, want %q", got, want)
+	}
+}
+
+func TestAgentProfilePathRelativeResolvesAgainstConfigDir(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
+	writeFile(t, cfgPath, "tool_mode = \"hook\"\n\n[agents.claude]\nprofile = \"profiles/claude.json\"\n")
+	writeFile(t, filepath.Join(dir, "command-profile.json"), "{}")
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := filepath.Join(dir, "profiles", "claude.json")
+	if got := cfg.AgentProfilePath("claude"); got != want {
+		t.Errorf("AgentProfilePath = %q, want %q", got, want)
+	}
+}
+
+func TestAgentProfilePathAbsoluteIsUsedAsIs(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
+	writeFile(t, cfgPath, "tool_mode = \"hook\"\n\n[agents.claude]\nprofile = \"/etc/agent-sandbox/claude.json\"\n")
+	writeFile(t, filepath.Join(dir, "command-profile.json"), "{}")
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.AgentProfilePath("claude"); got != "/etc/agent-sandbox/claude.json" {
+		t.Errorf("AgentProfilePath = %q, want the absolute path unchanged", got)
+	}
+}
+
+// The project file wins for an agent both files declare, and an agent only the
+// user-scope file declares survives. Both fall out of how BurntSushi/toml
+// decodes into an existing map — pinned here because a second field on
+// AgentConfig would silently break the first half (a key is replaced whole,
+// not merged field by field).
+func TestAgentProfileProjectOverridesUserScopeAndKeepsOtherAgents(t *testing.T) {
+	writeUserToml(t, "[agents.claude]\nprofile = \"user-claude.json\"\n\n[agents.codex]\nprofile = \"user-codex.json\"\n")
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
+	writeFile(t, cfgPath, "tool_mode = \"hook\"\n\n[agents.claude]\nprofile = \"project-claude.json\"\n")
+	writeFile(t, filepath.Join(dir, "command-profile.json"), "{}")
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got, want := cfg.AgentProfilePath("claude"), filepath.Join(dir, "project-claude.json"); got != want {
+		t.Errorf("project must win for an agent both files declare: got %q, want %q", got, want)
+	}
+	if got, want := cfg.AgentProfilePath("codex"), filepath.Join(dir, "user-codex.json"); got != want {
+		t.Errorf("an agent only the user config declares must survive: got %q, want %q", got, want)
+	}
+}

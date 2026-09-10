@@ -17,9 +17,12 @@ type Config struct {
 	// decision about commands — which may run, what each may touch, which
 	// invocations are refused — lives there. An empty value means the default
 	// name beside this config file.
-	CommandProfile string        `toml:"command_profile"`
-	MCP            MCPConfig     `toml:"mcp"`
-	Sandbox        SandboxConfig `toml:"sandbox"`
+	CommandProfile string `toml:"command_profile"`
+	// Agents maps a launch subcommand's name ("claude") to that agent's
+	// configuration. An absent table is not an error: every key has a default.
+	Agents  map[string]AgentConfig `toml:"agents"`
+	MCP     MCPConfig              `toml:"mcp"`
+	Sandbox SandboxConfig          `toml:"sandbox"`
 
 	// dir is the directory the project config was loaded from. A relative
 	// command_profile resolves against it rather than the process working
@@ -37,6 +40,35 @@ func (c *Config) CommandProfilePath() string {
 	name := strings.TrimSpace(c.CommandProfile)
 	if name == "" {
 		name = defaultCommandProfileName
+	}
+	if filepath.IsAbs(name) {
+		return name
+	}
+	return filepath.Join(c.dir, name)
+}
+
+// AgentConfig is one launchable agent's configuration. It holds only the nono
+// profile that agent runs under — a file the operator writes in nono's own
+// schema, which agent-sandbox hands to nono without generating, reading, or
+// validating it.
+//
+// A second field would need care. Load decodes the user config and then the
+// project config into the same map, and a key present in both is replaced
+// wholesale rather than merged field by field, so a project [agents.claude]
+// setting only one field would silently drop the user config's others.
+type AgentConfig struct {
+	Profile string `toml:"profile"`
+}
+
+// AgentProfilePath is the absolute path of the nono profile the named agent
+// runs under. It resolves exactly like CommandProfilePath — one rule for both
+// profiles — so an absent table or empty value means "<agent>-profile.json"
+// beside the project config, and a relative path joins onto that same
+// directory however agent-sandbox was invoked.
+func (c *Config) AgentProfilePath(agent string) string {
+	name := strings.TrimSpace(c.Agents[agent].Profile)
+	if name == "" {
+		name = agent + "-profile.json"
 	}
 	if filepath.IsAbs(name) {
 		return name

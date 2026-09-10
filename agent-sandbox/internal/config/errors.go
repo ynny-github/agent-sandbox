@@ -39,3 +39,9 @@ var ErrMovedShellToProfile = errors.New("sandbox.shell is no longer supported: t
 // agent profile (/nix/store versus /usr/bin), and a profile that looks present
 // but refuses every command is the worst failure mode available.
 var ErrCommandProfileMissing = errors.New("command profile not found; write it, or point command_profile at it")
+
+// ErrAgentProfileMissing fires when the nono profile the launched agent runs
+// under is not on disk. There is deliberately no generated fallback:
+// agent-sandbox no longer builds profiles at all, and a default that looked
+// present while granting the wrong thing is the worst failure available.
+var ErrAgentProfileMissing = errors.New("agent profile not found; write it, or point [agents.<name>].profile at it")

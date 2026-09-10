@@ -28,8 +28,10 @@ func runClaude(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	envKeys, err := envflag.Load(opts.EnvRefs)
-	if err != nil {
+	// --env loads the referenced file's variables into this process, which is
+	// all it does now: nono forwards only what the agent profile's
+	// environment.allow_vars lists, and that list is hand-written.
+	if _, err := envflag.Load(opts.EnvRefs); err != nil {
 		return err
 	}
 
@@ -41,13 +43,6 @@ func runClaude(cmd *cobra.Command, args []string) error {
 	if err := claude.ValidatePassthrough(opts.ClaudeOpts, claude.GithubMCPEnabled()); err != nil {
 		return err
 	}
-
-	// Expose the --env keys to the sandboxed agent: nono forwards only vars
-	// listed in the profile's allow_vars, and the values are already in this
-	// process's env from envflag.Load above. They land on the agent section, not
-	// the shared base, so --env grants the launched agent alone — widening a
-	// brokered command's environment stays an explicit config edit.
-	cfg.Sandbox.Agent.AllowEnv = append(cfg.Sandbox.Agent.AllowEnv, envKeys...)
 
 	return claude.Run(cfg, opts)
 }

@@ -125,13 +125,10 @@ func captureStdout(t *testing.T, fn func()) string {
 	return <-done
 }
 
-func TestFormatGeneratedConfigs_ProfileAndEnabledMCP(t *testing.T) {
-	profile := []byte(`{"extends":"claude"}`)
+func TestFormatGeneratedConfigs_EnabledMCP(t *testing.T) {
 	mcp := []byte(`{"mcpServers":{"github":{"env":{"GITHUB_PERSONAL_ACCESS_TOKEN":"***redacted***"}}}}`)
-	out := formatGeneratedConfigs("/tmp/p.json", profile, true, mcp)
+	out := formatGeneratedConfigs(true, mcp)
 	for _, want := range []string{
-		"# generated nono profile (/tmp/p.json):",
-		`"extends": "claude"`, // pretty-printed (indented)
 		"# github mcp config (enabled; token redacted):",
 		"***redacted***",
 	} {
@@ -142,8 +139,44 @@ func TestFormatGeneratedConfigs_ProfileAndEnabledMCP(t *testing.T) {
 }
 
 func TestFormatGeneratedConfigs_MCPDisabledLabel(t *testing.T) {
-	out := formatGeneratedConfigs("/tmp/p.json", []byte(`{"a":1}`), false, []byte(`{"b":2}`))
+	out := formatGeneratedConfigs(false, []byte(`{"b":2}`))
 	if !strings.Contains(out, "# github mcp config (disabled; token redacted):") {
 		t.Errorf("expected disabled label; got:\n%s", out)
+	}
+}
+
+// debug must print the profile path the launcher will actually pass, so the
+// value can be pasted straight into `nono profile show`.
+func TestRunDebug_PrintsTheConfiguredAgentProfilePath(t *testing.T) {
+	dir := t.TempDir()
+	nono := filepath.Join(dir, "nono")
+	if err := os.WriteFile(nono, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write fake nono: %v", err)
+	}
+	t.Setenv("PATH", dir)
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+
+	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
+	cfgBody := "[mcp]\ncommand_output_dir = " + toTOMLString(filepath.Join(dir, "out")) + "\n"
+	if err := os.WriteFile(cfgPath, []byte(cfgBody), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	for _, name := range []string{"command-profile.json", "claude-profile.json"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("{}"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	orig := configPath
+	configPath = cfgPath
+	t.Cleanup(func() { configPath = orig })
+
+	out := captureStdout(t, func() {
+		if err := runDebug(debugCmd, nil); err != nil {
+			t.Fatalf("runDebug() error = %v", err)
+		}
+	})
+	want := "--profile " + filepath.Join(dir, "claude-profile.json")
+	if !strings.Contains(out, want) {
+		t.Errorf("debug output missing %q; got:\n%s", want, out)
 	}
 }

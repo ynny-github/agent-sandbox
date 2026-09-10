@@ -13,7 +13,6 @@ import (
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/claude"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/envflag"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandboxhost"
 )
 
 var debugCmd = &cobra.Command{
@@ -32,26 +31,18 @@ func runDebug(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	envKeys, err := envflag.Load(opts.EnvRefs)
-	if err != nil {
+	// --env loads the referenced file's variables into this process, which is
+	// all it does now: nono forwards only what the agent profile's
+	// environment.allow_vars lists, and that list is hand-written.
+	if _, err := envflag.Load(opts.EnvRefs); err != nil {
 		return err
 	}
 	cfg, err := config.Load(configFile)
 	if err != nil {
 		return fmt.Errorf("config error: %w", err)
 	}
-	// Agent section, matching cmd/claude.go: --env is for the launched agent.
-	cfg.Sandbox.Agent.AllowEnv = append(cfg.Sandbox.Agent.AllowEnv, envKeys...)
 
-	r, err := sandboxhost.Resolve(cfg, "claude")
-	if err != nil {
-		return err
-	}
-	profilePath, cleanupProfile, err := r.WriteProfile()
-	if err != nil {
-		return err
-	}
-	defer cleanupProfile()
+	profilePath := cfg.AgentProfilePath("claude")
 
 	// debug exists to show the exact invocation the launcher builds, so it must
 	// include the broker socket grant; passing "" here would hide the only thing
@@ -79,15 +70,11 @@ func runDebug(cmd *cobra.Command, args []string) error {
 	fmt.Fprintln(cmd.OutOrStdout(), "  "+strings.Join(
 		claude.BrokerArgs(cfg, nonoPathForDisplay(), selfPath, brokerSocket, cwd), " "))
 
-	profileJSON, err := r.ProfileJSON()
-	if err != nil {
-		return err
-	}
 	mcpJSON, err := claude.RedactedGithubMCPConfigJSON()
 	if err != nil {
 		return err
 	}
-	fmt.Print(formatGeneratedConfigs(profilePath, profileJSON, claude.GithubMCPEnabled(), mcpJSON))
+	fmt.Print(formatGeneratedConfigs(claude.GithubMCPEnabled(), mcpJSON))
 	return nil
 }
 
@@ -102,16 +89,13 @@ func nonoPathForDisplay() string {
 	return "nono"
 }
 
-// formatGeneratedConfigs renders the generated nono profile (no secrets) and
-// the token-redacted GitHub MCP config for display under the debug command, so
-// the exact files the launcher writes can be inspected without hunting for temp
-// files. The MCP token is always redacted — it never reaches the terminal.
-func formatGeneratedConfigs(profilePath string, profileJSON []byte, mcpEnabled bool, mcpJSON []byte) string {
+// formatGeneratedConfigs renders the token-redacted GitHub MCP config — the
+// only file agent-sandbox still generates — for display under the debug
+// command. The token is always redacted; it never reaches the terminal. The
+// nono profiles are not shown here: they are files on disk, named in the
+// invocation above, and `nono profile show <path>` is what resolves one.
+func formatGeneratedConfigs(mcpEnabled bool, mcpJSON []byte) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "\n# generated nono profile (%s):\n", profilePath)
-	b.WriteString(indentJSON(profileJSON))
-	b.WriteString("\n")
-
 	state := "disabled"
 	if mcpEnabled {
 		state = "enabled"

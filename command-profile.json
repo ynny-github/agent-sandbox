@@ -1,140 +1,176 @@
 {
-  "meta": {
-    "name": "agent-sandbox commands (this repository)"
-  },
+  // Every capability defined in agent-sandbox/internal/sandboxhost/catalog.go,
+  // expanded by hand into one flat nono profile. There are exactly ten; the
+  // section headings below name each one, so a grant can always be traced back
+  // to the bundle it came from.
+  //
+  // Written by hand on purpose: agent-sandbox generates only the agent's own
+  // profile, never this one. That means this file does NOT track catalog.go —
+  // when a bundle gains a path, this file has to be edited too.
+
+  "meta": { "name": "agent-sandbox commands (this repository)" },
+
   "groups": {
-    "include": ["nix_runtime", "git_config", "mise_manager"]
+    "include": [
+      // -- baseline (baselineGroups; granted whatever the capability list says)
+      "nix_runtime",      // NixOS: /nix/store is where every executable lives
+      "git_config",       // toolchains shell out to git without saying so
+
+      // -- one group per runtime capability
+      "go_runtime",       // capability: go
+      "python_runtime",   // capability: python
+      "node_runtime",     // capability: node
+      "rust_runtime",     // capability: rust
+      "mise_manager"      // capability: mise (read side; env vars below)
+      // dart, flutter, docker, ssh and bashrc have no nono group — they spell
+      // out their paths in filesystem below.
+    ]
   },
+
   "filesystem": {
-    "allow": ["$WORKDIR", "/home/yn/.local/state/agent-sandbox"],
+    "allow": [
+      // -- not from the catalog: this profile's own session grants
+      "$WORKDIR",
+      "~/.local/state/agent-sandbox",
+      "/tmp",                                  // go test compiles into, then execs from, /tmp
+
+      // -- capability: go   (groups are read-only, so the caches are named here)
+      "~/go/pkg/mod",
+      "$XDG_CACHE_HOME/go-build",              // catalog perOSAllow.linux; darwin uses ~/Library/Caches/go-build
+
+      // -- capability: python
+      "$XDG_CACHE_HOME/uv",
+      "~/.local/share/uv/python",              // uv's managed interpreters
+      "$XDG_CACHE_HOME/pip",                   // catalog perOSAllow.linux; darwin uses ~/Library/Caches/pip
+
+      // -- capability: node
+      "~/.npm",
+      "~/.local/share/pnpm",                   // catalog perOSAllow.darwin adds ~/Library/pnpm
+
+      // -- capability: rust
+      "~/.cargo/registry",
+      "~/.cargo/git",
+      // NOTE: rust_runtime grants all of ~/.cargo, publish token included. In the
+      // agent's profile that token is kept from Claude's file tools by a denyRead
+      // rule; this profile has no such layer, so a brokered command can read it.
+
+      // -- capability: dart
+      "~/.pub-cache",
+      "~/.dart",
+      "~/.dart-tool",                          // dartdev writes analytics config here on startup
+      // NOTE: ~/.dart-tool also holds pub-tokens.json (private repo credentials).
+      // Same as rust: no denyRead counterpart exists on this side.
+
+      // -- capability: flutter
+      "~/.config/flutter",
+      "~/.local/share/mise/http-tarballs"
+      // NOTE: this is a WRITE grant over every mise-installed binary, including
+      // agent-sandbox itself. doctor's "broker binary is not writable" check will
+      // fail while this line is present. Drop the flutter capability unless a
+      // project actually needs it.
+    ],
+
     "read": [
+      // -- not from the catalog: NixOS execution precondition
       "/nix/store",
       "/run/current-system/sw",
-      "/home/yn/.local/share/mise",
-      "/home/yn/.cache/go-build",
-      "/home/yn/go/pkg/mod",
-      "/home/yn/.local/state/agent-sandbox"
+
+      // -- capability: mise
+      "~/.local/share/mise",
+      "~/.config/mise",
+
+      // -- capability: docker
+      "~/.docker",
+      "~/.orbstack",
+
+      // -- capability: ssh
+      "~/.ssh"
     ],
-    "read_file": ["/home/yn/.local/share/mise/installs/go/1.25.14/bin/agent-sandbox"]
+
+    "read_file": [
+      // -- capability: bashrc
+      "~/.bashrc",
+      "/etc/bashrc",
+      "/etc/bash.bashrc"
+      // NOTE: the broker never dispatches a shell, so nothing here reads these.
+      // Carried only because the capability defines them.
+    ],
+
+    "allow_file": [
+      // -- baseline (baselineAllowFile)
+      "/dev/null",
+
+      // -- capability: ssh
+      "~/.ssh/known_hosts"
+    ],
+
+    "bypass_protection": [
+      // catalog `bypass`: these prefixes are protected by nono, and a grant
+      // against one is refused without this opt-in.
+      "~/.docker",                             // capability: docker
+      "~/.ssh",                                // capability: ssh
+      "~/.bashrc"                              // capability: bashrc
+    ]
   },
+
   "environment": {
-    "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM", "http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "no_proxy", "NO_PROXY"]
+    "allow_vars": [
+      // -- baseline (baselineEnv)
+      "PATH", "HOME", "TERM", "LANG", "LC_ALL", "USER",
+
+      // -- capability: mise
+      "MISE*", "__MISE*",
+
+      // -- capability: dart
+      "PUB_CACHE", "PUB_HOSTED_URL",
+
+      // -- capability: flutter
+      "FLUTTER_ROOT", "FLUTTER_STORAGE_BASE_URL",
+
+      // -- not from the catalog: proxy variables this profile carries itself
+      "http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "no_proxy", "NO_PROXY"
+
+      // DO NOT add AGENT_SANDBOX_BROKER_SOCKET, and do not add a wildcard that
+      // would match it. It is agentOnlyEnv: a command that can reach the broker
+      // socket can recurse into broker.Server.Serve, which spawns handlers with
+      // no concurrency cap — a host-side fork bomb. ResolveShell used to be the
+      // code that kept it out of this profile; that code is gone, so this list
+      // being explicit is the only thing left enforcing it.
+    ]
   },
+
   "network": {
-    "allow_domain": ["github.com", "*.githubusercontent.com"]
-  },
+    "allow_domain": [
+      // -- common to every toolchain: source and release artefacts
+      "github.com",
+      "*.githubusercontent.com",        // raw. and objects. (release assets, uv's CPython builds)
+      "codeload.github.com",            // tarball/zipball downloads: go get direct, pip/uv "git+" archives, mise
 
-  "command_policies": {
-    "executable_dirs": ["/home/yn/.local/share/mise/installs/go/1.25.14/bin"],
-    "commands": {
-      "agent-sandbox": {
-        "executable": "/home/yn/.local/share/mise/installs/go/1.25.14/bin/agent-sandbox",
-        "can_use": ["git", "go"],
-        "from": {
-          "session": {
-            "sandbox": {
-              "fs_read_file": ["/home/yn/.local/share/mise/installs/go/1.25.14/bin/agent-sandbox"],
-              "fs_read": [
-                "/nix/store",
-                "/run/current-system/sw",
-                "/home/yn/.local/share/mise",
-                "/home/yn/.config/mise",
-                "/home/yn/.cache/go-build",
-                "/home/yn/go/pkg/mod",
-                "/home/yn/.local/state/agent-sandbox",
-                "$WORKDIR"
-              ],
-              "fs_write": ["$WORKDIR", "/home/yn/.local/state/agent-sandbox"],
-              "environment": {
-                "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM", "http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "no_proxy", "NO_PROXY"]
-              },
+      // -- capability: go
+      "proxy.golang.org",
+      "sum.golang.org",
 
-              "exec_paths": [
-                "/nix/store/zc6fy62c341aibk36p4ywff7rf9wn4wx-ripgrep-15.2.0/bin",
-                "/home/yn/.local/share/mise/installs/go/1.25.14/bin/gofmt",
-                "/nix/store/kask8rc5n2vrs492p1sq62vilj1sfdrs-mise-2026.8.6/bin",
-                "/nix/store/q8wvrqkl9x8vfmjflgxl9y0y7bnjlv12-coreutils-full-9.11/bin",
-                "/nix/store/c3pj1yrqn88cc8zkr5hywmvy15m0r6c9-gnused-4.10/bin",
-                "/nix/store/q0n8l9xz66pbpj37fxk5vid6dsfpx5vb-gnugrep-3.12/bin",
-                "/nix/store/i6hlg4ss9m53gvh8jqp0zgac67x6mblg-findutils-4.10.0/bin",
-                "/nix/store/lxzzxlm3dis6as7y13l13ywb0nh1c3h8-diffutils-3.12/bin",
-                "/nix/store/hzqx251825abx40q1zqgd37g6hmkz75g-which-2.23/bin",
-                "/home/yn/.local/share/mise/installs/lefthook/2.1.10"
-              ]
-            }
-          }
-        }
-      },
+      // -- capability: python
+      "pypi.org",
+      "files.pythonhosted.org",
 
-      "git": {
-        "executable": "/home/yn/.local/share/mise/installs/go/1.25.14/bin/agent-sandbox",
-        "can_use": ["realgit"],
-        "from": {
-          "agent-sandbox": {
-            "sandbox": {
-              "argv_prepend": ["safe", "git"],
-              "fs_read_file": ["/home/yn/.local/share/mise/installs/go/1.25.14/bin/agent-sandbox"],
-              "fs_read": ["/nix/store", "/run/current-system/sw", "$WORKDIR"],
-              "environment": {
-                "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM", "http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "no_proxy", "NO_PROXY"]
-              }
-            }
-          }
-        }
-      },
+      // -- capability: node
+      "registry.npmjs.org",
 
-      "realgit": {
-        "executable": "/nix/store/8yh8zbb0r4na7gkqk0db0gbdid2ax7zm-git-2.54.0/bin/git",
-        "from": {
-          "git": {
-            "sandbox": {
-              "fs_read_file": [
-                "/nix/store/8yh8zbb0r4na7gkqk0db0gbdid2ax7zm-git-2.54.0/bin/git",
-                "/home/yn/.gitconfig"
-              ],
-              "fs_read": ["/nix/store", "/run/current-system/sw"],
-              "fs_write": ["$WORKDIR"],
-              "network": { "allow_all": true },
-              "environment": {
-                "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM", "http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "no_proxy", "NO_PROXY"]
-              },
-              "exec_paths": [
-                "/nix/store/8yh8zbb0r4na7gkqk0db0gbdid2ax7zm-git-2.54.0/libexec/git-core"
-              ]
-            }
-          }
-        }
-      },
+      // -- capability: rust
+      "index.crates.io",                // the sparse index cargo resolves against
+      "static.crates.io",               // the .crate files themselves
 
-      "go": {
-        "executable": "/home/yn/.local/share/mise/installs/go/1.25.14/bin/go",
-        "from": {
-          "agent-sandbox": {
-            "sandbox": {
-              "fs_read_file": ["/home/yn/.local/share/mise/installs/go/1.25.14/bin/go"],
-              "fs_read": [
-                "/home/yn/.local/share/mise/installs/go/1.25.14",
-                "/home/yn/go/pkg/mod",
-                "/home/yn/.cache/go-build",
-                "$WORKDIR"
-              ],
-              "fs_write": [
-                "$WORKDIR",
-                "/home/yn/.cache/go-build",
-                "/home/yn/go/pkg/mod",
-                "/tmp"
-              ],
-              "environment": {
-                "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM"]
-              },
-              "exec_paths": [
-                "/home/yn/.local/share/mise/installs/go/1.25.14/pkg/tool/linux_amd64",
-                "/tmp"
-              ]
-            }
-          }
-        }
-      }
-    }
+      // -- capability: dart
+      "pub.dev",
+
+      // -- capability: flutter
+      "storage.googleapis.com",         // SDK and engine artefacts
+      // "storage.flutter-io.cn" is the China mirror; add only if FLUTTER_STORAGE_BASE_URL points there.
+
+      // -- capability: mise
+      "mise.jdx.dev",                   // version/registry metadata
+      "api.github.com"                  // release listings mise resolves tools through
+    ]
   }
 }

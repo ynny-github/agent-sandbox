@@ -2,12 +2,10 @@ package cmd
 
 import (
 	"fmt"
-	"io"
 
 	"github.com/spf13/cobra"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/agentconfig"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandboxhost"
 )
 
 var aiCmd = &cobra.Command{
@@ -24,7 +22,7 @@ var explainCmd = &cobra.Command{
 
 var configCheckCmd = &cobra.Command{
 	Use:   "config-check",
-	Short: "Validate the config the way `agent-sandbox claude` will read it at launch",
+	Short: "Validate the config and both nono profiles the way `agent-sandbox claude` will read them at launch",
 	Args:  cobra.NoArgs,
 	RunE:  runConfigCheck,
 }
@@ -35,49 +33,31 @@ func init() {
 	rootCmd.AddCommand(aiCmd)
 }
 
-// runConfigCheck loads the config and resolves the agent's nono profile from
-// it, which is exactly what `agent-sandbox claude` does at launch. Loading
-// alone would not be enough: capability names are only resolved in
-// sandboxhost, so a typo there passes config.Load and surfaces at the next
-// launch instead of here. A passing check therefore means the config is not
-// what breaks it.
-//
-// The command profile brokered commands run under is not generated or read by
-// agent-sandbox at all — nono is what validates it — so there is nothing of
-// it to resolve here.
+// runConfigCheck loads the config and asks nono to validate both profiles —
+// the same two files a launch hands to nono. agent-sandbox does not interpret
+// either one, so a passing check means the config and the profiles are not
+// what breaks the next launch; what they *grant* is `nono profile show`.
 func runConfigCheck(cmd *cobra.Command, args []string) error {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return fmt.Errorf("config error: %w", err)
 	}
-	resolved, err := sandboxhost.Resolve(cfg, "claude")
-	if err != nil {
-		return fmt.Errorf("agent profile: %w", err)
-	}
 
 	out := cmd.OutOrStdout()
-	fmt.Fprintf(out, "ok: %s resolves; it takes effect at the next `agent-sandbox claude` launch\n", configPath)
+	fmt.Fprintf(out, "ok: %s loads\n", configPath)
 
-	grants := resolved.FilesystemGrants()
-	fmt.Fprintln(out, "\nThe launched agent's own sandbox additionally reaches:")
-	printList(out, "read+write", grants.Write)
-	printList(out, "read-only", grants.Read)
+	for _, p := range []struct{ label, path string }{
+		{"agent profile", cfg.AgentProfilePath("claude")},
+		{"command profile", cfg.CommandProfilePath()},
+	} {
+		if err := validateProfile(p.path); err != nil {
+			return fmt.Errorf("%s: %w", p.label, err)
+		}
+		fmt.Fprintf(out, "ok: %s %s validates\n", p.label, p.path)
+	}
+
+	fmt.Fprint(out, profileHelp)
 	return nil
-}
-
-// printList writes one indented line per entry, or "(none)" when empty, so the
-// output distinguishes an empty grant list from a missing section.
-func printList(out io.Writer, label string, items []string) {
-	if label != "" {
-		label += ": "
-	}
-	if len(items) == 0 {
-		fmt.Fprintf(out, "  %s(none)\n", label)
-		return
-	}
-	for _, item := range items {
-		fmt.Fprintf(out, "  %s%s\n", label, item)
-	}
 }
 
 func runExplain(cmd *cobra.Command, args []string) error {

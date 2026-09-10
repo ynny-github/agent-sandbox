@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -15,10 +17,12 @@ func writeTempConfig(t *testing.T, body string) string {
 	if err := os.WriteFile(p, []byte(body), 0644); err != nil {
 		t.Fatal(err)
 	}
-	// validate requires a command profile on disk; write the default name
-	// beside the config so these fixtures keep exercising the default path.
-	if err := os.WriteFile(filepath.Join(dir, "command-profile.json"), []byte("{}"), 0644); err != nil {
-		t.Fatal(err)
+	// validate requires both profiles on disk; write the default names
+	// beside the config so these fixtures keep exercising the default paths.
+	for _, name := range []string{"command-profile.json", "claude-profile.json"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("{}"), 0644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return p
 }
@@ -29,9 +33,6 @@ tool_mode = "hook"
 
 [mcp]
 command_output_dir = "./tmp"
-
-[sandbox.agent]
-capabilities = ["go"]
 `)
 	orig := configPath
 	configPath = cfgPath
@@ -45,7 +46,6 @@ capabilities = ["go"]
 	for _, want := range []string{
 		"# agent-sandbox environment",
 		cfgPath,
-		"`go`",
 	} {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("output missing %q\n%s", want, buf.String())
@@ -75,11 +75,13 @@ func runConfigCheckWith(t *testing.T, body string) (string, error) {
 }
 
 func TestRunConfigCheck_ValidConfig(t *testing.T) {
+	restore := stubRunCommand(func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("valid"), nil
+	})
+	defer restore()
+
 	out, err := runConfigCheckWith(t, `
 tool_mode = "hook"
-
-[sandbox.agent]
-capabilities = ["go"]
 `)
 	if err != nil {
 		t.Fatalf("runConfigCheck: %v", err)
@@ -89,48 +91,80 @@ capabilities = ["go"]
 	}
 }
 
-// config-check must print what the launched agent's own sandbox reaches
-// beyond the baseline: several places in the READMEs and explain.tmpl promise
-// this, so a config-check that only prints "ok:" would make those promises
-// false.
-func TestRunConfigCheck_PrintsFilesystemGrants(t *testing.T) {
-	out, err := runConfigCheckWith(t, `
-tool_mode = "hook"
-
-[sandbox.agent]
-allow = ["/opt/writable"]
-read = ["/opt/readonly"]
-`)
-	if err != nil {
-		t.Fatalf("runConfigCheck: %v", err)
-	}
-	for _, want := range []string{"read+write: /opt/writable", "read-only: /opt/readonly"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("output missing %q\n%s", want, out)
-		}
-	}
-}
-
 func TestRunConfigCheck_BrokenToml(t *testing.T) {
 	if _, err := runConfigCheckWith(t, "tool_mode = \n"); err == nil {
 		t.Fatal("expected an error for unparseable TOML, got nil")
 	}
 }
 
-// An unknown capability name passes config.Load — capability names are only
-// resolved in sandboxhost — so without the resolve step it would surface at the
-// next launch instead of here.
-func TestRunConfigCheck_UnknownCapability(t *testing.T) {
-	_, err := runConfigCheckWith(t, `
-tool_mode = "hook"
+// config-check hands both profiles to nono rather than describing them: the
+// only authority on what a profile grants is nono itself.
+func TestRunConfigCheck_ValidatesBothProfilesWithNono(t *testing.T) {
+	var validated []string
+	restore := stubRunCommand(func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "nono" && len(args) == 3 && args[0] == "profile" && args[1] == "validate" {
+			validated = append(validated, args[2])
+		}
+		return []byte("valid"), nil
+	})
+	defer restore()
 
-[sandbox.agent]
-capabilities = ["gooo"]
-`)
-	if err == nil {
-		t.Fatal("expected an error for an unknown capability, got nil")
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
+	if err := os.WriteFile(cfgPath, []byte("tool_mode = \"hook\"\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "gooo") {
-		t.Errorf("error does not name the offending capability: %v", err)
+	for _, name := range []string{"command-profile.json", "claude-profile.json"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	orig := configPath
+	configPath = cfgPath
+	t.Cleanup(func() { configPath = orig })
+
+	var buf bytes.Buffer
+	configCheckCmd.SetOut(&buf)
+	if err := runConfigCheck(configCheckCmd, nil); err != nil {
+		t.Fatalf("runConfigCheck: %v", err)
+	}
+	for _, want := range []string{
+		filepath.Join(dir, "claude-profile.json"),
+		filepath.Join(dir, "command-profile.json"),
+	} {
+		if !slices.Contains(validated, want) {
+			t.Errorf("nono profile validate was not called for %q; called for %v", want, validated)
+		}
+	}
+	if !strings.Contains(buf.String(), "nono profile show") {
+		t.Errorf("output must point at the command that resolves a profile:\n%s", buf.String())
+	}
+}
+
+func TestRunConfigCheck_FailsWhenTheAgentProfileIsMissing(t *testing.T) {
+	restore := stubRunCommand(func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("valid"), nil
+	})
+	defer restore()
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
+	if err := os.WriteFile(cfgPath, []byte("tool_mode = \"hook\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "command-profile.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	orig := configPath
+	configPath = cfgPath
+	t.Cleanup(func() { configPath = orig })
+
+	configCheckCmd.SetOut(&bytes.Buffer{})
+	err := runConfigCheck(configCheckCmd, nil)
+	if err == nil {
+		t.Fatal("expected an error when the agent profile is missing, got nil")
+	}
+	if !strings.Contains(err.Error(), "claude-profile.json") {
+		t.Errorf("error must name the missing file: %v", err)
 	}
 }

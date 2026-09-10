@@ -159,44 +159,55 @@ command profile's, written in nono's own schema, resolved at
 `{{.ProfilePath}}`.
 
 ## Changing the config
-The sandbox is configured by `{{.ConfigPath}}`. You may edit it directly.
+The sandbox is configured by `{{.ConfigPath}}`, which names two nono profiles.
+You may edit any of the three files directly.
 
-Editing it **does not affect the current session**: the agent's nono profile is
-generated once when the session starts. An edit takes effect the next time the
-operator runs `agent-sandbox claude`. The same is true of the command profile
-at `{{.ProfilePath}}`: it is read once, when the broker starts.
+- Your own sandbox — this process, its file tools, and any MCP server it spawns
+  as a direct child — is `{{.AgentProfilePath}}`.
+- The sandbox every shell command runs in is `{{.ProfilePath}}`.
+
+Both are written in nono's own schema. agent-sandbox does not generate, read,
+or validate either one; it hands each path to nono. So this document cannot
+tell you what they grant — nono can:
+
+- `nono profile show <path>` resolves a profile, groups expanded and `~` and
+  `$XDG_CACHE_HOME` filled in.
+- `nono why --profile <path> --path <p> --op read|write|readwrite` says whether
+  an access is allowed and which grant decides it. `--host`, `--command` and
+  `--scope` ask the same question of network, command policy, and scope.
+
+One thing neither command reports: environment variables. `nono profile show`
+does not print `environment.allow_vars`, so if a variable is not reaching a
+process, read that list in the profile file itself. `agent-sandbox doctor`
+measures the one variable that matters most — `AGENT_SANDBOX_BROKER_SOCKET`,
+without which nothing can reach the command broker at all.
+
+Editing any of this **does not affect the current session**: both profiles are
+read once, when the session starts. An edit takes effect the next time the
+operator runs `agent-sandbox claude`.
 
 After editing, run `agent-sandbox ai config-check` — it loads the config and
-resolves the agent profile exactly as launch does, so a passing check means the
-config will not be what breaks the next launch. `agent-sandbox doctor` goes
-further: it hands both profiles — the command profile and the one generated
-from `[sandbox.agent]` — to `nono profile validate`, and asks nono itself
-whether the command profile leaves the broker's own binary writable.
+hands both profiles to `nono profile validate`, so a passing check means none
+of the three files is what breaks the next launch. `agent-sandbox doctor` goes
+further: it adds the broker-socket probe and asks nono whether the command
+profile leaves the broker's own binary writable.
 
 Schema:
 
 ```toml
-tool_mode = "hook"                    # "hook" | "mcp"
+tool_mode = "hook"                       # "hook" | "mcp"
+command_profile = "command-profile.json" # default name; shared by every agent
 
 [mcp]
-command_output_dir = "..."            # mcp tool_mode only: where command output is written
+command_output_dir = "..."               # mcp tool_mode only: where command output is written
 
-# Host access for the launched agent — the only profile agent-sandbox
-# generates. The sandbox a command runs in is the command profile at the path
-# above, configured separately by the operator (see above).
-[sandbox.agent]
-capabilities = []                     # named bundles; see the list below
-allow        = []                     # directories, read+write
-read         = []                     # directories, read-only
-allow_file   = []                     # single files, read+write
-read_file    = []                     # single files, read-only
-allow_env    = []                     # environment variable names
+[agents.claude]
+profile = "claude-profile.json"          # default name: "<agent>-profile.json"
 ```
 
-Capability names: {{range $i, $c := .Capabilities}}{{if $i}}, {{end}}`{{$c}}`{{end}}.
+Both profile paths resolve beside `{{.ConfigPath}}` unless written absolute.
 
 A user-scope config at `~/.config/agent-sandbox/config.toml` is composed with
-this file: scalars from the project file win, and every list is a de-duplicated
-union of the two. So editing the project file can add to a list but cannot
-remove what the user-scope file contributes — if a grant you did not write shows
-up in `agent-sandbox ai config-check`, it comes from there.
+this file: every value the project file sets wins, and an agent the user-scope
+file declares alone still applies. If a profile path you did not write shows up
+in `agent-sandbox ai config-check`, it comes from there.

@@ -12,7 +12,6 @@ import (
 
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/safe/git"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandboxhost"
 )
 
 // Pointer returns the short guidance injected into the agent's system prompt at
@@ -60,10 +59,10 @@ type explainView struct {
 	// is policy-controlled, which is false here — the profile could not be
 	// read the way this package expects, not read and found empty.
 	BrokerIssue string
-	// Capabilities is the catalog's capability names, so the editing section
-	// lists what may actually be written rather than a prose sample that goes
-	// stale when a bundle is added.
-	Capabilities []string
+	// AgentProfilePath is the nono profile the launched agent itself runs
+	// under (cfg.AgentProfilePath). Like ProfilePath it is a pointer, not a
+	// description: agent-sandbox neither generates nor reads it.
+	AgentProfilePath string
 }
 
 // policyCommandView is one command_policies.commands entry that is not the
@@ -144,13 +143,13 @@ func Explain(cfg *config.Config, configPath string) string {
 	}
 
 	view := explainView{
-		Hook:           cfg.ToolMode == "hook",
-		ConfigPath:     configPath,
-		ProfilePath:    profilePath,
-		PolicyCommands: policyCommands,
-		FloorPaths:     floorPaths,
-		BrokerIssue:    brokerIssue,
-		Capabilities:   sandboxhost.CapabilityNames(),
+		Hook:             cfg.ToolMode == "hook",
+		ConfigPath:       configPath,
+		ProfilePath:      profilePath,
+		PolicyCommands:   policyCommands,
+		FloorPaths:       floorPaths,
+		BrokerIssue:      brokerIssue,
+		AgentProfilePath: cfg.AgentProfilePath("claude"),
 	}
 
 	var buf bytes.Buffer

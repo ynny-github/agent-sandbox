@@ -9,7 +9,6 @@ import (
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/agentconfig"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/safe/git"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandboxhost"
 )
 
 // writeProfile writes contents (a command-profile.json body) to path.
@@ -244,27 +243,17 @@ func TestExplain_ConfigEditingSection(t *testing.T) {
 	for _, want := range []string{
 		"## Changing the config",
 		"/work/proj/agent-sandbox.toml",
-		"[sandbox.agent]",
+		"[agents.claude]",
 		"tool_mode",
-		"capabilities",
 		"agent-sandbox ai config-check",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("Explain() config section missing %q\nfull output:\n%s", want, got)
 		}
 	}
-	for _, unwanted := range []string{"[sandbox.shared]", "[sandbox.shell]", "allow_commands", "drop_commands", "allow_domains"} {
+	for _, unwanted := range []string{"[sandbox.shared]", "[sandbox.shell]", "[sandbox.agent]", "capabilities", "allow_commands", "drop_commands", "allow_domains"} {
 		if strings.Contains(got, unwanted) {
 			t.Errorf("Explain() config section still mentions removed key %q\nfull output:\n%s", unwanted, got)
-		}
-	}
-}
-
-func TestExplain_ListsCapabilityNames(t *testing.T) {
-	got := agentconfig.Explain(&config.Config{ToolMode: "hook"}, "agent-sandbox.toml")
-	for _, name := range sandboxhost.CapabilityNames() {
-		if !strings.Contains(got, "`"+name+"`") {
-			t.Errorf("Explain() does not list capability %q\nfull output:\n%s", name, got)
 		}
 	}
 }
@@ -285,7 +274,7 @@ func TestExplain_MentionsUserScopeConfigMerge(t *testing.T) {
 	got := agentconfig.Explain(&config.Config{ToolMode: "hook"}, "agent-sandbox.toml")
 	for _, want := range []string{
 		"~/.config/agent-sandbox/config.toml",
-		"union",
+		"wins",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("Explain() missing %q about the user-scope config merge\nfull output:\n%s", want, got)
@@ -324,6 +313,44 @@ func TestExplain_NoCommandPolicies_DescribesOneSandbox(t *testing.T) {
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("Explain() is missing %q\n---\n%s", want, got)
+		}
+	}
+}
+
+// The agent is told where its own sandbox is defined and which nono commands
+// answer questions about it — not a capability vocabulary that no longer
+// exists.
+func TestExplain_NamesBothProfilesAndTheNonoCommands(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
+	if err := os.WriteFile(cfgPath, []byte("tool_mode = \"hook\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"command-profile.json", "claude-profile.json"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	out := agentconfig.Explain(cfg, cfgPath)
+	for _, want := range []string{
+		filepath.Join(dir, "claude-profile.json"),
+		filepath.Join(dir, "command-profile.json"),
+		"nono profile show",
+		"nono why",
+		"[agents.claude]",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("explain output missing %q\n%s", want, out)
+		}
+	}
+	for _, unwanted := range []string{"capabilities = []", "[sandbox.agent]"} {
+		if strings.Contains(out, unwanted) {
+			t.Errorf("explain output still mentions %q\n%s", unwanted, out)
 		}
 	}
 }

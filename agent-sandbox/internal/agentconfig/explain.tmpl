@@ -9,11 +9,10 @@
 There is no shell in the loop. The command broker parses your command line
 itself (pipelines, `&&`/`||`/`;`, redirections, globbing, `$(…)`, `for`/`if`,
 `cd` and the other shell builtins all work), and executes each simple command
-directly — never through `bash` or `sh`. The broker never dispatches a
-shell, and no shell is in either tier, so nothing the broker runs gives you
-a shell directly.
+directly — never through `bash` or `sh`. The broker never dispatches a shell
+itself, so nothing it runs hands you one directly.
 
-Every command in your line sorts into one of two tiers:
+{{if or .PolicyCommands .FloorPaths}}Every command in your line sorts into one of two tiers:
 
 - **Policy commands** run in their own child sandbox, with their own
   filesystem/network grants. Some carry nono's own argv rules directly
@@ -121,10 +120,43 @@ One thing the two tiers don't cover: the broker's own shell builtins (`echo`,
 broker itself, at the broker's own filesystem grants — they never reach either
 tier. A redirect or glob you write is bounded by those same grants, not by
 whichever command's output it's attached to.
+{{else}}Every command runs in the broker's own sandbox. There are no tiers and
+no allowlist: whatever that sandbox can reach, the broker will run. What each
+command may touch is one grant set, written in nono's own schema at
+`{{.ProfilePath}}`, and it is the same for every command — nothing here gives
+one tool a narrower or wider reach than another.
+{{if .BrokerIssue}}
+{{.BrokerIssue}} — so this document cannot say whether the profile declares
+policy-controlled commands after all. Read the absence of tiers below as
+"not established", not as "none exist".
+{{end}}
+A refusal therefore arrives as an ordinary permission failure — `Permission
+denied` from the program itself, or exit 127 when the binary cannot be executed
+at all — not as a policy denial carrying a reason. Do not read such a failure as
+a rule you might phrase around; it means the path or host is outside what the
+profile grants. Ask the operator to widen the profile, or work inside what it
+already reaches.
 
-Which commands may run, what each may touch, and which invocations are
-refused is not `agent-sandbox.toml`'s concern — it is the command profile's,
-written in nono's own schema, resolved at `{{.ProfilePath}}`.
+Network access goes through nono's proxy and is limited to the domains the
+profile lists. A direct TCP connection, a DNS lookup that bypasses the proxy,
+and binding a listening port are all refused at the socket layer, so a tool that
+ignores the proxy environment variables does not get out — it fails immediately
+rather than falling back to an unmediated connection.
+
+A toolchain that can compile and immediately execute code you give it is bounded
+only by what that same sandbox reaches, and it can run whatever those grants
+cover, including a program it builds itself. The grant set is the real boundary;
+there is no dispatch-time check standing behind it.
+
+The broker's own shell builtins (`echo`, `cd`, `test`, `read`, and the others
+`mvdan.cc/sh` implements) run inside the broker itself, at those same grants. A
+redirect or glob you write is bounded by them too, not by whichever command's
+output it is attached to.
+{{end}}
+
+What a command may touch is not `agent-sandbox.toml`'s concern — it is the
+command profile's, written in nono's own schema, resolved at
+`{{.ProfilePath}}`.
 
 ## Changing the config
 The sandbox is configured by `{{.ConfigPath}}`. You may edit it directly.
@@ -136,12 +168,10 @@ at `{{.ProfilePath}}`: it is read once, when the broker starts.
 
 After editing, run `agent-sandbox ai config-check` — it loads the config and
 resolves the agent profile exactly as launch does, so a passing check means the
-config will not be what breaks the next launch. `agent-sandbox doctor` checks
-the command profile itself: that it exists, that `nono profile validate`
-passes on it, that it does not grant write access to the broker's own
-binary, that resolving the broker's own name through this process's PATH
-lands back on that exact binary, and — when the profile pins the entrypoint's
-`executable` — that the pinned path also names that exact binary.
+config will not be what breaks the next launch. `agent-sandbox doctor` goes
+further: it hands both profiles — the command profile and the one generated
+from `[sandbox.agent]` — to `nono profile validate`, and asks nono itself
+whether the command profile leaves the broker's own binary writable.
 
 Schema:
 

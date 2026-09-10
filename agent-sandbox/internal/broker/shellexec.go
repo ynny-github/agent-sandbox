@@ -98,6 +98,20 @@ func (e *ShellExecutor) Run(ctx context.Context, command, cwd string,
 // matching — the failure mode is a return to the hang refusePolicyPipeChains
 // exists to prevent, not a false refusal, since that function only acts when
 // this matches.
+// isPolicyControlledPath reports whether path resolves inside a shim directory
+// nono's tool-sandbox generates for a policy-controlled command.
+//
+// It cannot return true under the profile this repository currently ships.
+// Shims exist only while the profile carries command_policies, and that block
+// was removed when the command profile was flattened onto one sandbox, so PATH
+// now resolves every command to its real binary. refusePolicyPipeChains below,
+// and the hang it exists to prevent, are therefore both inert: measured under
+// the flat profile, `git --version | git --version` and the blocking-reader
+// shape `git --version | git hash-object --stdin` each complete with rc=0.
+//
+// Both are kept rather than deleted because command_policies may come back —
+// the removal is parked, not settled. Until it does, treat a refusal from here
+// as a false positive worth investigating, not as the guard doing its job.
 func isPolicyControlledPath(path string) bool {
 	shimsDir := filepath.Dir(path)
 	return filepath.Base(shimsDir) == "shims" &&

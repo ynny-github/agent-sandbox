@@ -292,3 +292,38 @@ func TestExplain_MentionsUserScopeConfigMerge(t *testing.T) {
 		}
 	}
 }
+
+// TestExplain_NoCommandPolicies_DescribesOneSandbox pins the branch the
+// explanation takes for a profile that declares no command policies at all:
+// the two-tier description must not appear, because there are no tiers, and
+// the agent must not be told an allowlist stands between it and a command
+// when none does. Claiming a boundary that is not there is worse than
+// claiming none: it invites treating a permission failure as a rule to
+// rephrase around.
+func TestExplain_NoCommandPolicies_DescribesOneSandbox(t *testing.T) {
+	dir := t.TempDir()
+	profile := filepath.Join(dir, "command-profile.json")
+	writeProfile(t, profile, `{"filesystem": {"allow": ["$WORKDIR"]}}`)
+	got := agentconfig.Explain(configWithProfile(t, dir, profile), filepath.Join(dir, "agent-sandbox.toml"))
+
+	for _, unwanted := range []string{
+		"sorts into one of two tiers",
+		"**Policy commands**",
+		"**Floor paths**",
+		"never dispatched by the broker",
+		"exits 126",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("Explain() still describes the two-tier model (%q) for a profile with no command policies\n---\n%s", unwanted, got)
+		}
+	}
+	for _, want := range []string{
+		"no allowlist",
+		"ordinary permission failure",
+		profile,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Explain() is missing %q\n---\n%s", want, got)
+		}
+	}
+}

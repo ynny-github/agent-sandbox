@@ -103,14 +103,11 @@ func startBrokerSession(t *testing.T, nonoPath, selfPath string, cfg *config.Con
 }
 
 // fixtureProfile is the subset of nono's own profile schema this suite needs:
-// a filesystem grant for the working directory, the env baseline every
-// agent-sandbox-generated profile also carries, and a network section. It is
-// defined here, independently of internal/sandboxhost, because that package
-// no longer builds a profile for the sandbox commands run in at all (Task 5
-// deleted ResolveShell along with [sandbox.shell] — agent-sandbox now only
-// generates the launched agent's own profile). This suite hand-writes its
-// fixture command profile the same way a real operator would, rather than
-// asking a since-deleted generator to do it.
+// a filesystem grant for the working directory, an env baseline, and a
+// network section. agent-sandbox generates no profile at all any more — the
+// operator writes both the agent's and the command broker's in nono's own
+// schema, and agent-sandbox only names them. This suite hand-writes its
+// fixture command profile the same way a real operator would.
 type fixtureProfile struct {
 	Meta        fixtureMeta        `json:"meta"`
 	Groups      *fixtureGroups     `json:"groups,omitempty"`
@@ -143,11 +140,9 @@ type fixtureNetwork struct {
 
 // writeFixtureProfile writes the nono profile this suite's broker session
 // runs under to a temp file and returns its path (removed via t.Cleanup):
-// workdir read+write, "/dev/null" allow-listed (agent-sandbox's own generator
-// grants it to every profile as a baseline), nix_runtime/git_config
-// (harmless where their paths do not exist, required where they do — see
-// internal/sandboxhost/catalog.go's baselineGroups comment), and the fixed
-// "developer" network preset plus allowDomains.
+// workdir read+write, "/dev/null" allow-listed, nix_runtime/git_config
+// (harmless where their paths do not exist, required where they do), and the
+// fixed "developer" network preset plus allowDomains.
 func writeFixtureProfile(t *testing.T, workdir string, allowDomains []string) string {
 	t.Helper()
 	p := fixtureProfile{

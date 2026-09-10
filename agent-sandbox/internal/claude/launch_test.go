@@ -13,7 +13,6 @@ import (
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/agentconfig"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/broker"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandboxhost"
 )
 
 // TestMain clears GITHUB_MCP_TOKEN so the package's tests are hermetic: run()
@@ -407,22 +406,6 @@ func hasFlagValue(args []string, flag, value string) bool {
 		}
 	}
 	return false
-}
-
-func TestEnvKeys_ReachProfileAllowVars(t *testing.T) {
-	cfg := &config.Config{ToolMode: "hook"}
-	cfg.Sandbox.Agent.AllowEnv = append(cfg.Sandbox.Agent.AllowEnv, "MY_SECRET_KEY")
-	r, err := sandboxhost.Resolve(cfg, "claude")
-	if err != nil {
-		t.Fatalf("resolve: %v", err)
-	}
-	data, err := r.ProfileJSON()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(data), "MY_SECRET_KEY") {
-		t.Errorf("profile allow_vars missing MY_SECRET_KEY: %s", data)
-	}
 }
 
 // --- lifecycle orchestration (Task 4) ---

@@ -5,7 +5,6 @@ import "errors"
 var ErrMissingMCPCommandOutputDir = errors.New("missing required field: mcp.command_output_dir")
 var ErrInvalidToolMode = errors.New(`invalid tool_mode (must be "mcp" or "hook")`)
 var ErrDeprecatedNetworkKeys = errors.New("sandbox.network.allow_cidrs / allow_hosts are no longer supported; network reach for a command is the command profile's top-level network section")
-var ErrAllowEnvNonoVar = errors.New(`allow_env must not contain NONO_* variables: they reconfigure the nono session the command broker runs in`)
 var ErrRemovedContainerSection = errors.New("sandbox.container is no longer supported: commands now run under nono, not Docker; remove the section")
 var ErrRemovedAllowExternal = errors.New("sandbox.network.allow_external is no longer supported: network reach for a command is the command profile's top-level network section")
 var ErrMovedNetworkSection = errors.New("sandbox.network has moved: it only ever configured brokered commands, so network reach is now the command profile's top-level network section")
@@ -45,3 +44,9 @@ var ErrCommandProfileMissing = errors.New("command profile not found; write it, 
 // agent-sandbox no longer builds profiles at all, and a default that looked
 // present while granting the wrong thing is the worst failure available.
 var ErrAgentProfileMissing = errors.New("agent profile not found; write it, or point [agents.<name>].profile at it")
+
+// ErrMovedAgentSectionToProfile fires on [sandbox] and everything under it.
+// The section described host access agent-sandbox turned into a nono profile;
+// nothing generates profiles now, so the grants live in the file named by
+// [agents.<name>].profile, written in nono's own schema.
+var ErrMovedAgentSectionToProfile = errors.New("[sandbox] is no longer supported: agent-sandbox does not generate nono profiles; write the grants in the profile named by [agents.<name>].profile")

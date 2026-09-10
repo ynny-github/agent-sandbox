@@ -3,30 +3,19 @@
 # `agent-sandbox claude` injects at launch). Default: "mcp".
 tool_mode = "mcp"
 
+# The nono profile every brokered command runs under. Default name, resolved
+# beside this file. agent-sandbox does not generate or read it.
+command_profile = "command-profile.json"
+
 [mcp]
 command_output_dir = "/tmp/mcp-output"
 
-# [sandbox.agent] is the only section agent-sandbox reads for host access, and
-# the only nono profile it generates: the launched agent's own process (its
-# file tools, and any MCP server it spawns as a direct child — those are not
-# brokered). The sandbox a shell *command* runs in is a completely separate
-# concern, decided entirely by the command profile below; nothing declared
-# here reaches a brokered command.
+# The nono profile the launched agent itself runs under — its own file tools,
+# and any MCP server it spawns as a direct child (those are not brokered, so a
+# Python- or Go-based MCP server needs its runtime granted there). Shell
+# commands do not run in it: they go to the broker, under command_profile.
 #
-#   capabilities = []   # named bundles: go, python, node, rust, dart, flutter,
-#                       #                docker, ssh, mise, bashrc
-#   allow        = []   # read+write host directories
-#   read         = []   # read-only host directories
-#   allow_file   = []   # single file, read+write
-#   read_file    = []   # single file, read-only
-#   allow_env    = []   # env vars (beyond the always-on PATH/HOME/... baseline)
-[sandbox.agent]
-# docker and ssh expose host credentials; declared here they reach the agent's
-# own process and never a brokered command.
-capabilities = ["go", "python"]
-
-# Which commands the agent may run, what each may touch, and which
-# invocations are refused is not declared here at all: it lives in
-# command-profile.json (the default name, resolved beside this file), written
-# directly in nono's own schema. A missing file is a launch error — there is
-# no generated default. See README.md's "The command profile" section.
+# The default name is "<agent>-profile.json", so this key may be omitted.
+# A missing file is a launch error; there is no generated default.
+[agents.claude]
+profile = "claude-profile.json"

@@ -4,8 +4,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
@@ -121,10 +121,7 @@ command_output_dir = "/tmp/out"
 `
 
 func TestLoad_ValidConfig(t *testing.T) {
-	path := writeToml(t, validBase+`
-[sandbox.agent]
-allow = ["/srv/scratch", "/srv/cache"]
-`)
+	path := writeToml(t, validBase)
 	cfg, err := config.Load(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -132,16 +129,10 @@ allow = ["/srv/scratch", "/srv/cache"]
 	if cfg.MCP.CommandOutputDir != "/tmp/out" {
 		t.Errorf("CommandOutputDir = %q, want /tmp/out", cfg.MCP.CommandOutputDir)
 	}
-	if len(cfg.Sandbox.Agent.Allow) != 2 {
-		t.Errorf("Allow len = %d, want 2", len(cfg.Sandbox.Agent.Allow))
-	}
 }
 
 func TestLoad_MissingMCPCommandOutputDir(t *testing.T) {
-	path := writeToml(t, `
-[sandbox.agent]
-allow = ["/srv/scratch"]
-`)
+	path := writeToml(t, "")
 	_, err := config.Load(path)
 	if !errors.Is(err, config.ErrMissingMCPCommandOutputDir) {
 		t.Errorf("err = %v, want ErrMissingMCPCommandOutputDir", err)
@@ -186,22 +177,8 @@ dockerfile = "Dockerfile"
 image = "mysandbox"
 `)
 	_, err := config.Load(path)
-	if !errors.Is(err, config.ErrMissingMCPCommandOutputDir) {
-		t.Errorf("err = %v, want ErrMissingMCPCommandOutputDir (old keys must not satisfy required fields)", err)
-	}
-}
-
-func TestLoad_EmptyAllow(t *testing.T) {
-	path := writeToml(t, validBase+`
-[sandbox.agent]
-allow = []
-`)
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(cfg.Sandbox.Agent.Allow) != 0 {
-		t.Errorf("Allow = %v, want empty slice", cfg.Sandbox.Agent.Allow)
+	if !errors.Is(err, config.ErrMovedAgentSectionToProfile) {
+		t.Errorf("err = %v, want ErrMovedAgentSectionToProfile (old keys must be rejected by name, not silently ignored)", err)
 	}
 }
 
@@ -212,17 +189,6 @@ func TestLoad_FileNotFound(t *testing.T) {
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("err = %v, want to wrap os.ErrNotExist", err)
-	}
-}
-
-func TestLoad_AllowOmitted(t *testing.T) {
-	path := writeToml(t, validBase)
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.Sandbox.Agent.Allow != nil && len(cfg.Sandbox.Agent.Allow) != 0 {
-		t.Errorf("Allow = %v, want nil or empty", cfg.Sandbox.Agent.Allow)
 	}
 }
 
@@ -344,52 +310,6 @@ tool_mode = "hook"
 // every other field's test kept passing — the same "quietly stops having an
 // effect" failure this task exists to close off, aimed at the loader itself
 // rather than at a removed key.
-func TestLoad_Compose_ListUnion(t *testing.T) {
-	// The user lists are >= the project lists in length on purpose: TOML decode
-	// reuses the user snapshot's backing array in place when its cap suffices, so
-	// these cases only pass if Load clones the snapshot before the project decode.
-	writeUserToml(t, `
-[mcp]
-command_output_dir = "/u/out"
-[sandbox.agent]
-capabilities = ["go", "ssh"]
-allow = ["/srv/a", "/srv/b"]
-read = ["/ro/a", "/ro/b"]
-allow_file = ["/f/a", "/f/b"]
-read_file = ["/rf/a", "/rf/b"]
-allow_env = ["HOME", "AWS_PROFILE"]
-`)
-	project := writeToml(t, `
-[sandbox.agent]
-capabilities = ["python", "ssh"]
-allow = ["/srv/b", "/srv/c"]
-read = ["/ro/b", "/ro/c"]
-allow_file = ["/f/b", "/f/c"]
-read_file = ["/rf/b", "/rf/c"]
-allow_env = ["CI"]
-`)
-	cfg, err := config.Load(project)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	for _, tc := range []struct {
-		name string
-		got  []string
-		want []string
-	}{
-		// user-first order, de-duped: go, ssh (user) then python (project).
-		{"Capabilities", cfg.Sandbox.Agent.Capabilities, []string{"go", "ssh", "python"}},
-		{"Allow", cfg.Sandbox.Agent.Allow, []string{"/srv/a", "/srv/b", "/srv/c"}},
-		{"Read", cfg.Sandbox.Agent.Read, []string{"/ro/a", "/ro/b", "/ro/c"}},
-		{"AllowFile", cfg.Sandbox.Agent.AllowFile, []string{"/f/a", "/f/b", "/f/c"}},
-		{"ReadFile", cfg.Sandbox.Agent.ReadFile, []string{"/rf/a", "/rf/b", "/rf/c"}},
-		{"AllowEnv", cfg.Sandbox.Agent.AllowEnv, []string{"HOME", "AWS_PROFILE", "CI"}},
-	} {
-		if !slices.Equal(tc.got, tc.want) {
-			t.Errorf("%s = %v, want %v", tc.name, tc.got, tc.want)
-		}
-	}
-}
 
 func TestLoad_Compose_NoHome_ProjectOnly(t *testing.T) {
 	t.Setenv("HOME", "")
@@ -442,32 +362,8 @@ tool_mode = "mcp"
 	}
 }
 
-func TestLoad_AgentAllowEnv(t *testing.T) {
-	path := writeToml(t, `
-tool_mode = "hook"
-
-[sandbox.agent]
-allow_env = ["AWS_PROFILE", "MISE_SHELL"]
-`)
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	want := []string{"AWS_PROFILE", "MISE_SHELL"}
-	if !slices.Equal(cfg.Sandbox.Agent.AllowEnv, want) {
-		t.Errorf("Agent.AllowEnv = %v, want %v", cfg.Sandbox.Agent.AllowEnv, want)
-	}
-}
-
 // NONO_* reconfigures the sandbox the broker runs commands in, so it is
 // refused in the agent's allow_env — the only host section left.
-func TestLoad_RejectsNonoAllowEnv(t *testing.T) {
-	path := writeToml(t, "tool_mode = \"hook\"\n\n[sandbox.agent]\nallow_env = [\"AWS_PROFILE\", \"NONO_ALLOW_DOMAIN\"]\n")
-	_, err := config.Load(path)
-	if !errors.Is(err, config.ErrAllowEnvNonoVar) {
-		t.Fatalf("Load() error = %v, want ErrAllowEnvNonoVar", err)
-	}
-}
 
 // Every key that moved as the sandbox sections were reorganized. Loading an old
 // spelling must say where it went rather than silently ignoring it — a config
@@ -717,5 +613,27 @@ func TestAgentProfileProjectOverridesUserScopeAndKeepsOtherAgents(t *testing.T) 
 	}
 	if got, want := cfg.AgentProfilePath("codex"), filepath.Join(dir, "user-codex.json"); got != want {
 		t.Errorf("an agent only the user config declares must survive: got %q, want %q", got, want)
+	}
+}
+
+// [sandbox] and everything under it are gone. A config that still carries one
+// must fail loudly, naming where the grants moved — a half-ignored section is
+// a sandbox that silently grants less than its author believes.
+func TestLoadRejectsTheSandboxSection(t *testing.T) {
+	for _, body := range []string{
+		"[sandbox.agent]\ncapabilities = [\"go\"]\n",
+		"[sandbox.agent]\nallow = [\"/opt\"]\n",
+		"[sandbox.agent]\nallow_env = [\"FOO\"]\n",
+		"[sandbox]\n",
+	} {
+		t.Run(body, func(t *testing.T) {
+			_, err := config.Load(writeToml(t, "tool_mode = \"hook\"\n\n"+body))
+			if err == nil {
+				t.Fatal("expected an error for a config still declaring [sandbox], got nil")
+			}
+			if !strings.Contains(err.Error(), "[agents.") {
+				t.Errorf("the error must name where the grants moved: %v", err)
+			}
+		})
 	}
 }

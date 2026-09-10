@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -20,9 +19,8 @@ type Config struct {
 	CommandProfile string `toml:"command_profile"`
 	// Agents maps a launch subcommand's name ("claude") to that agent's
 	// configuration. An absent table is not an error: every key has a default.
-	Agents  map[string]AgentConfig `toml:"agents"`
-	MCP     MCPConfig              `toml:"mcp"`
-	Sandbox SandboxConfig          `toml:"sandbox"`
+	Agents map[string]AgentConfig `toml:"agents"`
+	MCP    MCPConfig              `toml:"mcp"`
 
 	// dir is the directory the project config was loaded from. A relative
 	// command_profile resolves against it rather than the process working
@@ -89,38 +87,15 @@ type MCPConfig struct {
 	CommandOutputDir string `toml:"command_output_dir"`
 }
 
-// SandboxConfig is the host access agent-sandbox generates a profile for: the
-// launched agent, and nothing else. Commands are governed by the operator's
-// command profile, which agent-sandbox does not generate and does not read.
-type SandboxConfig struct {
-	Agent HostConfig `toml:"agent"`
-}
-
-// HostConfig declares, in nono-agnostic terms, host-side access for the
-// launched agent's sandbox. Capabilities are named bundles expanded by
-// internal/sandboxhost; the remaining lists are raw grants.
-type HostConfig struct {
-	Capabilities []string `toml:"capabilities"`
-	Allow        []string `toml:"allow"`
-	Read         []string `toml:"read"`
-	AllowFile    []string `toml:"allow_file"`
-	ReadFile     []string `toml:"read_file"`
-	AllowEnv     []string `toml:"allow_env"`
-}
-
 // Load composes the optional user-scope config
 // (~/.config/agent-sandbox/config.toml) with the project-scope config at path,
-// then validates the merged result. Scalars: project overrides user. Lists (every
-// list in [sandbox.agent]): de-duplicated union.
+// then validates the merged result. Scalars: project overrides user.
 func Load(path string) (*Config, error) {
 	var cfg Config
 
-	// 1. User config is the base (optional). Snapshot its list fields before the
-	//    project decode can replace them. The snapshot must be a *clone*: TOML
-	//    decode reuses an existing slice's backing array in place when its cap is
-	//    large enough, so a plain header copy would be corrupted by the project
-	//    decode below.
-	var userAgent HostConfig
+	// 1. User config is the base (optional). Every field is a scalar or a map
+	//    of scalars, so the project decode below simply overrides what it
+	//    declares — a map key present in both is replaced whole, not merged.
 	if up, err := userConfigPath(); err == nil {
 		if _, statErr := os.Stat(up); statErr == nil {
 			md, derr := decodeInto(up, &cfg)
@@ -130,12 +105,11 @@ func Load(path string) (*Config, error) {
 			if derr := checkDeprecated(md); derr != nil {
 				return nil, derr
 			}
-			userAgent = cloneHost(cfg.Sandbox.Agent)
 		}
 	}
 
 	// 2. Project config overrides the scalars it defines; fields it omits keep the
-	//    user values. Lists it defines replace the user's (unioned back in step 3).
+	//    user values.
 	md, derr := decodeInto(path, &cfg)
 	if derr != nil {
 		return nil, derr
@@ -145,11 +119,7 @@ func Load(path string) (*Config, error) {
 	}
 	cfg.dir = filepath.Dir(absPath(path))
 
-	// 3. Union the list fields. When the project omits a list, cfg still holds the
-	//    user's, so the union de-dupes back to the user's list (no change).
-	cfg.Sandbox.Agent = unionHost(userAgent, cfg.Sandbox.Agent)
-
-	// 4. Validate the merged config.
+	// 3. Validate the merged config.
 	return validate(&cfg)
 }
 
@@ -218,6 +188,10 @@ func checkDeprecated(md toml.MetaData) error {
 	if md.IsDefined("sandbox", "container") {
 		return ErrRemovedContainerSection
 	}
+	if md.IsDefined("sandbox") {
+		// Last, so every sentinel above still wins for the key it names.
+		return ErrMovedAgentSectionToProfile
+	}
 	return nil
 }
 
@@ -247,63 +221,7 @@ func validate(cfg *Config) (*Config, error) {
 	if cfg.ToolMode == "mcp" && strings.TrimSpace(cfg.MCP.CommandOutputDir) == "" {
 		return nil, ErrMissingMCPCommandOutputDir
 	}
-	// NONO_* is rejected in the agent's allow_env: the agent's own nono profile
-	// is not the only one it can influence — it is what starts the command
-	// broker, which runs its own nono session — so a forwarded NONO_* variable
-	// could reconfigure that session from inside the sandbox meant to contain it.
-	for _, name := range cfg.Sandbox.Agent.AllowEnv {
-		if strings.HasPrefix(strings.TrimSpace(name), "NONO_") {
-			return nil, fmt.Errorf("%w: %q", ErrAllowEnvNonoVar, name)
-		}
-	}
 	return cfg, nil
-}
-
-// cloneHost deep-copies a host section's lists. See Load step 1 for why a
-// header copy is not enough.
-func cloneHost(h HostConfig) HostConfig {
-	return HostConfig{
-		Capabilities: slices.Clone(h.Capabilities),
-		Allow:        slices.Clone(h.Allow),
-		Read:         slices.Clone(h.Read),
-		AllowFile:    slices.Clone(h.AllowFile),
-		ReadFile:     slices.Clone(h.ReadFile),
-		AllowEnv:     slices.Clone(h.AllowEnv),
-	}
-}
-
-// unionHost de-duplicates the union of two host sections field by field, a's
-// entries first.
-func unionHost(a, b HostConfig) HostConfig {
-	return HostConfig{
-		Capabilities: dedupUnion(a.Capabilities, b.Capabilities),
-		Allow:        dedupUnion(a.Allow, b.Allow),
-		Read:         dedupUnion(a.Read, b.Read),
-		AllowFile:    dedupUnion(a.AllowFile, b.AllowFile),
-		ReadFile:     dedupUnion(a.ReadFile, b.ReadFile),
-		AllowEnv:     dedupUnion(a.AllowEnv, b.AllowEnv),
-	}
-}
-
-// dedupUnion returns the concatenation of a and b with duplicates removed,
-// preserving first-occurrence order (a's items first). It returns nil when both
-// inputs are empty so an omitted list stays nil, matching prior behavior.
-func dedupUnion(a, b []string) []string {
-	if len(a) == 0 && len(b) == 0 {
-		return nil
-	}
-	seen := make(map[string]struct{}, len(a)+len(b))
-	out := make([]string, 0, len(a)+len(b))
-	for _, list := range [][]string{a, b} {
-		for _, v := range list {
-			if _, ok := seen[v]; ok {
-				continue
-			}
-			seen[v] = struct{}{}
-			out = append(out, v)
-		}
-	}
-	return out
 }
 
 // userConfigPath returns the fixed user-scope config location,

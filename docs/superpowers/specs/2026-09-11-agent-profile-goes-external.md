@@ -185,6 +185,13 @@ and a relative value there still resolves against the *project* config's
 directory — the same behaviour `command_profile` has today. That makes "every
 project has a `claude-profile.json` beside its config" declarable once.
 
+*Measured* (BurntSushi/toml, decoding the user file then the project file into
+one struct): map keys merge, so an `[agents.codex]` declared only in the
+user-scope config survives a project file that declares only `[agents.claude]`.
+A key present in both is replaced wholesale rather than field-merged, which is
+the scalar-override behaviour wanted while `AgentConfig` has one field — and a
+trap for whoever adds a second one.
+
 ### Removed keys
 
 `[sandbox]` and everything under it (`[sandbox.agent]`, its `capabilities`,
@@ -206,8 +213,10 @@ failure this must pre-empt.
 ## What each command becomes
 
 **`agent-sandbox claude`** passes `cfg.AgentProfilePath(agentName)` straight to
-`nono wrap --profile`. No temp file, no cleanup, no deny rules folded into
-`--settings` (which survives only to inject the PreToolUse hook).
+`nono wrap --profile`. No temp file, no cleanup, and no capability-derived deny
+rules. `--settings` keeps what has nothing to do with the profile: the
+PreToolUse hook, the `Read` deny on the generated MCP config file, and the
+GitHub MCP repos write-tool denies.
 
 **`agent-sandbox doctor`** stats and `nono profile validate`s both profiles,
 keeps the `nono why` check that the broker binary is not writable through the

@@ -701,7 +701,8 @@ func TestBrokerArgsRunsTheBrokerUnderTheCommandProfile(t *testing.T) {
 		"--profile " + profile,
 		"--workdir /work/project",
 		"--allow-unix-socket-bind /run/b.sock",
-		"-- agent-sandbox broker --socket /run/b.sock",
+		"--read-file /opt/agent-sandbox/bin/agent-sandbox",
+		"-- /opt/agent-sandbox/bin/agent-sandbox broker --socket /run/b.sock",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("BrokerArgs() = %q\nmissing %q", joined, want)
@@ -710,41 +711,55 @@ func TestBrokerArgsRunsTheBrokerUnderTheCommandProfile(t *testing.T) {
 	if strings.Contains(joined, "--allow-cwd") {
 		t.Errorf("BrokerArgs() grants --allow-cwd; the working directory comes from the profile's $WORKDIR")
 	}
-	if strings.Contains(joined, "/opt/agent-sandbox/bin/agent-sandbox") {
-		t.Errorf("BrokerArgs() = %q, want the entrypoint invoked by base name, not selfPath's absolute form (nono refuses an absolute-path invocation of a policy command as a direct exec bypass)", joined)
-	}
 }
 
-// TestBrokerArgsInvokesTheEntrypointByBaseName is the direct regression test
-// for the bug this rewrite fixes: nono treats an absolute-path invocation of
-// a declared policy command as a direct exec bypass and refuses it outright,
-// measured against a real profile that declares "agent-sandbox" as its own
-// policy command (the shape the design's worked example, and this
-// repository's own command-profile.json, both use). Resolution has to go
-// through nono's own name-based matching against command_policies instead.
-func TestBrokerArgsInvokesTheEntrypointByBaseName(t *testing.T) {
+// TestBrokerArgsGrantsItsOwnBinaryAndInvokesItAbsolutely pins the two halves
+// of one ruling: the broker's ability to start is the launcher's to guarantee,
+// not the operator profile's to remember.
+//
+// --read-file covers the binary (a read grant carries the execute right).
+// Measured: under a profile granting neither, an absolute-path invocation of
+// the binary exits 127 with no output; --read-file alone makes it run.
+//
+// The entrypoint is then invoked by that same absolute path. It was invoked by
+// base name only because tool-sandbox refuses an absolute-path invocation of a
+// policy-controlled command as a direct exec bypass; with command_policies gone
+// that constraint is gone, and base-name resolution would leave its own hazard —
+// a stale copy earlier on the launcher's PATH silently becoming the broker.
+func TestBrokerArgsGrantsItsOwnBinaryAndInvokesItAbsolutely(t *testing.T) {
 	dir := t.TempDir()
 	profile := filepath.Join(dir, "command-profile.json")
 	if err := os.WriteFile(profile, []byte("{}"), 0o600); err != nil {
 		t.Fatalf("write profile: %v", err)
 	}
 	cfg := loadConfigWithCommandProfile(t, dir, profile)
+	const self = "/opt/agent-sandbox/bin/agent-sandbox"
 
-	args := BrokerArgs(cfg, "/usr/bin/nono", "/opt/agent-sandbox/bin/agent-sandbox",
-		"/run/b.sock", "/work/project")
+	args := BrokerArgs(cfg, "/usr/bin/nono", self, "/run/b.sock", "/work/project")
 
+	readFile := -1
 	dashIdx := -1
 	for i, a := range args {
-		if a == "--" {
-			dashIdx = i
-			break
+		switch a {
+		case "--read-file":
+			readFile = i
+		case "--":
+			if dashIdx < 0 {
+				dashIdx = i
+			}
 		}
+	}
+	if readFile < 0 || readFile+1 >= len(args) || args[readFile+1] != self {
+		t.Errorf("BrokerArgs() = %v, want --read-file %s so the profile need not grant the broker's own binary", args, self)
+	}
+	if readFile > dashIdx {
+		t.Errorf("BrokerArgs() puts --read-file after --, where nono would pass it to the broker instead of reading it")
 	}
 	if dashIdx < 0 || dashIdx+1 >= len(args) {
 		t.Fatalf("BrokerArgs() = %v, no entrypoint after --", args)
 	}
-	if got := args[dashIdx+1]; got != "agent-sandbox" {
-		t.Errorf("entrypoint = %q, want the base name %q", got, "agent-sandbox")
+	if got := args[dashIdx+1]; got != self {
+		t.Errorf("entrypoint = %q, want selfPath's absolute form %q", got, self)
 	}
 }
 

@@ -387,45 +387,38 @@ func waitForSocketOrExit(path string, timeout time.Duration, exited <-chan error
 // BrokerArgs builds the `nono run` argv for the command broker's session.
 //
 // The broker is a sibling of the agent's sandbox, not a child of it: nono
-// refuses to nest, and the broker must be the session entrypoint so its command
-// policies apply to everything it executes. It is deliberately not given
-// --allow-cwd; the working directory reaches the profile through --workdir,
-// which is what $WORKDIR expands to inside it.
+// refuses to nest, and the broker must be the session entrypoint so the profile
+// applies to everything it executes. It is deliberately not given --allow-cwd;
+// the working directory reaches the profile through --workdir, which is what
+// $WORKDIR expands to inside it.
 //
-// The entrypoint is invoked by base name, never by selfPath's absolute form.
-// A command profile that declares "agent-sandbox" as its own policy command
-// (the shape docs/superpowers/specs/2026-09-05-broker-runs-commands-inside-the-sandbox.md's
-// own worked example uses, and the shape command-profile.json in this
-// repository uses) treats an absolute-path invocation as a direct exec
-// bypass of the policy command it resolves to and refuses it outright
-// ("tool-sandbox direct exec bypass denied for policy-controlled command
-// 'agent-sandbox'"), measured against a real profile carrying that shape.
+// Everything the broker needs in order to *start* is granted here, on the
+// command line, rather than being left to the operator's profile. --read-file
+// covers its own binary (a read grant carries the execute right), and
+// --allow-unix-socket-bind covers the socket. Measured: under a profile that
+// grants neither, an absolute-path invocation of this binary exits 127 with no
+// output; adding --read-file alone makes the same invocation run. Keeping these
+// on the launcher's side means an operator narrowing what *commands* may reach
+// cannot accidentally stop the broker from starting, and it removes the
+// profile's grants from the set of things that decide whether a session comes
+// up at all.
 //
-// nono resolves the bare name the same way an ordinary shell would: by
-// searching this *launcher* process's own PATH before the sandbox exists at
-// all — measured directly, against two profiles differing in only one
-// variable each: a profile whose command_policies.executable_dirs names the
-// directory but whose PATH omits it fails outright ("cannot find binary
-// path"); a profile whose executable_dirs names a directory the resolved
-// binary is *not* in, but whose PATH includes the right one, starts the
-// named binary successfully. executable_dirs plays no part in resolving the
-// entrypoint itself — what it is actually for is not established by this
-// measurement.
-//
-// This means the directory holding the installed agent-sandbox binary must
-// be on the *launcher's* PATH, not merely named somewhere in the profile —
-// and that PATH resolution finds whichever "agent-sandbox" comes first: a
-// different, stale copy earlier on PATH would silently become the broker
-// instead of this one. doctor's checkCommandProfile verifies the resolution
-// this process's own PATH would produce lands on this exact binary.
+// The entrypoint is invoked by its absolute path. It was invoked by base name
+// while the profile carried command_policies, because tool-sandbox treats an
+// absolute-path invocation of a policy-controlled command as a direct exec
+// bypass and refuses it. With no command_policies left, that constraint is gone
+// and only base-name resolution's own hazard would remain: nono resolves the
+// bare name through this launcher's PATH, so a different, stale copy earlier on
+// PATH would silently become the broker instead of this one.
 func BrokerArgs(cfg *config.Config, nonoPath, selfPath, sockPath, workdir string) []string {
 	return []string{
 		nonoPath, "run", "--silent",
 		"--profile", cfg.CommandProfilePath(),
 		"--workdir", workdir,
+		"--read-file", selfPath,
 		"--allow-unix-socket-bind", sockPath,
 		"--",
-		filepath.Base(selfPath), "broker", "--socket", sockPath,
+		selfPath, "broker", "--socket", sockPath,
 	}
 }
 

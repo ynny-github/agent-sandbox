@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/policysnapshot"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/sandboxhost"
 )
 
 var errDoctorChecksFailed = errors.New("doctor: checks failed")
@@ -41,7 +42,6 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	cfg, cfgErr := config.Load(configPath)
 	results := []checkResult{
 		checkNono(ctx),
-		checkToolSandbox(ctx),
 		checkBrokerSocketDir(),
 	}
 	switch {
@@ -53,10 +53,10 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		// command_profile at it") instead of the generic one below, which
 		// config.go:204 made otherwise unreachable for this, the headline
 		// case doctor exists to catch.
-		results = append(results, checkCommandProfile(cfg))
+		results = append(results, checkProfiles(cfg))
 	default:
 		results = append(results, checkResult{
-			name: "command profile",
+			name: "profiles",
 			hint: "fix the config first: " + cfgErr.Error(),
 		})
 	}
@@ -165,15 +165,36 @@ func checkBrokerSocketDir() checkResult {
 // anywhere without moving a real file.
 var selfPath = os.Executable
 
-// checkCommandProfile reports whether the profile the broker will run under is
-// present, accepted by nono, and does not grant write access to the broker's own
-// binary. Each of these otherwise produces a session that refuses every command
+// checkProfiles reports whether the two nono profiles a launch depends on are
+// present and accepted by nono, and whether the command profile leaves the
+// broker's own binary replaceable.
+//
+// Both profiles are handed to `nono profile validate` rather than parsed here.
+// An earlier version read the command profile's JSON directly, which was both
+// fragile and incomplete: it could not see a grant that arrives through a
+// policy group (whose paths live in nono's policy.json, not in the profile), it
+// skipped every entry containing a "$" because expansion is nono's job, and it
+// broke outright once the profile grew comments — nono accepts JSONC, Go's
+// encoding/json does not. Asking nono is the only way to get answers in nono's
+// own semantics.
+//
+// What validate covers is narrow, measured: JSON syntax and group references,
+// nothing else. A grant over a protected path, a malformed domain and a
+// nonexistent path all pass it. That is why the writable-binary question is
+// asked separately, through `nono why`, which resolves groups, "~"/"$XDG_*"
+// expansion and bypass_protection before answering.
+//
+// The agent profile is included because nothing else validates it: `ai
+// config-check` resolves the config through sandboxhost but never hands the
+// JSON it generates to nono.
+//
+// Each failure here otherwise produces a session that refuses every command
 // with an error the agent cannot act on: nono's own failure arrives on the
 // broker's stderr long after the launcher has returned.
-func checkCommandProfile(cfg *config.Config) checkResult {
-	r := checkResult{name: "command profile"}
+func checkProfiles(cfg *config.Config) checkResult {
+	r := checkResult{name: "profiles"}
 	path := cfg.CommandProfilePath()
-	r.details = append(r.details, "path: "+path)
+	r.details = append(r.details, "command profile: "+path)
 
 	if _, err := os.Stat(path); err != nil {
 		r.hint = "write the profile, or point command_profile at it"
@@ -181,73 +202,53 @@ func checkCommandProfile(cfg *config.Config) checkResult {
 	}
 	if out, err := runCommand(context.Background(), "nono", "profile", "validate", path); err != nil {
 		r.details = append(r.details, "nono profile validate: "+strings.TrimSpace(string(out)))
-		r.hint = "fix the profile until `nono profile validate` passes"
+		r.hint = "fix the command profile until `nono profile validate` passes"
 		return r
 	}
+
+	resolved, err := sandboxhost.Resolve(cfg, "claude")
+	if err != nil {
+		r.details = append(r.details, fmt.Sprintf("error: could not resolve the agent profile: %v", err))
+		r.hint = "fix [sandbox.agent] until `agent-sandbox ai config-check` passes"
+		return r
+	}
+	agentPath, cleanup, err := resolved.WriteProfile()
+	if err != nil {
+		r.details = append(r.details, fmt.Sprintf("error: could not write the agent profile: %v", err))
+		r.hint = "could not validate the agent profile; fix the error above and re-run doctor"
+		return r
+	}
+	defer cleanup()
+	if out, err := runCommand(context.Background(), "nono", "profile", "validate", agentPath); err != nil {
+		r.details = append(r.details, "agent profile: "+strings.TrimSpace(string(out)))
+		r.hint = "the profile generated from [sandbox.agent] is not accepted by nono; " +
+			"see `agent-sandbox debug` for the JSON it produced"
+		return r
+	}
+	r.details = append(r.details, "agent profile: generated from [sandbox.agent], validated")
+
 	self, err := selfPath()
 	if err != nil {
 		// Fail loudly rather than silently reporting OK: not knowing the
 		// broker's own binary path means the writability check below never
 		// ran, and that must not look like it passed.
 		r.details = append(r.details, fmt.Sprintf("error: could not determine the broker binary's own path: %v", err))
-		r.hint = "could not verify the broker binary is not writable through the profile; " +
+		r.hint = "could not verify the broker binary is not writable through the command profile; " +
 			"investigate why os.Executable() failed and re-run doctor"
 		return r
 	}
-	writable, werr := profileGrantsWrite(path, self)
+	writable, werr := profileAllowsWrite(path, self)
 	if werr != nil {
-		r.details = append(r.details, fmt.Sprintf("error: could not check whether the profile grants write access to %s: %v", self, werr))
-		r.hint = "could not verify the broker binary is not writable through the profile; " +
+		r.details = append(r.details, fmt.Sprintf("error: could not ask nono whether %s is writable: %v", self, werr))
+		r.hint = "could not verify the broker binary is not writable through the command profile; " +
 			"fix the error above and re-run doctor"
 		return r
 	}
 	if writable {
 		r.details = append(r.details, "broker binary: "+self)
-		r.hint = "move the agent-sandbox binary outside every path the profile grants write access to; " +
-			"nono refuses a policy command binary it considers replaceable"
-		return r
-	}
-
-	base := filepath.Base(self)
-	resolved, rerr := lookPath(base)
-	if rerr != nil {
-		r.details = append(r.details, fmt.Sprintf("entrypoint: %q not found on PATH", base))
-		r.hint = "the launcher invokes the broker by base name (\"" + base + "\"), resolved through this " +
-			"process's own PATH the same way an ordinary shell would, before any sandbox exists — nono's " +
-			"command_policies.executable_dirs plays no part in resolving it (measured; see BrokerArgs's doc " +
-			"comment); put the directory holding the installed agent-sandbox binary on PATH, or the session " +
-			"will fail to start"
-		return r
-	}
-	if cleanAbs(resolved) != cleanAbs(self) {
-		r.details = append(r.details, fmt.Sprintf("entrypoint: %q on PATH resolves to %s, not the running binary %s", base, resolved, self))
-		r.hint = "PATH resolves \"" + base + "\" to a different binary than the one running this check — " +
-			"that other one would silently become the broker instead, whatever it is; put this binary's own " +
-			"directory ahead of it on PATH, or remove the other one"
-		return r
-	}
-
-	declaredExecutable, declared, derr := profileEntrypointExecutable(path, base)
-	if derr != nil {
-		r.details = append(r.details, fmt.Sprintf("error: could not read command_policies.commands[%q].executable: %v", base, derr))
-		r.hint = "could not verify the profile's own pinned executable matches this binary; " +
-			"fix the error above and re-run doctor"
-		return r
-	}
-	if declared && declaredExecutable == "" {
-		r.details = append(r.details, fmt.Sprintf("entrypoint: command_policies.commands[%q] does not pin \"executable\"", base))
-		r.hint = "the profile declares \"" + base + "\" as a policy command but does not pin its \"executable\" " +
-			"field; add it, naming this exact running binary (" + self + "), so the profile and the running " +
-			"binary cannot silently disagree about which file the entrypoint is"
-		return r
-	}
-	if declared && cleanAbs(declaredExecutable) != cleanAbs(self) {
-		r.details = append(r.details, fmt.Sprintf("entrypoint: command_policies.commands[%q].executable is %s, not the running binary %s", base, declaredExecutable, self))
-		r.hint = "the profile pins the entrypoint's \"executable\" to a different path than the binary running " +
-			"this check, even though PATH resolves the name correctly above — not measured what nono does with " +
-			"this specific mismatch, but a profile and a binary disagreeing about which file the entrypoint is " +
-			"is not a state to launch from; update the profile's \"executable\" field, or reinstall to the " +
-			"pinned path"
+		r.hint = "the command profile grants write access to the broker's own binary, so a command could " +
+			"replace what the next launch runs; narrow the grant that covers it (`nono why --profile " +
+			path + " --path " + self + " --op write` names it)"
 		return r
 	}
 
@@ -255,274 +256,38 @@ func checkCommandProfile(cfg *config.Config) checkResult {
 	return r
 }
 
-// cleanAbs is filepath.Clean for two paths being compared for identity, one
-// of which (lookPath's result) may not be absolute if PATH itself contains a
-// relative entry. Comparing raw strings would treat "./agent-sandbox" and its
-// absolute equivalent as different binaries when they are the same file.
-func cleanAbs(p string) string {
-	if abs, err := filepath.Abs(p); err == nil {
-		return filepath.Clean(abs)
-	}
-	return filepath.Clean(p)
-}
-
-// profileGrantsWrite reports whether binPath falls under a directory the
-// profile grants write access to — either the top-level filesystem.allow
-// (the session-wide grant), or any command_policies command's own
-// from.<caller>.sandbox.fs_write (a per-command child sandbox's grant,
-// which the top-level list alone cannot see). This has to check both: the
-// first version of this check read only the top level, and the one
-// Critical finding from this task's review that actually matches this
-// check's own shape — a write grant over the broker's own binary — lived
-// in the broker's own entrypoint entry's fs_write, not the top-level list;
-// it could have re-landed silently without this checking where it actually
-// lived.
+// profileAllowsWrite asks nono whether profilePath grants write access to
+// binPath. The answer comes from `nono why --json`, whose status field is
+// "allowed" or "denied"; the command exits 0 either way, so the status is the
+// only signal.
 //
-// This does not cover a second, distinct class of finding from the same
-// review: a directory that is both writable and executable (for example,
-// /tmp in a promoted-to-policy command's own fs_write) lets a
-// floor-reachable binary be copied in and executed directly, with nothing
-// to do with the broker's own binary path. That is not "a write grant over
-// the broker's binary" at all, so this function has nothing to say about
-// it — doctor has no writable-and-executable intersection check of any
-// kind. Closing that class needs a different check than this one.
-//
-// A fuller model of nono's own trust check belongs in nono, not here; this
-// reads only the grants that made nono refuse to start during the design
-// measurements.
-//
-// Matching is by filepath.Clean, not symlink resolution: a granted directory
-// that is itself a symlink (e.g. macOS's /tmp -> /private/tmp) could hide a
-// binary this check should have flagged. That gap is a deliberate choice, in
-// keeping with reading only these grant lists at all (see above) rather than
-// building a fuller model of nono's own trust check — not an oversight.
-func profileGrantsWrite(profilePath, binPath string) (bool, error) {
-	data, err := os.ReadFile(profilePath)
+// nono writes warnings (a bypass_protection entry naming a path that does not
+// exist on this host, for one) to stderr, and runCommand combines the streams,
+// so the JSON object is found rather than assumed to start at byte zero.
+func profileAllowsWrite(profilePath, binPath string) (bool, error) {
+	out, err := runCommand(context.Background(), "nono", "why", "--json",
+		"--profile", profilePath, "--path", binPath, "--op", "write")
 	if err != nil {
+		return false, fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
+	}
+	i := strings.IndexByte(string(out), '{')
+	if i < 0 {
+		return false, fmt.Errorf("no JSON in nono why output: %s", strings.TrimSpace(string(out)))
+	}
+	var answer struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(string(out)[i:]), &answer); err != nil {
 		return false, err
 	}
-	var p struct {
-		Filesystem struct {
-			Allow []string `json:"allow"`
-		} `json:"filesystem"`
-		CommandPolicies struct {
-			Commands map[string]struct {
-				From map[string]struct {
-					Sandbox struct {
-						FSWrite []string `json:"fs_write"`
-					} `json:"sandbox"`
-				} `json:"from"`
-			} `json:"commands"`
-		} `json:"command_policies"`
-	}
-	if err := json.Unmarshal(data, &p); err != nil {
-		return false, err
-	}
-
-	bin := filepath.Clean(binPath)
-	dirsGrantWrite := func(dirs []string) bool {
-		for _, dir := range dirs {
-			dir = filepath.Clean(strings.TrimSpace(dir))
-			if dir == "" || strings.Contains(dir, "$") {
-				continue // $WORKDIR and friends are resolved by nono, not here
-			}
-			if rel, rerr := filepath.Rel(dir, bin); rerr == nil &&
-				rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-				return true
-			}
-		}
-		return false
-	}
-
-	if dirsGrantWrite(p.Filesystem.Allow) {
+	switch answer.Status {
+	case "allowed":
 		return true, nil
+	case "denied":
+		return false, nil
+	default:
+		return false, fmt.Errorf("unexpected nono why status %q", answer.Status)
 	}
-	for _, cmd := range p.CommandPolicies.Commands {
-		for _, edge := range cmd.From {
-			if dirsGrantWrite(edge.Sandbox.FSWrite) {
-				return true, nil
-			}
-		}
-	}
-	return false, nil
-}
-
-// profileEntrypointExecutable reports the "executable" the profile pins for
-// the command_policies.commands entry named base (the broker's own
-// entrypoint, matched by base name — see BrokerArgs), and whether such an
-// entry exists at all. A profile need not declare the entrypoint as a
-// policy command (checkCommandProfile's earlier PATH checks still apply
-// either way); this only has something to say when it does.
-func profileEntrypointExecutable(profilePath, base string) (executable string, declared bool, err error) {
-	data, err := os.ReadFile(profilePath)
-	if err != nil {
-		return "", false, err
-	}
-	var p struct {
-		CommandPolicies struct {
-			Commands map[string]struct {
-				Executable string `json:"executable"`
-			} `json:"commands"`
-		} `json:"command_policies"`
-	}
-	if err := json.Unmarshal(data, &p); err != nil {
-		return "", false, err
-	}
-	cmd, ok := p.CommandPolicies.Commands[base]
-	if !ok {
-		return "", false, nil
-	}
-	return cmd.Executable, true, nil
-}
-
-// toolSandboxProbeCommand is the trivial, argument-free program checkToolSandbox
-// declares as a policy-controlled command to find out whether nono's
-// tool-sandbox can actually start on this host. "true" always exits 0 and needs
-// nothing from its environment, so if the probe fails, the failure can only be
-// tool-sandbox's own startup — never the probed program's behaviour.
-const toolSandboxProbeCommand = "true"
-
-// checkToolSandbox answers the question the design spec assigns to doctor:
-// "that the nono on PATH can actually start tool-sandbox". That is not
-// hypothetical — an unpatched nono cannot start tool-sandbox on NixOS at all,
-// because it fails to resolve an ELF dependency chain that runs through a
-// symlinked libgcc_s.so.1. See, under docs/superpowers/specs, the documents
-// dated 2026-09-04 ("tool-sandbox blocked by claude") and 2026-09-05 ("broker
-// probes"). Presence of the nono binary (checkNono) says nothing about this:
-// nono starts, prints its version, and only refuses once command_policies
-// actually activates tool-sandbox.
-//
-// The probe runs a real, short-lived nono session — the only way to answer the
-// question, and cheap enough for an operator command that is not a hot path.
-// It declares toolSandboxProbeCommand as a session-entrypoint policy command
-// under a minimal profile and asks nono to run it. The profile includes the
-// "nix_runtime" policy group (one of nono's own built-in groups, cross-platform
-// and a no-op where Nix is not installed) so the probe also succeeds on a
-// working NixOS host rather than only ever failing for lack of /nix/store
-// access; without it, tool-sandbox's outer-session PATH scan cannot even load
-// the shim nono generates for the probe command, regardless of how the probe
-// command's own sandbox is configured. See
-// docs/superpowers/specs/2026-09-05-broker-probes.md's "dp1" entry for this
-// exact profile shape (as committed) measured against a working nono, a
-// separately patched nono, and a build carrying the ELF-closure bug -- and
-// for what happens without each piece: no groups.include -> the shim itself
-// cannot execute (exit 127, "execution still failed"); a raw "/" filesystem
-// grant -> nono refuses it outright as overlapping its own protected state
-// root.
-func checkToolSandbox(ctx context.Context) checkResult {
-	r := checkResult{name: "tool-sandbox"}
-
-	if _, err := lookPath("nono"); err != nil {
-		r.details = append(r.details, fmt.Sprintf("error: %v", err))
-		r.hint = "install nono and make sure it is on PATH (see the nono check above)"
-		return r
-	}
-	probeBin, err := lookPath(toolSandboxProbeCommand)
-	if err != nil {
-		// Fail loudly rather than silently reporting OK: a check that could not
-		// run at all must never look like a check that ran and passed.
-		r.details = append(r.details, fmt.Sprintf("error: %v", err))
-		r.hint = fmt.Sprintf("could not find %q on PATH to probe with; this check did not run", toolSandboxProbeCommand)
-		return r
-	}
-
-	dir, err := os.MkdirTemp("", "agent-sandbox-doctor-toolsandbox")
-	if err != nil {
-		r.details = append(r.details, fmt.Sprintf("error: %v", err))
-		r.hint = "could not create a temp directory to probe tool-sandbox in"
-		return r
-	}
-	defer os.RemoveAll(dir)
-
-	profilePath, err := writeToolSandboxProbeProfile(dir, probeBin)
-	if err != nil {
-		r.details = append(r.details, fmt.Sprintf("error: %v", err))
-		r.hint = "could not write the probe profile"
-		return r
-	}
-
-	out, err := runCommand(ctx, "nono", "run", "--silent",
-		"--profile", profilePath, "--workdir", dir, "--", toolSandboxProbeCommand)
-	if err != nil {
-		r.details = append(r.details, "nono run: "+strings.TrimSpace(string(out)))
-		r.hint = "the nono on PATH cannot start tool-sandbox on this host; " +
-			"every command the broker runs will fail the same way once a session starts " +
-			"(a common cause is an unpatched nono on NixOS, which cannot resolve its ELF dependency layout)"
-		return r
-	}
-
-	r.ok = true
-	r.details = append(r.details, "probed with: "+toolSandboxProbeCommand)
-	return r
-}
-
-// toolSandboxProbeProfile is the minimal nono profile checkToolSandbox runs
-// under. Its field shapes are the "dp1" entry in
-// docs/superpowers/specs/2026-09-05-broker-probes.md, which records this exact
-// shape measured to succeed against a working nono and fail distinctly
-// (nono's own ELF-resolution error) against a build that cannot resolve its
-// dependency closure.
-type toolSandboxProbeProfile struct {
-	Meta struct {
-		Name string `json:"name"`
-	} `json:"meta"`
-	Groups struct {
-		Include []string `json:"include"`
-	} `json:"groups"`
-	Filesystem struct {
-		Allow []string `json:"allow"`
-	} `json:"filesystem"`
-	Environment struct {
-		AllowVars []string `json:"allow_vars"`
-	} `json:"environment"`
-	CommandPolicies struct {
-		Commands map[string]toolSandboxProbeCommandPolicy `json:"commands"`
-	} `json:"command_policies"`
-}
-
-type toolSandboxProbeCommandPolicy struct {
-	Executable string `json:"executable"`
-	From       struct {
-		Session struct {
-			Sandbox struct {
-				FSReadFile  []string `json:"fs_read_file"`
-				Environment struct {
-					AllowVars []string `json:"allow_vars"`
-				} `json:"environment"`
-			} `json:"sandbox"`
-		} `json:"session"`
-	} `json:"from"`
-}
-
-// writeToolSandboxProbeProfile writes the probe profile into dir and returns
-// its path. probeBin is granted read access under its own command policy (so
-// the shim nono generates for it can be loaded and re-executed) and declared
-// as the session's sole policy command, so the session entrypoint is exactly
-// the thing checkToolSandbox asks nono to run.
-func writeToolSandboxProbeProfile(dir, probeBin string) (string, error) {
-	var p toolSandboxProbeProfile
-	p.Meta.Name = "agent-sandbox doctor tool-sandbox probe"
-	p.Groups.Include = []string{"nix_runtime"}
-	p.Filesystem.Allow = []string{dir}
-	p.Environment.AllowVars = []string{"PATH"}
-
-	var cmd toolSandboxProbeCommandPolicy
-	cmd.Executable = probeBin
-	cmd.From.Session.Sandbox.FSReadFile = []string{probeBin}
-	cmd.From.Session.Sandbox.Environment.AllowVars = []string{"PATH"}
-	p.CommandPolicies.Commands = map[string]toolSandboxProbeCommandPolicy{
-		toolSandboxProbeCommand: cmd,
-	}
-
-	data, err := json.MarshalIndent(&p, "", "  ")
-	if err != nil {
-		return "", err
-	}
-	path := filepath.Join(dir, "probe-profile.json")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return "", err
-	}
-	return path, nil
 }
 
 func renderResults(w io.Writer, results []checkResult) {

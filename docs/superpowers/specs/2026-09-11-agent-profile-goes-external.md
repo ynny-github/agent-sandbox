@@ -80,7 +80,11 @@ This repository's `claude-profile.json`:
   "filesystem": {
     // The agent's own file tools write scratch files here and read them back;
     // the claude base grants /tmp write-only, which fails on the read-back.
-    // In mcp mode this also covers mcp.command_output_dir.
+    // In mcp mode this also covers mcp.command_output_dir (/tmp/mcp-output).
+    //
+    // Measured: the claude base already grants /tmp/claude-$UID read+write, so
+    // a hook-mode session that only ever touches the scratchpad can drop this
+    // line. It is kept because mcp mode's output directory is not under it.
     "allow": ["/tmp"],
 
     "read": [
@@ -202,6 +206,33 @@ commands that answer any question about them:
 - `nono why --profile <path> --path <p> --op <op>` — why one access was refused
 
 and states that editing a profile takes effect at the next launch.
+
+*Measured*: both commands work from inside a sandbox —
+`nono wrap --profile agent.json -- nono profile show agent.json` and
+`-- nono why --profile agent.json --path /nix/store --op read` both answer
+normally, because neither builds a sandbox of its own and so neither trips
+nono's refusal to nest. The agent can therefore run what `explain` tells it to.
+
+### What nono cannot answer
+
+Delegation is not total, and the gap falls exactly where this design puts its
+weight. *Measured* on nono 0.74.0:
+
+- **`nono profile show` does not print `environment.allow_vars` at all.** The
+  76-line output has no environment section. `nono why` has no env-var query
+  either — its four query forms are `--command`, `--path`, `--host`, `--scope`.
+  So "why is this variable not reaching the agent?" cannot be asked of nono.
+  With `--env` no longer granting and `AGENT_SANDBOX_BROKER_SOCKET` load-bearing,
+  this is the one question that matters most: doctor's probe above is the only
+  way to answer it, and `explain` must say plainly that env grants are invisible
+  to `profile show` and live in the file's `environment.allow_vars`.
+- **Meaning is agent-sandbox's.** Which profile governs which sandbox, that the
+  broker socket variable is required, that an edit takes effect at the next
+  launch — nono knows none of it. That is all `explain` has left to say.
+- **`validate` is syntax and group references.** A path that does not exist is
+  a launch-time warning, not a validation failure (*measured*: `~/.docker` is
+  absent on this host, so its `bypass_protection` entry is skipped with a
+  warning and the deny rule stays in force).
 
 **`agent-sandbox debug`** is unchanged except that `--profile` now names a real
 file, so its output can be pasted into `nono profile show` directly.

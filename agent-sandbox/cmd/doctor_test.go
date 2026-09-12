@@ -953,3 +953,28 @@ func TestCheckProfilePaths_OKWhenEveryPathExists(t *testing.T) {
 		t.Errorf("checkProfilePaths not ok with every path present: %+v", r)
 	}
 }
+
+// `nono profile show --json` prints a "~/..." exec_paths entry back exactly
+// as written in the profile, unexpanded — but nono itself expands "~" when it
+// actually applies fs_read/fs_write/exec_paths at sandbox-apply time
+// (measured, nono 0.74.0). Without expandHome, checkProfilePaths would stat
+// the literal string "~/toolchain" and report a directory that genuinely
+// exists as missing.
+func TestCheckProfilePaths_ExpandsTilde(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.Mkdir(filepath.Join(home, "toolchain"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	defer stubRunCommand(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return []byte(`{"command_policies":{"commands":{"git":{"executable":null,
+		  "from":{"session":{"sandbox":{"exec_paths":["~/toolchain"]}}}}}}}`), nil
+	})()
+
+	cfg := configWithBothProfiles(t, dir)
+	if r := checkProfilePaths(context.Background(), cfg); !r.ok {
+		t.Errorf("checkProfilePaths not ok with a \"~\"-prefixed path that exists: %+v", r)
+	}
+}

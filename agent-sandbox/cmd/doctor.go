@@ -580,6 +580,29 @@ func commandPolicyPaths(ctx context.Context, profilePath string) ([]string, erro
 	return paths, nil
 }
 
+// expandHome resolves a leading "~" (bare, or "~/...") against the current
+// user's home directory, the same way nono itself expands one in
+// fs_read/fs_write/exec_paths when it applies the sandbox. `nono profile show
+// --json` — what commandPolicyPaths reads — does NOT perform this expansion;
+// it prints the profile's own literal strings. Without this, a perfectly
+// valid "~/..." exec_paths entry reads as "missing" here even though the
+// directory exists and nono itself grants it fine at runtime (measured, nono
+// 0.74.0). $WORKDIR and other $VAR-style tokens are not handled here: none of
+// this profile's own exec_paths/executable/executable_dirs entries use one.
+func expandHome(p string) string {
+	if p != "~" && !strings.HasPrefix(p, "~/") {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return p
+	}
+	if p == "~" {
+		return home
+	}
+	return filepath.Join(home, p[2:])
+}
+
 // checkProfilePaths reports command-policy paths that no longer exist on this
 // host. nono handles a missing one differently depending on which kind it is,
 // and only one of the two is silent:
@@ -615,7 +638,7 @@ func checkProfilePaths(ctx context.Context, cfg *config.Config) checkResult {
 
 	var missing []string
 	for _, p := range paths {
-		if _, err := os.Stat(p); err != nil {
+		if _, err := os.Stat(expandHome(p)); err != nil {
 			missing = append(missing, p)
 		}
 	}

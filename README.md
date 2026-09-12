@@ -159,7 +159,7 @@ defeat.
 The command profile sorts every runnable program into one of two tiers:
 
 - **Policy commands** are declared in the profile with their own child
-  sandbox — `git`, `ssh`, `bash` and `sh`, in this repository's own profile.
+  sandbox — `git`, `ssh`, `bash`, `sh` and `go`, in this repository's own profile.
   None of them carries nono's `invocation_policy` argv rules; what bounds
   each is its own filesystem, network and environment grants, scoped per
   caller edge (see [The two profiles](#the-two-profiles) for the worked
@@ -192,13 +192,15 @@ bounded the same way.
 
 **Nor does either tier bound what a compiler or interpreter does once it
 runs.** Nothing here enumerates every program capable of executing code —
-only which four commands get their own sandbox. A toolchain that compiles
-and executes code (this profile runs `go` at the floor, for instance, not as
-a policy command) is bounded only by what *its own* process can reach —
-the broker's own sandbox, in `go`'s case — not by argv rules and not by
-which other tools are or are not declared elsewhere in the profile. See
-[The two profiles](#the-two-profiles) below for what that costs in
-practice.
+only which five commands get their own sandbox, and being one of them is not
+by itself a narrower boundary: a toolchain that compiles and executes code is
+bounded only by what *its own* process can reach, whether that process is
+`python` or `rustc` running at the floor (this repository's own profile does
+not declare either as a policy command) or `go`, which is a policy command
+here and is still only as bounded as its own sandbox's reach. Not by argv
+rules, and not by which other tools are or are not declared elsewhere in the
+profile. See [The two profiles](#the-two-profiles) below for what that costs
+in practice, `go` included.
 
 ### The filesystem is not virtualized
 
@@ -505,13 +507,13 @@ executing: commit-message validation does not run inside this sandbox
 either way, so re-opening hook execution is not worth what it costs.
 
 **A worked example** — this repository's own `command-profile.json` at the
-repo root — declares four policy commands: `git`, `ssh`, `bash` and `sh`.
-Everything else this repository's own workflows use (`go`, `rg`, `mise`,
+repo root — declares five policy commands: `git`, `ssh`, `bash`, `sh` and
+`go`. Everything else this repository's own workflows use (`rg`, `mise`,
 `gofmt`, the coreutils, …) runs at the floor instead, granted through
 `groups.include` and the top-level `filesystem`/`environment` sections, not
 through `command_policies`.
 
-None of the four pins an `executable`. A pin whose path does not exist
+None of the five pins an `executable`. A pin whose path does not exist
 disables mediation for that command entirely: nono falls back to the first
 `PATH` match and runs it at the *session's* own grants, `nono profile
 validate` still passes, and the audit trail records only "tools: active, no
@@ -521,8 +523,7 @@ miss in a wall of launch output, and the danger is real. `git`'s real
 binary is a `/nix/store` path that changes on every nixpkgs update, so
 pinning it here would un-sandbox `git` on the next upgrade — which is also
 why `doctor`'s "profile paths" check (see [`doctor`](#doctor)) exists, verifying
-instead the paths this profile *does* pin (`executable_dirs`, and each
-command's own `exec_paths`).
+instead the paths this profile *does* pin (each command's own `exec_paths`).
 
 - **`git`** is reachable from the session and runs as the real binary
   directly — there is no wrapper and no second name for it. Its child
@@ -537,16 +538,34 @@ command's own `exec_paths`).
   skips a missing `exec_paths` entry silently, so a nixpkgs git update that
   moves this path would break HTTPS transport with no diagnostic naming the
   profile, which is exactly what `doctor`'s "profile paths" check catches.
-  `git`'s own `can_use: ["ssh"]` is the only reason `ssh` is reachable at
-  all — see [Network](#the-two-profiles) above for both commands' network
-  grants and the git-hooks trade-off.
+  `exec_paths` also lists `/usr/lib/git-core` and `/usr/libexec/git-core`
+  alongside the `/nix/store` path — both missing on this repository's own
+  NixOS host, and skipped there the same way a stale nix hash would be, but
+  present (and therefore used) on a non-Nix host, so HTTPS transport is not
+  NixOS-only. `git`'s own `can_use: ["ssh"]` is the only reason `ssh` is
+  reachable at all — see [Network](#the-two-profiles) above for both
+  commands' network grants and the git-hooks trade-off.
 - **`ssh`** is reachable only from `git`; a direct session invocation is
   refused (`session: "deny"`, exit 126).
 - **`bash` and `sh`** are reachable only from the session, deliberately not
   from `git` — `git` cannot execute a hook at all (above), so a `git`-caller
-  edge for either would be dead weight.
+  edge for either would be dead weight. Both also declare `can_use: ["go"]`,
+  with a matching `from.bash`/`from.sh` edge on `go` itself, so `go
+  build`/`go test`/`go version` work from inside either shell — deliberately
+  a narrower edge than `go`'s own `from.session` (no network), so chaining
+  through `go` from inside a shell cannot become a side door around
+  `bash`/`sh`'s own no-network rule.
+- **`go`** is reachable from the session directly, and from `bash`/`sh` as
+  their callee (above). Its own sandbox grants `~/go/pkg/mod`,
+  `~/go/pkg/sumdb` and `$XDG_CACHE_HOME/go-build` for the module cache,
+  build cache and checksum database, `$WORKDIR` and `/tmp` with both write
+  and exec (`go test` compiles a binary into `/tmp` and immediately runs
+  it), and — only on the `from.session` edge — network reachability to
+  `proxy.golang.org` and `sum.golang.org`, the same two hosts already in
+  this profile's own top-level `network.allow_domain`. See the "Three
+  facts" list further down for why it exists and what it costs.
 
-None of the four carries an `invocation_policy` argv rule of any kind. An
+None of the five carries an `invocation_policy` argv rule of any kind. An
 earlier revision of this project enforced git-specific rules — blocking an
 unconditional `push --force`, `reset --hard`, and similar — through a
 Go-based wrapper that parsed each invocation before deciding whether to
@@ -563,7 +582,7 @@ binary, add `argv_prepend: ["safe", "git"]`, and give the real binary a
 second name reachable only from the wrapper) — a capability decision this
 repository's own profile does not make.
 
-None of these four edges is written with nono's `sandbox` shorthand
+None of these five commands' edges is written with nono's `sandbox` shorthand
 (`"from": {"session": "sandbox"}` rather than the longer
 `{"session": {"sandbox": {...}}}`), even though nono runs both forms
 identically. `nono why --command` does not implement the shorthand: on this
@@ -671,24 +690,32 @@ docker is accepting both until someone closes them.
 
 Three facts this design turns on, each measured on nono 0.74.0:
 
-- **`executable_dirs` is required once Tool Sandbox activates, or the Go
-  toolchain cannot exec its own tools.** Activating Tool Sandbox at all
-  rebuilds the broker's own execute grant from the trusted directories on
-  `PATH`, and the Go toolchain's internal tools (`compile`, `link`, …) do
-  not live on `PATH` — without `command_policies.executable_dirs` naming
-  that mise-managed directory directly, `go build ./...` fails with
-  `fork/exec .../pkg/tool/linux_amd64/compile: permission denied`. Neither
-  `~` nor `$HOME` is expanded there, so the path is written literal, and it
-  is pinned to a minor Go version (`.mise.toml` pins `go = "1.25"`): a patch
-  upgrade does not break it, a minor bump does, loudly.
+- **Activating Tool Sandbox at all requires `go` to be its own policy
+  command, or the Go toolchain cannot exec its own tools.** Declaring even
+  one `command_policies.commands` entry (`git` alone would do it) rebuilds
+  the session's own execute grant from the trusted directories on `PATH`,
+  and the Go toolchain's internal tools (`compile`, `link`, …) do not live
+  on `PATH` — without a grant naming that mise-managed directory, `go build
+  ./...` fails with `fork/exec .../pkg/tool/linux_amd64/compile: permission
+  denied` (measured by removing the `go` entry and rerunning the same
+  command). This repository's profile used to fix that with a top-level
+  `command_policies.executable_dirs` entry naming the directory directly,
+  literal path only (`executable_dirs` expands neither `~` nor `$HOME`) and
+  pinned to a minor Go version (`.mise.toml` pins `go = "1.25"`: a patch
+  upgrade does not break it, a minor bump does, loudly). It now declares
+  `go` as a policy command instead, because `executable_dirs` could not
+  finish the job: `go test` compiles a binary into `/tmp` and immediately
+  runs it, and nono refuses to treat a group/world-writable directory as
+  executable at all, so `/tmp` could never have been added to
+  `executable_dirs`. A per-command policy's own `exec_paths` has neither
+  restriction — see the `go` bullet in the worked example above.
 - **A missing `executable` pin disables mediation for that command
   entirely, which is why nothing in this profile pins one** (see the
   worked example above). It is not silent — nono prints a warning and
   `--silent` does not suppress it — but the warning is easy to miss in a
   wall of launch output, and the danger is real. `agent-sandbox doctor`'s
-  "profile paths" check exists to catch the paths that *are* pinned
-  (`exec_paths`, `executable_dirs`) going stale, not to catch a pin that
-  was never made.
+  "profile paths" check exists to catch a pinned `exec_paths` entry going
+  stale, not to catch a pin that was never made.
 - **`nono why --command` does not implement the `sandbox` shorthand, which
   is why every edge in this profile is written `from.session`** rather than
   the shorter form (see the worked example above) — the shorthand answers a
@@ -698,19 +725,23 @@ Three facts this design turns on, each measured on nono 0.74.0:
 Two more properties worth knowing:
 
 - **A toolchain that compiles and runs code is bounded only by its own
-  sandbox's reach, not by which other commands are declared.** `go` is not
-  one of this profile's four policy commands — `go build`, `go test` and
-  `go run` all run directly in the broker's own sandbox, the same one every
-  other floor command shares. Whatever that sandbox's filesystem and
-  network grants reach, a program compiled and immediately executed there
-  can reach too — in principle including a copy of a program this profile
-  does sandbox elsewhere, made and exec'd through `/tmp` or `$WORKDIR`. The
-  two-tier model was never positioned to close this: it decides what the
-  broker itself dispatches by name, and a binary a compiled program execs
-  directly is not something the broker dispatches at all. If you enumerate
-  a compiler or interpreter's own toolchain in a profile you write, treat
-  its own sandbox's reach as the honest boundary, not the two-tier model's
-  absoluteness.
+  sandbox's reach, not by which other commands are declared, and not by
+  which tier it is in.** `python` and `rustc` are not among this profile's
+  five policy commands, so each runs directly in the broker's own sandbox,
+  the same one every other floor command shares. `go` *is* one of the five
+  — and being a policy command buys back nothing on this point, only a
+  narrower sandbox to be bounded by: its own edge grants `$WORKDIR` and
+  `/tmp` with both write and exec, because `go test` compiles a binary into
+  `/tmp` and immediately runs it. Whichever case, whatever the relevant
+  sandbox's filesystem and network grants reach, a program compiled and
+  immediately executed there can reach too — in principle including a copy
+  of a program this profile does sandbox elsewhere, made and exec'd through
+  `/tmp` or `$WORKDIR`. The two-tier model was never positioned to close
+  this: it decides what the broker itself dispatches by name, and a binary
+  a compiled program execs directly is not something the broker dispatches
+  at all. If you enumerate a compiler or interpreter's own toolchain in a
+  profile you write, treat its own sandbox's reach as the honest boundary,
+  not the two-tier model's absoluteness.
 - **`nono profile validate` checks JSON syntax and group references only**
   — it does not catch every schema mistake (`exec_paths` itself is not in
   the published JSON Schema, though the runtime honours it). Verify a real

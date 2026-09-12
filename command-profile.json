@@ -171,16 +171,6 @@
   },
 
   "command_policies": {
-    // Not about git. Activating Tool Sandbox at all rebuilds the outer session's
-    // execute grant from the trusted directories on PATH, and go's internal
-    // toolchain does not live on PATH: without this line `go build ./...` dies
-    // with "fork/exec .../pkg/tool/linux_amd64/compile: permission denied".
-    // Neither ~ nor $HOME is expanded here, so the path is literal. "1.25" is
-    // mise's minor-version symlink and .mise.toml pins go = "1.25", so a patch
-    // upgrade does not break it; a minor bump does, loudly.
-    // /tmp cannot be added: nono refuses a group/world-writable executable dir.
-    "executable_dirs": ["/home/yn/.local/share/mise/installs/go/1.25/pkg/tool/linux_amd64"],
-
     "commands": {
       // DO NOT shorten "from": {"session": …} to the "sandbox" shorthand. nono
       // runs both identically, but `nono why --profile <this> --command git`
@@ -258,7 +248,13 @@
             // "fatal: cannot exec 'remote-https': Permission denied".
             // nono SKIPS exec_paths entries that do not exist, so a nixpkgs git
             // update breaks HTTPS here silently. doctor checks for that.
-            "exec_paths":   ["/nix/store/8yh8zbb0r4na7gkqk0db0gbdid2ax7zm-git-2.54.0/libexec/git-core"],
+            // /usr/lib/git-core and /usr/libexec/git-core are also listed,
+            // unconditionally: a missing entry costs nothing (skipped, same
+            // as a stale nix hash would be), and having them means HTTPS
+            // transport also works on a non-Nix host — this file is not
+            // NixOS-only.
+            "exec_paths":   ["/nix/store/8yh8zbb0r4na7gkqk0db0gbdid2ax7zm-git-2.54.0/libexec/git-core",
+                              "/usr/lib/git-core", "/usr/libexec/git-core"],
             // Governs HTTPS remotes only; SSH remotes go out through the ssh
             // entry below. Requires the session's own top-level network block to
             // be present — a child allow_domain against a proxy-less session
@@ -307,7 +303,18 @@
       // blocked. NOT reachable from git (see the git entry's comment above)
       // — git cannot exec a hook at all, so a from.git edge here would be
       // dead weight.
+      //
+      // can_use: ["go"] plus the matching command_policies.commands.go.from.bash
+      // edge below are what let `go version`/`go build`/`go test` run from
+      // inside this sandbox at all — now that go is itself a declared
+      // policy command (Tool Sandbox enforces the can_use chain even for a
+      // command that used to be reachable from anywhere on exec_paths).
+      // That edge is deliberately narrower than go's own from.session edge:
+      // no "network" key, same as this sandbox's own denial above — chaining
+      // through go from inside bash/sh must not become a side door around
+      // bash/sh's own no-network rule.
       "bash": {
+        "can_use": ["go"],
         "from": {
           "session": { "sandbox": {
             // /nix/store and /run/current-system/sw carry read AND exec
@@ -317,14 +324,15 @@
             // left in exec_paths, `bash -c id` fails "Permission denied",
             // exit 126). ~/.local/share/mise is the same read+exec pairing,
             // needed because every toolchain this project uses (go, python,
-            // node, ...) is installed there, not under /nix/store. Literal
-            // absolute path: neither ~ nor $HOME is expanded here, same rule
-            // as executable_dirs above.
+            // node, ...) is installed there, not under /nix/store. Written
+            // as "~" here: measured, "~" and "$HOME" both expand correctly
+            // in fs_read/fs_write/exec_paths (unlike nono's
+            // command_policies.executable_dirs field, which does not).
             "fs_read":     ["$WORKDIR", "/nix/store", "/run/current-system/sw",
-                             "/home/yn/.local/share/mise"],
+                             "~/.local/share/mise"],
             "fs_write":    ["$WORKDIR"],
             "exec_paths":  ["/nix/store", "/run/current-system/sw",
-                             "/home/yn/.local/share/mise"],
+                             "~/.local/share/mise"],
             "environment": { "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM"] }
             // No "network" key at all. Its absence IS the denial — do not
             // "helpfully" fill it in with allow_domain/allow_all. Measured:
@@ -337,23 +345,127 @@
       },
 
       // Confined shell for the session only — same shape as bash above,
-      // including the mise toolchain reach. NOT reachable from git, and
-      // carries no can_use of its own: git cannot exec a hook at all (see
-      // the git entry's comment above), so there is no live caller edge for
-      // this to invoke git through, and no git.from.sh edge accepting it as
-      // a caller either.
+      // including the mise toolchain reach and the same from.go edge below
+      // for the same reason (go is a declared policy command now; nothing
+      // reaches it through a bare exec_paths grant anymore). NOT reachable
+      // from git: git cannot exec a hook at all (see the git entry's
+      // comment above), so there is no live caller edge for this to invoke
+      // git through, and no git.from.sh edge accepting it as a caller
+      // either.
       "sh": {
+        "can_use": ["go"],
         "from": {
           "session": { "sandbox": {
+            // Same read+exec pairing as bash above, and the same reason:
+            // /nix/store and /run/current-system/sw need both fs_read and
+            // exec_paths to actually exec anything under them, and
+            // ~/.local/share/mise is where every mise-installed toolchain
+            // (go, python, node, ...) lives, not under /nix/store. Written
+            // as "~" here: measured, "~" and "$HOME" both expand correctly
+            // in fs_read/fs_write/exec_paths (unlike nono's
+            // command_policies.executable_dirs field, which does not).
             "fs_read":     ["$WORKDIR", "/nix/store", "/run/current-system/sw",
-                             "/home/yn/.local/share/mise"],
+                             "~/.local/share/mise"],
             "fs_write":    ["$WORKDIR"],
             "exec_paths":  ["/nix/store", "/run/current-system/sw",
-                             "/home/yn/.local/share/mise"],
+                             "~/.local/share/mise"],
             "environment": { "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM"] }
             // No "network" key at all, same as bash above — absence is the
             // denial, not an oversight. Do NOT add ~/.config/mise, same
             // reasoning as bash above.
+          } }
+        }
+      },
+
+      // The Go toolchain's internal tools (compile, link, cover, ...) live off
+      // PATH, under mise's install tree, and activating Tool Sandbox at all
+      // (true the moment any command_policies.commands entry exists, which
+      // git/ssh/bash/sh above already ensure) rebuilds the session's own
+      // execute grant from PATH's trusted directories alone. Without a policy
+      // here, `go build ./...` dies with "fork/exec
+      // .../pkg/tool/linux_amd64/compile: permission denied" — measured, by
+      // temporarily removing this entry and rerunning the same command.
+      //
+      // This replaces command_policies.executable_dirs, which used to grant
+      // that same directory a different way and could not do this job:
+      // executable_dirs does not expand "~" (only a literal, host-specific
+      // path), and separately, nono refuses to treat a group/world-writable
+      // directory as executable at all, so /tmp — where `go test` compiles a
+      // binary and then execs it — could never have been added there. A
+      // per-command policy has neither restriction.
+      //
+      // Network: granted, narrowly, to proxy.golang.org and sum.golang.org —
+      // the same two hosts the session's own top-level network.allow_domain
+      // already lists, and the only two the Go toolchain itself ever
+      // contacts. Measured both ways with a module not already in
+      // ~/go/pkg/mod: with no "network" key, `go mod tidy` fails at DNS
+      // resolution ("dial udp ... socket: operation not permitted"); with
+      // this "network" key plus the six proxy env vars below, it succeeds,
+      // provided ~/go/pkg/sumdb is also writable (sum.golang.org's client
+      // caches signed tree data there, a directory `go mod`/`go get` write to
+      // even though it is not under ~/go/pkg/mod) — without it the fetch gets
+      // as far as downloading the module and then fails writing the sumdb
+      // cache. Chose to grant it: every module this repository currently
+      // depends on is already cached, so day-to-day `go build`/`go test`
+      // never exercise this, but a future dependency bump would need it, and
+      // two fixed hosts is narrower than the 14-host network set `go` had
+      // when it ran at the session floor before this change (that included
+      // github.com, pypi.org, registry.npmjs.org, crates.io, pub.dev, ... —
+      // domains go itself never has a reason to contact). The child
+      // allow_domain depends on the session's own top-level "network" block
+      // staying present — against a proxy-less session it fails at init with
+      // "no loopback proxy env was present" (measured).
+      //
+      // Caveat, stated plainly: a toolchain that compiles and immediately
+      // runs code is bounded only by what its own sandbox reaches — not by
+      // which other commands are declared. This one reaches $WORKDIR and
+      // /tmp with both write and exec, because `go test` needs exactly that
+      // to compile a binary and then run it. That is narrower than the
+      // session-wide floor access `go` had before this entry existed, and it
+      // is still the honest boundary: anything this sandbox can write into
+      // $WORKDIR or /tmp, it can also execute.
+      "go": {
+        "from": {
+          "session": { "sandbox": {
+            "fs_read":     ["$WORKDIR", "/nix/store", "/run/current-system/sw",
+                             "~/.local/share/mise", "~/go/pkg/mod",
+                             "~/go/pkg/sumdb", "$XDG_CACHE_HOME/go-build"],
+            "fs_write":    ["$WORKDIR", "/tmp", "~/go/pkg/mod",
+                             "~/go/pkg/sumdb", "$XDG_CACHE_HOME/go-build"],
+            "exec_paths":  ["~/.local/share/mise", "/tmp"],
+            "network":     { "allow_domain": ["proxy.golang.org", "sum.golang.org"] },
+            "environment": { "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM",
+                                             "MISE*", "__MISE*",
+                                             "http_proxy", "HTTP_PROXY", "https_proxy",
+                                             "HTTPS_PROXY", "no_proxy", "NO_PROXY"] }
+          } },
+          // bash and sh above declare can_use: ["go"] so `go version`/
+          // `go build`/`go test` work from inside either shell. Deliberately
+          // NOT the same sandbox as the session edge above: no "network" key
+          // here, matching bash/sh's own no-network design — a script run
+          // inside either shell must not gain module-proxy network access
+          // that the shell itself does not have. Same filesystem/exec_paths
+          // reach otherwise, so offline `go build`/`go test` behave the same
+          // whether invoked directly or from inside bash/sh.
+          "bash": { "sandbox": {
+            "fs_read":     ["$WORKDIR", "/nix/store", "/run/current-system/sw",
+                             "~/.local/share/mise", "~/go/pkg/mod",
+                             "~/go/pkg/sumdb", "$XDG_CACHE_HOME/go-build"],
+            "fs_write":    ["$WORKDIR", "/tmp", "~/go/pkg/mod",
+                             "~/go/pkg/sumdb", "$XDG_CACHE_HOME/go-build"],
+            "exec_paths":  ["~/.local/share/mise", "/tmp"],
+            "environment": { "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM",
+                                             "MISE*", "__MISE*"] }
+          } },
+          "sh": { "sandbox": {
+            "fs_read":     ["$WORKDIR", "/nix/store", "/run/current-system/sw",
+                             "~/.local/share/mise", "~/go/pkg/mod",
+                             "~/go/pkg/sumdb", "$XDG_CACHE_HOME/go-build"],
+            "fs_write":    ["$WORKDIR", "/tmp", "~/go/pkg/mod",
+                             "~/go/pkg/sumdb", "$XDG_CACHE_HOME/go-build"],
+            "exec_paths":  ["~/.local/share/mise", "/tmp"],
+            "environment": { "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM",
+                                             "MISE*", "__MISE*"] }
           } }
         }
       }

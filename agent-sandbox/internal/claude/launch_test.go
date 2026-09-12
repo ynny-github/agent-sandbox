@@ -1034,3 +1034,19 @@ func TestRun_SkipsTheHookProbeInMcpMode(t *testing.T) {
 		t.Errorf("the hook probe ran %d time(s) in mcp mode; want 0", probed)
 	}
 }
+
+// Every collaborator Run hands to run must be wired. A nil one is not a failing
+// test but a panic at launch, and the tests that drive run() supply their own
+// stubs, so nothing else would notice a field added to runDeps and forgotten
+// here.
+func TestDefaultDeps_EveryDependencyIsWired(t *testing.T) {
+	v := reflect.ValueOf(defaultDeps())
+	for i := 0; i < v.NumField(); i++ {
+		if v.Field(i).Kind() != reflect.Func {
+			continue
+		}
+		if v.Field(i).IsNil() {
+			t.Errorf("runDeps.%s is nil in defaultDeps()", v.Type().Field(i).Name)
+		}
+	}
+}

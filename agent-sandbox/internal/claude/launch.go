@@ -254,13 +254,22 @@ func defaultAgentProfile(c *config.Config) (string, error) {
 // the old syscall.Exec approach so the launcher can outlive Claude and run
 // teardown.
 func Run(cfg *config.Config, opts Options) error {
-	return run(cfg, opts, runDeps{
+	return run(cfg, opts, defaultDeps())
+}
+
+// defaultDeps is the real collaborator set, separate from Run so a test can
+// assert every field is wired. A dependency left nil here is not a test
+// failure, it is a panic at launch — run calls each one unconditionally for
+// the mode it applies to, and only Run builds this set.
+func defaultDeps() runDeps {
+	return runDeps{
 		writeMCPConfig: writeGithubMCPConfig,
 		agentProfile:   defaultAgentProfile,
+		verifyHook:     probeHook,
 		startBroker:    startCommandBroker,
 		supervise:      superviseProcess,
 		exit:           os.Exit,
-	})
+	}
 }
 
 func run(cfg *config.Config, opts Options, d runDeps) error {

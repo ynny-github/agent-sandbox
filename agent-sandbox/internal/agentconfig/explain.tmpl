@@ -89,7 +89,9 @@ Editing **does not affect the current session**: both profiles are read once, at
 session start. An edit takes effect the next time the operator runs
 `agent-sandbox claude`. After editing, run `agent-sandbox ai config-check` — it
 hands both profiles to `nono profile validate`. `agent-sandbox doctor` goes
-further: it adds the broker-socket probe, asks nono whether the command profile
+further: it adds the broker-socket probe, probes whether the nono on this host
+can start Tool Sandbox at all (an unpatched nono on NixOS cannot, even though
+`nono --version` still answers fine), asks nono whether the command profile
 leaves the broker's own binary writable, and checks that the paths the profile
 pins still exist on this host.
 

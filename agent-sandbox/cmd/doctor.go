@@ -528,9 +528,9 @@ func (e *commandPolicyEdge) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// commandPolicyPaths returns every host path the command profile pins: each
-// command's "executable", and every "exec_paths" entry in every caller edge's
-// sandbox.
+// commandPolicyPaths returns every host path the command profile pins: the
+// profile's own "command_policies.executable_dirs", each command's
+// "executable", and every "exec_paths" entry in every caller edge's sandbox.
 //
 // The profile is read through `nono profile show --json`, never parsed from the
 // file: nono's own parser handles JSONC, fills defaults, and is the authority on
@@ -552,7 +552,8 @@ func commandPolicyPaths(ctx context.Context, profilePath string) ([]string, erro
 
 	var shown struct {
 		CommandPolicies struct {
-			Commands map[string]struct {
+			ExecutableDirs []string `json:"executable_dirs"`
+			Commands       map[string]struct {
 				Executable *string                      `json:"executable"`
 				Sandbox    *commandPolicySandbox        `json:"sandbox"`
 				From       map[string]commandPolicyEdge `json:"from"`
@@ -564,6 +565,7 @@ func commandPolicyPaths(ctx context.Context, profilePath string) ([]string, erro
 	}
 
 	var paths []string
+	paths = append(paths, shown.CommandPolicies.ExecutableDirs...)
 	for _, cmd := range shown.CommandPolicies.Commands {
 		if cmd.Executable != nil && *cmd.Executable != "" {
 			paths = append(paths, *cmd.Executable)
@@ -579,15 +581,19 @@ func commandPolicyPaths(ctx context.Context, profilePath string) ([]string, erro
 }
 
 // checkProfilePaths reports command-policy paths that no longer exist on this
-// host. Both ways nono handles a missing one are silent, and one is a security
-// failure rather than an availability failure:
+// host. nono handles a missing one differently depending on which kind it is,
+// and only one of the two is silent:
 //
-//   - a missing exec_paths entry is skipped by design, so a multi-call tool
+//   - a missing exec_paths entry is skipped by design, with a warning
+//     suppressed by the --silent the launcher passes, so a multi-call tool
 //     loses a helper with no diagnostic naming the profile;
 //   - a missing "executable" pin disables mediation for that command outright.
 //     nono falls back to the first PATH match and runs it at the session's
 //     grants, `nono profile validate` still passes, and the audit records
-//     "tools: active, no invocations" (measured, nono 0.74.0).
+//     "tools: active, no invocations" (measured, nono 0.74.0). This one is
+//     not silent — nono prints a warning and --silent does not suppress it —
+//     but the warning is easy to miss in a wall of launch output, and the
+//     danger it names is real.
 //
 // On NixOS every such path carries a store hash, so any package update can
 // produce either state. This check is what makes that loud.
@@ -618,9 +624,10 @@ func checkProfilePaths(ctx context.Context, cfg *config.Config) checkResult {
 		for _, p := range missing {
 			r.details = append(r.details, "missing: "+p)
 		}
-		r.hint = "the command profile pins paths that no longer exist on this host; nono fails " +
-			"silently on both — a missing exec_paths entry is skipped, and a missing `executable` " +
-			"pin disables mediation for that command entirely. Update " + profilePath +
+		r.hint = "the command profile pins paths that no longer exist on this host; a missing " +
+			"exec_paths entry is skipped silently (--silent suppresses its warning), while a " +
+			"missing `executable` pin disables mediation for that command entirely and prints a " +
+			"warning --silent does not suppress. Update " + profilePath +
 			" to the current paths (a package upgrade is the usual cause)"
 		return r
 	}

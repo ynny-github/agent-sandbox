@@ -843,6 +843,37 @@ func TestCommandPolicyPaths_CollectsExecutablesAndExecPaths(t *testing.T) {
 	}
 }
 
+const profileShowExecutableDirsJSON = `{
+  "command_policies": {
+    "executable_dirs": ["/from/executable_dirs"],
+    "commands": {
+      "git": {
+        "executable": null,
+        "from": { "session": { "sandbox": {
+          "exec_paths": ["/does/not/exist/libexec/git-core"]
+        } } }
+      }
+    }
+  }
+}`
+
+func TestCommandPolicyPaths_IncludesExecutableDirs(t *testing.T) {
+	defer stubRunCommand(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return []byte(profileShowExecutableDirsJSON), nil
+	})()
+
+	got, err := commandPolicyPaths(context.Background(), "irrelevant.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"/does/not/exist/libexec/git-core", "/from/executable_dirs"}
+	sort.Strings(got)
+	sort.Strings(want)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("commandPolicyPaths = %v, want %v (command_policies.executable_dirs must not be dropped)", got, want)
+	}
+}
+
 // nono's CommandFromConfig is an untagged three-variant enum: a "from" edge's
 // value may be a bare policy string (Deny), an object wrapping the sandbox
 // under a nested "sandbox" key (Edge), or a sandbox object used directly as

@@ -281,15 +281,20 @@ MCP is enabled.
 - **Every path the command profile pins under `command_policies` still
   exists.** doctor asks nono what the profile's `executable_dirs`, each
   policy command's `exec_paths`, and any `executable` resolve to, and
-  `stat`s every one. Both ways nono handles a missing one are silent, and
-  only one is a mere availability failure: a missing `exec_paths` entry is
-  skipped by design, so a multi-call tool quietly loses a helper; a missing
-  `executable` pin disables mediation for that command outright — nono
-  falls back to the first `PATH` match and runs it at the *session's* own
-  grants, `nono profile validate` still passes, and the audit trail records
-  only "tools: active, no invocations" (measured on nono 0.74.0). On NixOS,
-  where every one of these paths carries a store hash, a routine package
-  upgrade is enough to trigger either failure mode — which is also why
+  `stat`s every one. nono handles a missing one differently depending on
+  which kind it is, and only one of the two is silent: a missing
+  `exec_paths` entry is skipped by design, with its warning suppressed by
+  the `--silent` the launcher passes, so a multi-call tool quietly loses a
+  helper with no diagnostic naming the profile; a missing `executable` pin
+  disables mediation for that command outright — nono falls back to the
+  first `PATH` match and runs it at the *session's* own grants, `nono
+  profile validate` still passes, and the audit trail records only "tools:
+  active, no invocations" (measured on nono 0.74.0). That one is not
+  silent — nono prints a warning and `--silent` does not suppress it — but
+  the warning is easy to miss in a wall of launch output, and the danger it
+  names is real. On NixOS, where every one of these paths carries a store
+  hash, a routine package upgrade is enough to trigger either failure mode
+  — which is also why
   nothing in this repository's own profile pins an `executable` at all (see
   [The two profiles](#the-two-profiles)).
 
@@ -507,13 +512,15 @@ Everything else this repository's own workflows use (`go`, `rg`, `mise`,
 through `command_policies`.
 
 None of the four pins an `executable`. A pin whose path does not exist
-silently disables mediation for that command: nono falls back to the first
+disables mediation for that command entirely: nono falls back to the first
 `PATH` match and runs it at the *session's* own grants, `nono profile
 validate` still passes, and the audit trail records only "tools: active, no
-invocations" (measured on nono 0.74.0). `git`'s real binary is a
-`/nix/store` path that changes on every nixpkgs update, so pinning it here
-would silently un-sandbox `git` on the next upgrade — which is also why
-`doctor`'s "profile paths" check (see [`doctor`](#doctor)) exists, verifying
+invocations" (measured on nono 0.74.0). This is not silent — nono prints a
+warning and `--silent` does not suppress it — but the warning is easy to
+miss in a wall of launch output, and the danger is real. `git`'s real
+binary is a `/nix/store` path that changes on every nixpkgs update, so
+pinning it here would un-sandbox `git` on the next upgrade — which is also
+why `doctor`'s "profile paths" check (see [`doctor`](#doctor)) exists, verifying
 instead the paths this profile *does* pin (`executable_dirs`, and each
 command's own `exec_paths`).
 
@@ -674,11 +681,14 @@ Three facts this design turns on, each measured on nono 0.74.0:
   `~` nor `$HOME` is expanded there, so the path is written literal, and it
   is pinned to a minor Go version (`.mise.toml` pins `go = "1.25"`): a patch
   upgrade does not break it, a minor bump does, loudly.
-- **A missing `executable` pin silently disables mediation for that
-  command, which is why nothing in this profile pins one** (see the worked
-  example above). `agent-sandbox doctor`'s "profile paths" check exists to
-  catch the paths that *are* pinned (`exec_paths`, `executable_dirs`) going
-  stale, not to catch a pin that was never made.
+- **A missing `executable` pin disables mediation for that command
+  entirely, which is why nothing in this profile pins one** (see the
+  worked example above). It is not silent — nono prints a warning and
+  `--silent` does not suppress it — but the warning is easy to miss in a
+  wall of launch output, and the danger is real. `agent-sandbox doctor`'s
+  "profile paths" check exists to catch the paths that *are* pinned
+  (`exec_paths`, `executable_dirs`) going stale, not to catch a pin that
+  was never made.
 - **`nono why --command` does not implement the `sandbox` shorthand, which
   is why every edge in this profile is written `from.session`** rather than
   the shorter form (see the worked example above) — the shorthand answers a

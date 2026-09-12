@@ -91,8 +91,9 @@
       "~/.bashrc",
       "/etc/bashrc",
       "/etc/bash.bashrc"
-      // NOTE: the broker never dispatches a shell, so nothing here reads these.
-      // Carried only because the capability defines them.
+      // NOTE: bash and sh are declared commands now, but a floor read_file
+      // grant does not propagate into their child sandboxes, so nothing here
+      // reads these. Carried only because the capability defines them.
     ],
 
     "allow_file": [
@@ -189,13 +190,17 @@
       // the agent unmediated. Measured on nono 0.74.0.
       //
       // DO NOT pin "executable" here either. A pin whose path does not exist
-      // silently disables mediation for the command: nono falls back to the
+      // disables mediation for the command entirely: nono falls back to the
       // first PATH match and runs it at the SESSION's grants, `nono profile
       // validate` still passes, and the audit records "tools: active, no
-      // invocations". git's path is a /nix/store path that changes on every
-      // nixpkgs update, so a pin here would un-sandbox git on the next upgrade.
-      // Measured on nono 0.74.0. `agent-sandbox doctor` checks the paths below
-      // still exist for the same reason.
+      // invocations". This is not silent — nono prints "[nono] Warning: 1
+      // command policy not found on PATH, skipping: <name>", and --silent
+      // does not suppress it — but the warning is easy to miss in a wall of
+      // launch output, and the danger it names is real. git's path is a
+      // /nix/store path that changes on every nixpkgs update, so a pin here
+      // would un-sandbox git on the next upgrade. Measured on nono 0.74.0.
+      // `agent-sandbox doctor` checks the paths below still exist for the
+      // same reason.
       //
       // Git hooks do NOT execute from this sandbox. `git commit` fails with
       // "fatal: cannot exec '.git/hooks/commit-msg': Permission denied";
@@ -204,32 +209,35 @@
       // Making them execute would need $WORKDIR and /nix/store added to this
       // exec_paths below (a hook's shebang makes the kernel exec the
       // interpreter, under /nix/store, as part of git's own execve() of the
-      // hook file). This is deliberately NOT done: $WORKDIR is agent-writable
-      // and this sandbox already carries network (allow_domain below) and
-      // read access to the global gitconfig, so that widening would let git
-      // execute arbitrary agent-written content with network the moment it
-      // lands in the working tree — a write-then-execute path. Measured: with
-      // exec_paths temporarily widened to $WORKDIR + /nix/store in a
-      // throwaway build of this profile (NOT the shipped state above — that
-      // widening was reverted, see task-3-report.md Addendum 3), a
-      // hand-written `.git/hooks/pre-commit` ran and printed its own output
-      // inside git's sandbox.
+      // hook file). This is deliberately NOT done — on the benefit argument
+      // alone, which is decisive by itself: enabling hooks buys back
+      // nothing. Measured, with hooks temporarily enabled for the test:
+      // lefthook still did not run, and a commit message that violates this
+      // repo's Conventional Commits rule was accepted unvalidated here,
+      // while the identical message was rejected outside nono. The reason
+      // lefthook did not run was not isolated (this repo's hook tries a
+      // plain `lefthook` on PATH before falling back to a version-stamped
+      // absolute path; either could be the one failing) — do not assume a
+      // mechanism and do not "fix" one without re-measuring first. Net
+      // effect, with or without hooks executing: commit-message validation
+      // does NOT run inside this sandbox. Do not re-open the hook-execution
+      // path to try to fix that — it was tried, it does not fix it.
+      // Measured on nono 0.74.0.
       //
-      // Separately measured, with hooks temporarily enabled for the test:
-      // even then, lefthook did not run and the commit was accepted
-      // unvalidated — a commit message that violates this repo's Conventional
-      // Commits hook went through here, while the identical message was
-      // rejected outside nono. The reason lefthook did not run was not
-      // isolated (this repo's hook tries a plain `lefthook` on PATH before
-      // falling back to a version-stamped absolute path; either could be
-      // the one failing) — do not assume a mechanism and do not "fix" one
-      // without re-measuring first.
-      //
-      // Net effect, with or without hooks executing: commit-message
-      // validation does NOT run inside this sandbox. Do not re-open the
-      // hook-execution path to try to fix that — it was tried, it does not
-      // fix it, and it costs arbitrary execution with network. Measured on
-      // nono 0.74.0.
+      // The security argument does not carry this on its own: the floor
+      // already has a write-then-execute path of its own — a Go binary
+      // built into $WORKDIR runs at the floor — with a strictly larger
+      // network set (14 allow_domain hosts against this sandbox's 2), so
+      // widening exec_paths here to $WORKDIR + /nix/store would add no new
+      // class of capability. Measured. The one genuine delta it would
+      // cost: arbitrary code running in git's child sandbox would gain read
+      // access to the global gitconfig, which the floor does NOT have
+      // (`path_not_granted` at the floor; measured). Also measured, with
+      // exec_paths temporarily widened in a throwaway build of this profile
+      // (NOT the shipped state above — that widening was reverted, see
+      // task-3-report.md Addendum 3): a hand-written
+      // `.git/hooks/pre-commit` ran and printed its own output inside git's
+      // sandbox.
       "git": {
         "can_use": ["ssh"],
         "from": {

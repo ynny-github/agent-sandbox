@@ -28,6 +28,12 @@
 
     "read": [
       "/nix/store",
+      // ~/.bashrc ends in `eval "$(mise activate bash --shims)"`, so granting
+      // the rc is not enough: mise reads its own config on every startup and
+      // exits noisily without these. Not nono-protected, so a plain read does
+      // it — no bypass_protection entry needed.
+      "~/.config/mise",
+      "~/.local/share/mise",
       "/run/current-system/sw",
       // GitHub MCP runs `docker run -i --rm ghcr.io/github/github-mcp-server`
       // as a direct child of the agent, so its config is read here rather than
@@ -37,8 +43,16 @@
       "~/.orbstack"
     ],
 
+    // Claude Code's Bash tool spawns a non-login bash, which sources this
+    // file. Without the grant every tool call is prefixed with a
+    // "Permission denied" line from bash. It is a file, so it goes in
+    // read_file, not read; and nono denies the shell rc files by default, so
+    // the grant is dropped unless bypass_protection names it too. Read-only:
+    // the rc still executes, so anything it sources must be reachable here.
+    "read_file": ["~/.bashrc"],
+
     "allow_file": ["/dev/null"],
-    "bypass_protection": ["~/.docker"]
+    "bypass_protection": ["~/.docker", "~/.bashrc"]
   },
 
   "environment": {

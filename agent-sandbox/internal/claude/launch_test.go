@@ -984,3 +984,53 @@ func pinExecutablePath(t *testing.T) string {
 	t.Cleanup(func() { executablePath = prev })
 	return self
 }
+
+// If the hook cannot run, Claude Code reports a non-blocking error and then
+// runs the command anyway — unwrapped, in the agent's own sandbox, under none
+// of the command profile's limits. That is a bypass, not a degraded mode, so
+// the launcher proves the hook works before handing control to the agent.
+func TestRun_RefusesToLaunchWhenTheHookCannotRun(t *testing.T) {
+	makeFakeNono(t)
+	pinExecutablePath(t)
+	dir, cfg := writeLaunchFixture(t, true)
+	_ = dir
+	cfg.ToolMode = "hook"
+
+	supervised := 0
+	err := run(cfg, Options{}, runDeps{
+		agentProfile: defaultAgentProfile,
+		verifyHook:   func(string, string) error { return errors.New("execve refused") },
+		startBroker:  testBrokerStart("/tmp/test.sock", nil),
+		supervise:    func(string, []string) int { supervised++; return 0 },
+		exit:         func(int) {},
+	})
+	if err == nil {
+		t.Fatal("expected an error when the hook probe fails, got nil")
+	}
+	if supervised != 0 {
+		t.Error("claude must not be launched when its hook cannot run")
+	}
+}
+
+// mcp mode injects no hook — Bash and Monitor are disabled outright — so there
+// is nothing to probe and nothing to bypass.
+func TestRun_SkipsTheHookProbeInMcpMode(t *testing.T) {
+	makeFakeNono(t)
+	pinExecutablePath(t)
+	_, cfg := writeLaunchFixture(t, true)
+
+	probed := 0
+	err := run(cfg, Options{}, runDeps{
+		agentProfile: defaultAgentProfile,
+		verifyHook:   func(string, string) error { probed++; return errors.New("must not be called") },
+		startBroker:  testBrokerStart("/tmp/test.sock", nil),
+		supervise:    func(string, []string) int { return 0 },
+		exit:         func(int) {},
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if probed != 0 {
+		t.Errorf("the hook probe ran %d time(s) in mcp mode; want 0", probed)
+	}
+}

@@ -87,6 +87,24 @@ writing a command profile that declares `agent-sandbox` as a policy command.
 Write `agent-sandbox.toml` in your project root — it only names the two
 profile files, it does not build them:
 
+In hook mode the hook is the only thing standing between a Bash call and the
+agent's own sandbox, so both of its failure modes are closed:
+
+- **The hook runs but cannot rewrite the call** — unreadable payload, unparseable
+  JSON, no command in it — and exits **2**, the one code Claude Code treats as
+  blocking, with the reason on stderr. Any other non-zero exit would be a
+  *non-blocking* error, after which Claude Code runs the original command
+  unwrapped, in the agent's own sandbox, under none of the command profile's
+  limits.
+- **The hook cannot start at all** — a binary the agent profile does not reach,
+  say. Nothing inside the hook can catch that, so the launcher proves it first:
+  before handing control to the agent it runs the hook once inside the agent's
+  own sandbox with a probe payload and refuses to launch unless the command
+  comes back rewritten. `agent-sandbox debug` shows the same invocation.
+
+mcp mode has neither failure: Bash and Monitor are disabled outright, so there
+is nothing to bypass.
+
 ```toml
 tool_mode = "hook"
 

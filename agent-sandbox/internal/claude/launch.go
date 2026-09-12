@@ -99,6 +99,61 @@ func ValidatePassthrough(claudeOpts []string, githubMCPEnabled bool) error {
 // this package sets it.
 var executablePath = os.Executable
 
+// launcherPath is the absolute path of this binary, symlinks resolved —
+// Landlock resolves them too, so a grant has to name the target rather than the
+// link.
+func launcherPath() (string, error) {
+	self, err := executablePath()
+	if err != nil {
+		return "", fmt.Errorf("locate agent-sandbox: %w", err)
+	}
+	if resolved, rerr := filepath.EvalSymlinks(self); rerr == nil {
+		return resolved, nil
+	}
+	return self, nil
+}
+
+// hookProbePayload is a minimal PreToolUse payload; hookProbeWant is what the
+// hook must rewrite it into. The command is `true` so that nothing runs even if
+// the response were somehow acted on.
+const (
+	hookProbePayload = `{"tool_name":"Bash","tool_input":{"command":"true"}}`
+	hookProbeWant    = "agent-sandbox exec --"
+)
+
+// probeHook runs the PreToolUse hook inside the agent's own sandbox and checks
+// that it rewrites a command, before the agent is launched.
+//
+// It exists because the failure it catches is invisible and unsafe. Claude Code
+// blocks a tool call only when a hook exits 2; a hook that cannot start at all
+// is a non-blocking error, and the original command then runs unwrapped, in the
+// agent's own sandbox, under none of the command profile's limits. Nothing in
+// the session says so. The launcher therefore proves the hook runs under this
+// exact profile rather than assuming it, in the same "measure, do not parse"
+// shape doctor uses for the broker socket variable.
+//
+// --allow-cwd is required because nono refuses working-directory access in
+// non-interactive mode, which is how this runs.
+func probeHook(profilePath, self string) error {
+	nonoPath, err := exec.LookPath("nono")
+	if err != nil {
+		return fmt.Errorf("nono not found in PATH: %w", err)
+	}
+	cmd := exec.Command(nonoPath, "wrap", "--silent", "--allow-cwd",
+		"--profile", profilePath, "--read-file", self, "--", self, "hook")
+	cmd.Stdin = strings.NewReader(hookProbePayload)
+	out, runErr := cmd.CombinedOutput()
+	if runErr != nil {
+		return fmt.Errorf("the PreToolUse hook cannot run under %s: %v: %s",
+			profilePath, runErr, strings.TrimSpace(string(out)))
+	}
+	if !strings.Contains(string(out), hookProbeWant) {
+		return fmt.Errorf("the PreToolUse hook ran under %s but did not route the command "+
+			"through the broker: %s", profilePath, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // BuildArgs constructs the nono executable path and the argv used to launch
 // Claude under the sandbox for cfg. It injects the operator's profile at
 // profilePath via `--profile` (no user nono options are forwarded) and, in
@@ -123,13 +178,9 @@ func BuildArgs(cfg *config.Config, opts Options, mcpConfigPath,
 	// the launcher knows where it lives: on a mise-managed toolchain the path
 	// carries the Go version, so an upgrade renumbers it and a profile entry
 	// would silently stop matching. A read grant carries the execute right.
-	self, selfErr := executablePath()
+	self, selfErr := launcherPath()
 	if selfErr != nil {
-		return "", nil, fmt.Errorf("locate agent-sandbox: %w", selfErr)
-	}
-	// Landlock resolves symlinks, so grant the target rather than the link.
-	if resolved, rerr := filepath.EvalSymlinks(self); rerr == nil {
-		self = resolved
+		return "", nil, selfErr
 	}
 	args = append(args, "--read-file", self)
 
@@ -179,9 +230,12 @@ type runDeps struct {
 	// launched agent runs under. It stays a dependency so tests can drive run
 	// without touching the filesystem.
 	agentProfile func(*config.Config) (string, error)
-	startBroker  func(*config.Config) (socket string, cleanup func(), err error)
-	supervise    func(path string, args []string) int
-	exit         func(code int)
+	// verifyHook proves the PreToolUse hook can actually run under the agent's
+	// profile. Hook mode only; mcp mode injects no hook.
+	verifyHook  func(profilePath, selfPath string) error
+	startBroker func(*config.Config) (socket string, cleanup func(), err error)
+	supervise   func(path string, args []string) int
+	exit        func(code int)
 }
 
 // defaultAgentProfile resolves the launched agent's profile path from cfg and
@@ -229,6 +283,16 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 	profilePath, err := d.agentProfile(cfg)
 	if err != nil {
 		return err
+	}
+
+	if cfg.ToolMode == "hook" {
+		self, selfErr := launcherPath()
+		if selfErr != nil {
+			return selfErr
+		}
+		if err := d.verifyHook(profilePath, self); err != nil {
+			return fmt.Errorf("hook check: %w", err)
+		}
 	}
 
 	brokerSocket, cleanupBroker, err := d.startBroker(cfg)

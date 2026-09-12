@@ -1,198 +1,82 @@
 # agent-sandbox environment
 
 ## Running commands
-{{if .Hook}}- Run shell commands with your normal Bash/Monitor tools; a PreToolUse hook transparently routes each one through the sandbox.
+{{if .Hook}}- Run shell commands with your normal Bash/Monitor tools; a PreToolUse hook
+  transparently routes each one through the command broker.
 - Command output is returned inline in the tool result.
-{{else}}- The Bash and Monitor tools are disabled; use the `run_command` MCP tool to run shell commands.
+{{else}}- The Bash and Monitor tools are disabled; use the `run_command` MCP tool.
 - Command output is written to files; read the returned stdout/stderr paths.
 {{end}}
-There is no shell in the loop. The command broker parses your command line
-itself (pipelines, `&&`/`||`/`;`, redirections, globbing, `$(…)`, `for`/`if`,
-`cd` and the other shell builtins all work), and executes each simple command
-directly — never through `bash` or `sh`. The broker never dispatches a shell
-itself, so nothing it runs hands you one directly.
+There is no shell in the loop. The broker parses your command line itself
+(pipelines, `&&`/`||`/`;`, redirections, globbing, `$(…)`, `for`/`if`, `cd` and
+the other shell builtins all work) and executes each simple command directly —
+never through `bash` or `sh`. Builtins run inside the broker itself, at the
+broker's own grants, so a redirect or glob you write is bounded by those, not by
+whichever command's output it is attached to.
 
-{{if or .PolicyCommands .FloorPaths}}Every command in your line sorts into one of two tiers:
+## Where the boundary is
+Some commands run in their own child sandbox with their own filesystem, network
+and argv grants; the rest run at the broker's own grants. Which is which is
+decided by `{{.ProfilePath}}`, and this document deliberately does not copy that
+file — ask nono, which resolves groups, `~`, `$WORKDIR` and `@git:` tokens that
+reading the JSON cannot:
 
-- **Policy commands** run in their own child sandbox, with their own
-  filesystem/network grants. Some carry nono's own argv rules directly
-  (`invocation_policy`); others are instead bound to a `safe <tool>`
-  wrapper (`git` is one, in the current profile) that parses the real
-  invocation in Go and decides there, with the real binary reachable only
-  from that wrapper. Either way, the broker dispatches to a policy
-  command only through nono's own generated shim — never by an absolute
-  path, a symlink, or any other indirection that skips it. That guarantee is
-  about how the broker itself dispatches; it is not a guarantee about what a
-  *different* command's own sandbox can still reach and run — see below.
-- **Floor commands** run directly in the broker's own sandbox, with no argv
-  rules of their own.
+- `nono why --profile {{.ProfilePath}} --command <name>` — is this command
+  policy-controlled, and may I invoke it? Add `--caller <name>` to ask about a
+  chained edge rather than your own.
+- `nono why --profile {{.ProfilePath}} --path <p> --op read|write` — and
+  `--host` for network.
+- `nono profile show {{.ProfilePath}}` — the whole resolved profile.
 
-A program in neither tier is never dispatched by the broker — refused
-before it starts, the same way an unknown command would be. This allowlist
-is absolute about *what the broker itself will dispatch*, not about which
-programs can execute: it says nothing about what a command the broker does
-dispatch can go on to do once it runs. See the next paragraph.
+`sh` and `bash` are themselves declared commands with their own child sandbox —
+reachable from the session, confined to the working directory's own data with
+no network, though able to run tools out of the nix store and the mise
+toolchains — so ask `nono why` for either one's specifics rather than assume it
+shares the session's own reach.
 
-A toolchain in either tier that can compile and immediately execute code you
-give it is bounded only by what *its own* sandbox can reach — not by argv
-rules, and not by which other tools are or are not enumerated elsewhere in
-this profile — and it can run whatever those grants reach, including a copy
-of a program neither tier names, made and executed entirely inside its own
-sandbox without ever going through the broker's dispatch or nono's shim. If
-such a command is listed below, its own grants (not this document's prose
-about tiers) are the real boundary; ask the operator what those are before
-assuming a two-tier model holds for everything it might do.
+Neither command reports environment variables: `nono profile show` does not print
+`environment.allow_vars`. If a variable is not arriving, read that list in the
+file itself. `agent-sandbox doctor` measures the one that matters most,
+`AGENT_SANDBOX_BROKER_SOCKET`, without which nothing reaches the broker at all.
 
-A wrapper's own rule list (below) is a Go-side denylist on the parsed
-invocation, not a complete boundary by itself: it cannot see a route that
-reaches the same effective setting by writing straight to a file under
-`$WORKDIR` instead of going through the tool's own CLI — that write is one
-of this broker's own shell builtins (see further down), never the wrapper's
-parser, never nono's shim. What actually bounds what a setting reached that
-way can *do* is the policy command's own sandbox grants for the real
-binary — in particular a narrow `exec_paths`, which blocks shelling out to
-run something regardless of whether the wrapper's own denylist happens to
-name that setting. Do not treat a wrapper's rule list as the whole story
-for a command with real, file-backed ambient state (git's repository config
-is the case this profile has); ask what that command's own `exec_paths`
-and filesystem grants actually allow before assuming the parser is holding
-something back that a narrower sandbox grant is really the one enforcing.
+## Reading a failure
+- **Exit 126 with a reason naming `command_policies`** — a policy denial. The
+  reason names the exact edge. Do not retry; ask the operator to change the
+  profile.
+- **Exit 126 saying the shim `failed to connect to … supervisor.sock`** — not a
+  policy denial. A policy-controlled command invoked from deep inside nested
+  shell scripts can fail this way. Re-running the command directly, rather than
+  through the nesting, is worth one attempt.
+- **Exit 127, or `Permission denied` from the program itself** — the path, host
+  or binary is outside what the profile grants. Not a rule to phrase around.
+- **`fatal: cannot exec '.git/hooks/commit-msg': Permission denied`** (or any
+  other `.git/hooks/*`) — not a policy denial. Git hooks do not execute inside
+  this sandbox at all; use `git commit --no-verify`. Because of that,
+  commit-message validation does not run inside the sandbox — no hook is going
+  to catch a malformed message, so get it right yourself before committing.
+  This project follows Conventional Commits; see `.claude/rules/git-commit.md`.
 
-**Policy commands and their denials, from `{{.ProfilePath}}`:**
-{{if .PolicyCommands}}{{range .PolicyCommands}}
-- `{{.Name}}`{{if .Wrapper}} routes through `agent-sandbox {{.Wrapper}}`: that
-  wrapper parses the actual invocation and refuses some forms with a reason,
-  rather than matching argv fragments against the command line the way
-  `invocation_policy` does — this is what lets it see past a global option
-  placed ahead of the subcommand, or a repository config file written
-  directly rather than through the tool's own CLI, either of which an argv
-  rule cannot. The real binary is reachable only from this wrapper — never
-  directly, and never by any other path. Its refusal prints `blocked:
-  <reason>` to stderr and exits **1**, decided in Go before nono is ever
-  involved — not nono's own exit 126. Two behaviours worth knowing before
-  assuming a refusal here is a bug: a message shaped
-  `blocked: alias "<x>" expands to "<y>", which is blocked: <reason>` means
-  the wrapper resolved an unrecognized leading token as a repository-
-  configured alias and re-checked what it expands to, not a plain rule
-  match; and a message like `<word> is not a git command and its alias
-  could not be resolved` means the wrapper could not resolve the invocation
-  as either a real subcommand or a configured alias at all — a third-party
-  plugin subcommand (`git lfs`, `git town`, any `git-<name>` binary on
-  `PATH`) now refuses this way instead of running, which is a behaviour
-  change from before this wrapper existed, not evidence the plugin is
-  missing or broken.{{if .WrapperDenials}} Its rule set,
-  read from the wrapper's own source, not this profile:{{range .WrapperDenials}}
-  - {{.}}{{end}}{{else}} This document does not have that wrapper's rule
-  source; a `blocked: <reason>` message on refusal is the only place to see
-  it.{{end}}{{if .Denials}} This profile also carries these argv-level
-  denials directly, in addition to the wrapper's own, refused by nono at
-  exit 126:{{range .Denials}}
-  - {{.}}{{end}}{{end}}{{else}}{{if .Denials}}, refusing (nono's own
-  `invocation_policy`, exit 126):{{range .Denials}}
-  - {{.}}{{end}}{{else}} (no invocations refused){{end}}{{end}}
-{{end -}}
-{{else}}
-- {{if .BrokerIssue}}{{.BrokerIssue}} — this document could not tell which
-  command is the broker's own entrypoint, so it cannot say which commands
-  are policy-controlled at all. This is not the same as the profile
-  declaring none.{{else}}(none declared in the current profile){{end}}
-{{end}}
-**Floor paths** — every executable inside these (a directory) or the file
-itself (a single path) is a floor command, no argv rules, run at the
-broker's own grants. This lists *where* they live, not their names — `ls`
-the directory (or ask the operator) to see exactly which programs that is:
-{{if .FloorPaths}}{{range .FloorPaths}}- `{{.}}`
-{{end -}}
-{{else}}- {{if .BrokerIssue}}{{.BrokerIssue}} — see above{{else}}(none
-declared in the current profile){{end}}
-{{end}}
-A refusal reaches you one of two ways. A wrapper-bound command's own check
-prints `blocked: <reason>` and exits 1 — the wrapper ran and refused, in Go,
-before nono was ever involved. Everything else nono itself refuses — an
-`invocation_policy` denial, or a command absent from both tiers — carries a
-reason (or, for a command in neither tier, none at all) on stderr and exits
-126. Only the *second* shape with **no** reason at all means the command is
-missing from both tiers; don't retry it, ask the operator to add it to the
-command profile instead.
-
-One thing the two tiers don't cover: the broker's own shell builtins (`echo`,
-`cd`, `test`, `read`, and the others `mvdan.cc/sh` implements) run inside the
-broker itself, at the broker's own filesystem grants — they never reach either
-tier. A redirect or glob you write is bounded by those same grants, not by
-whichever command's output it's attached to.
-{{else}}Every command runs in the broker's own sandbox. There are no tiers and
-no allowlist: whatever that sandbox can reach, the broker will run. What each
-command may touch is one grant set, written in nono's own schema at
-`{{.ProfilePath}}`, and it is the same for every command — nothing here gives
-one tool a narrower or wider reach than another.
-{{if .BrokerIssue}}
-{{.BrokerIssue}} — so this document cannot say whether the profile declares
-policy-controlled commands after all. Read the absence of tiers below as
-"not established", not as "none exist".
-{{end}}
-A refusal therefore arrives as an ordinary permission failure — `Permission
-denied` from the program itself, or exit 127 when the binary cannot be executed
-at all — not as a policy denial carrying a reason. Do not read such a failure as
-a rule you might phrase around; it means the path or host is outside what the
-profile grants. Ask the operator to widen the profile, or work inside what it
-already reaches.
-
-Network access goes through nono's proxy and is limited to the domains the
-profile lists. A direct TCP connection, a DNS lookup that bypasses the proxy,
-and binding a listening port are all refused at the socket layer, so a tool that
-ignores the proxy environment variables does not get out — it fails immediately
-rather than falling back to an unmediated connection.
-
-A toolchain that can compile and immediately execute code you give it is bounded
-only by what that same sandbox reaches, and it can run whatever those grants
-cover, including a program it builds itself. The grant set is the real boundary;
-there is no dispatch-time check standing behind it.
-
-The broker's own shell builtins (`echo`, `cd`, `test`, `read`, and the others
-`mvdan.cc/sh` implements) run inside the broker itself, at those same grants. A
-redirect or glob you write is bounded by them too, not by whichever command's
-output it is attached to.
-{{end}}
-
-What a command may touch is not `agent-sandbox.toml`'s concern — it is the
-command profile's, written in nono's own schema, resolved at
-`{{.ProfilePath}}`.
+A toolchain that can compile and immediately execute code is bounded only by
+what its own sandbox reaches — not by argv rules, and not by which other tools
+are declared. Ask what its grants are before assuming otherwise.
 
 ## Changing the config
-The sandbox is configured by `{{.ConfigPath}}`, which names two nono profiles.
-You may edit any of the three files directly.
+`{{.ConfigPath}}` names two nono profiles; you may edit all three files.
 
 - Your own sandbox — this process, its file tools, and any MCP server it spawns
   as a direct child — is `{{.AgentProfilePath}}`.
 - The sandbox every shell command runs in is `{{.ProfilePath}}`.
 
-Both are written in nono's own schema. agent-sandbox generates and validates
-neither one; it hands each path to nono. The only part of either file it
-reads is what this document showed you above — the policy commands and floor
-paths from the command profile. Beyond that, this document cannot tell you
-what they grant — nono can:
+Both are written in nono's own schema. agent-sandbox neither generates nor reads
+either one; it hands each path to nono.
 
-- `nono profile show <path>` resolves a profile, groups expanded and `~` and
-  `$XDG_CACHE_HOME` filled in.
-- `nono why --profile <path> --path <p> --op read|write|readwrite` says whether
-  an access is allowed and which grant decides it. `--host`, `--command` and
-  `--scope` ask the same question of network, command policy, and scope.
-
-One thing neither command reports: environment variables. `nono profile show`
-does not print `environment.allow_vars`, so if a variable is not reaching a
-process, read that list in the profile file itself. `agent-sandbox doctor`
-measures the one variable that matters most — `AGENT_SANDBOX_BROKER_SOCKET`,
-without which nothing can reach the command broker at all.
-
-Editing any of this **does not affect the current session**: both profiles are
-read once, when the session starts. An edit takes effect the next time the
-operator runs `agent-sandbox claude`.
-
-After editing, run `agent-sandbox ai config-check` — it loads the config and
-hands both profiles to `nono profile validate`, so a passing check means none
-of the three files is what breaks the next launch. `agent-sandbox doctor` goes
-further: it adds the broker-socket probe and asks nono whether the command
-profile leaves the broker's own binary writable.
+Editing **does not affect the current session**: both profiles are read once, at
+session start. An edit takes effect the next time the operator runs
+`agent-sandbox claude`. After editing, run `agent-sandbox ai config-check` — it
+hands both profiles to `nono profile validate`. `agent-sandbox doctor` goes
+further: it adds the broker-socket probe, asks nono whether the command profile
+leaves the broker's own binary writable, and checks that the paths the profile
+pins still exist on this host.
 
 Schema:
 

@@ -8,181 +8,7 @@ import (
 
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/agentconfig"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/safe/git"
 )
-
-// writeProfile writes contents (a command-profile.json body) to path.
-func writeProfile(t *testing.T, path, contents string) {
-	t.Helper()
-	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
-		t.Fatalf("write profile: %v", err)
-	}
-}
-
-// configWithProfile returns a *config.Config whose CommandProfilePath()
-// resolves to profile, loaded the same way config.Load resolves a relative
-// command_profile: against the directory holding agent-sandbox.toml.
-func configWithProfile(t *testing.T, dir, profile string) *config.Config {
-	t.Helper()
-	rel, err := filepath.Rel(dir, profile)
-	if err != nil {
-		t.Fatalf("relative profile path: %v", err)
-	}
-	data := "tool_mode = \"hook\"\ncommand_profile = " + `"` + rel + `"` + "\n"
-	tomlPath := filepath.Join(dir, "agent-sandbox.toml")
-	if err := os.WriteFile(tomlPath, []byte(data), 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-	cfg, err := config.Load(tomlPath)
-	if err != nil {
-		t.Fatalf("config.Load: %v", err)
-	}
-	return cfg
-}
-
-// Explain names the command profile's path, both tiers it declares, and the
-// reason behind each invocation_policy denial — an agent that cannot tell a
-// policy refusal from a bug will retry it.
-func TestExplainNamesTheCommandProfileAndBothTiers(t *testing.T) {
-	dir := t.TempDir()
-	profile := filepath.Join(dir, "command-profile.json")
-	writeProfile(t, profile, `{
-	  "command_policies": {
-	    "commands": {
-	      "agent-sandbox": { "can_use": ["git"],
-	        "from": { "session": { "sandbox": { "exec_paths": ["/usr/bin"] } } } },
-	      "git": { "from": { "agent-sandbox": { "invocation_policy": { "deny": [
-	        { "argv": { "contains": ["--force"] }, "reason": "force push is disabled in this sandbox" }
-	      ] } } } }
-	    }
-	  }
-	}`)
-	got := agentconfig.Explain(configWithProfile(t, dir, profile), filepath.Join(dir, "agent-sandbox.toml"))
-
-	for _, want := range []string{
-		profile,
-		"git",
-		"force push is disabled in this sandbox",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("Explain() is missing %q\n---\n%s", want, got)
-		}
-	}
-	for _, unwanted := range []string{"allow_commands", "drop_commands", "[sandbox.shell]"} {
-		if strings.Contains(got, unwanted) {
-			t.Errorf("Explain() still mentions %q", unwanted)
-		}
-	}
-}
-
-// A command bound to a "safe <tool>" wrapper (argv_prepend, no
-// invocation_policy of its own — the shape "git" uses in this repository's
-// own command-profile.json) must be described as routing through that
-// wrapper, not reported as carrying no denials: its rule set lives in Go,
-// not in this profile.
-func TestExplain_WrapperBoundCommand_NamesTheWrapper(t *testing.T) {
-	dir := t.TempDir()
-	profile := filepath.Join(dir, "command-profile.json")
-	writeProfile(t, profile, `{
-	  "command_policies": {
-	    "commands": {
-	      "agent-sandbox": { "can_use": ["git"],
-	        "from": { "session": { "sandbox": { "exec_paths": ["/usr/bin"] } } } },
-	      "git": { "can_use": ["realgit"],
-	        "from": { "agent-sandbox": { "sandbox": { "argv_prepend": ["safe", "git"] } } } },
-	      "realgit": { "from": { "git": { "sandbox": {} } } }
-	    }
-	  }
-	}`)
-	got := agentconfig.Explain(configWithProfile(t, dir, profile), filepath.Join(dir, "agent-sandbox.toml"))
-
-	for _, want := range []string{
-		"agent-sandbox safe git",
-		"reachable only from this wrapper",
-		// The wrapper's own rule set, read from internal/safe/git, not
-		// this synthetic fixture's (nonexistent) invocation_policy.
-		"git reset --hard is not allowed",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("Explain() is missing %q for a wrapper-bound command\n---\n%s", want, got)
-		}
-	}
-	if strings.Contains(got, "`git` (no invocations refused)") {
-		t.Errorf("Explain() reports the wrapper-bound `git` entry as refusing nothing:\n%s", got)
-	}
-	// realgit is named only in git's own "from" (git → realgit), never the
-	// broker's ("agent-sandbox" → realgit is absent from this fixture): it
-	// is not directly invocable at all, and nono refuses reaching it with
-	// "tool 'agent-sandbox' is not allowed to invoke it". Listing it as a
-	// policy command the agent could type is what shipped a false "no
-	// invocations refused" line for it once git's own invocation_policy was
-	// deleted — regression coverage for that, not just a documentation nit.
-	if strings.Contains(got, "`realgit`") {
-		t.Errorf("Explain() lists `realgit`, which the broker cannot reach directly:\n%s", got)
-	}
-}
-
-// A profile that reads and parses fine but has no entry with a "session"
-// caller leaves this package unable to identify the broker's own entrypoint.
-// That must not render as "(none declared in the current profile)" — an
-// affirmative statement to the agent that nothing is policy-controlled —
-// but as an explicit statement that the broker entry could not be found.
-func TestExplain_NoSessionCaller_ReportsBrokerNotFound(t *testing.T) {
-	dir := t.TempDir()
-	profile := filepath.Join(dir, "command-profile.json")
-	writeProfile(t, profile, `{
-	  "command_policies": {
-	    "commands": {
-	      "git": { "from": { "agent-sandbox": { "invocation_policy": { "deny": [
-	        { "argv": { "contains": ["--force"] }, "reason": "force push is disabled" }
-	      ] } } } }
-	    }
-	  }
-	}`)
-	got := agentconfig.Explain(configWithProfile(t, dir, profile), filepath.Join(dir, "agent-sandbox.toml"))
-
-	if !strings.Contains(got, "could not identify the broker entry in "+profile) {
-		t.Errorf("Explain() does not report the missing broker entry for %q\n---\n%s", profile, got)
-	}
-	if strings.Contains(got, "(none declared in the current profile)") {
-		t.Errorf("Explain() falls back to the misleading \"none declared\" message:\n%s", got)
-	}
-}
-
-// Two entries with a "session" caller are not a shape this profile format is
-// meant to have, but a second one's own floor paths must not silently vanish
-// the way a first-match "break" would drop them.
-func TestExplain_TwoSessionCallers_KeepsBothFloorPaths(t *testing.T) {
-	dir := t.TempDir()
-	profile := filepath.Join(dir, "command-profile.json")
-	writeProfile(t, profile, `{
-	  "command_policies": {
-	    "commands": {
-	      "agent-sandbox": { "from": { "session": { "sandbox": { "exec_paths": ["/usr/bin"] } } } },
-	      "other-entry": { "from": { "session": { "sandbox": { "exec_paths": ["/opt/tool/bin"] } } } }
-	    }
-	  }
-	}`)
-	got := agentconfig.Explain(configWithProfile(t, dir, profile), filepath.Join(dir, "agent-sandbox.toml"))
-
-	for _, want := range []string{"/usr/bin", "/opt/tool/bin"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("Explain() dropped a floor path %q from a second session-callable entry\n---\n%s", want, got)
-		}
-	}
-}
-
-// wrapperRuleMessages skips a rule with an empty Message (explain.tmpl would
-// otherwise render a bare "- " list item). Every git rule must carry one, so
-// this is a guard against a future rule shipping without it, not a
-// description of behavior this package needs to special-case today.
-func TestGitRules_EveryRuleHasAMessage(t *testing.T) {
-	for _, r := range git.Rules() {
-		if r.Message == "" {
-			t.Errorf("git rule %q has an empty Message", r.ID)
-		}
-	}
-}
 
 func TestPointer_MentionsExplainCommand(t *testing.T) {
 	got := agentconfig.Pointer()
@@ -281,45 +107,6 @@ func TestExplain_MentionsUserScopeConfigMerge(t *testing.T) {
 		}
 	}
 }
-
-// TestExplain_NoCommandPolicies_DescribesOneSandbox pins the branch the
-// explanation takes for a profile that declares no command policies at all:
-// the two-tier description must not appear, because there are no tiers, and
-// the agent must not be told an allowlist stands between it and a command
-// when none does. Claiming a boundary that is not there is worse than
-// claiming none: it invites treating a permission failure as a rule to
-// rephrase around.
-func TestExplain_NoCommandPolicies_DescribesOneSandbox(t *testing.T) {
-	dir := t.TempDir()
-	profile := filepath.Join(dir, "command-profile.json")
-	writeProfile(t, profile, `{"filesystem": {"allow": ["$WORKDIR"]}}`)
-	got := agentconfig.Explain(configWithProfile(t, dir, profile), filepath.Join(dir, "agent-sandbox.toml"))
-
-	for _, unwanted := range []string{
-		"sorts into one of two tiers",
-		"**Policy commands**",
-		"**Floor paths**",
-		"never dispatched by the broker",
-		"exits 126",
-	} {
-		if strings.Contains(got, unwanted) {
-			t.Errorf("Explain() still describes the two-tier model (%q) for a profile with no command policies\n---\n%s", unwanted, got)
-		}
-	}
-	for _, want := range []string{
-		"no allowlist",
-		"ordinary permission failure",
-		profile,
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("Explain() is missing %q\n---\n%s", want, got)
-		}
-	}
-}
-
-// The agent is told where its own sandbox is defined and which nono commands
-// answer questions about it — not a capability vocabulary that no longer
-// exists.
 func TestExplain_NamesBothProfilesAndTheNonoCommands(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
@@ -352,5 +139,64 @@ func TestExplain_NamesBothProfilesAndTheNonoCommands(t *testing.T) {
 		if strings.Contains(out, unwanted) {
 			t.Errorf("explain output still mentions %q\n%s", unwanted, out)
 		}
+	}
+}
+
+// TestExplain_PointsAtNonoRatherThanListingCommands is the whole point of the
+// rewrite: the document must teach the agent how to ask nono, and must not
+// restate the profile's contents.
+func TestExplain_PointsAtNonoRatherThanListingCommands(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &config.Config{ToolMode: "hook", CommandProfile: "command-profile.json"}
+	out := agentconfig.Explain(cfg, filepath.Join(dir, "agent-sandbox.toml"))
+
+	for _, want := range []string{
+		"nono why --profile",
+		"--command <name>",
+		"--caller <name>",
+		"nono profile show",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("explain output does not mention %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestExplain_MakesNoTwoTierOrWrapperClaims guards the two false statements the
+// old template carried: that git routes through a "safe git" wrapper, and that
+// a program in neither tier is never dispatched. Neither is true under the
+// 2026-09-12 profile.
+func TestExplain_MakesNoTwoTierOrWrapperClaims(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &config.Config{ToolMode: "hook", CommandProfile: "command-profile.json"}
+	out := agentconfig.Explain(cfg, filepath.Join(dir, "agent-sandbox.toml"))
+
+	for _, forbidden := range []string{
+		"safe git",
+		"safe <tool>",
+		"realgit",
+		"wrapper",
+		"This allowlist is absolute",
+		"never dispatched by the broker",
+	} {
+		if strings.Contains(out, forbidden) {
+			t.Errorf("explain output still claims %q:\n%s", forbidden, out)
+		}
+	}
+}
+
+// TestExplain_ReadsNoProfile proves the delegation rule mechanically: the
+// command profile named by the config does not exist, and Explain must still
+// produce its full document rather than degrade or report a broker issue.
+func TestExplain_ReadsNoProfile(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &config.Config{ToolMode: "hook", CommandProfile: "does-not-exist.json"}
+	out := agentconfig.Explain(cfg, filepath.Join(dir, "agent-sandbox.toml"))
+
+	if strings.Contains(out, "could not identify the broker entry") {
+		t.Errorf("explain still reports a broker issue from reading the profile:\n%s", out)
+	}
+	if !strings.Contains(out, "Changing the config") {
+		t.Errorf("explain did not render its full document:\n%s", out)
 	}
 }

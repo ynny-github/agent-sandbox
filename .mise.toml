@@ -14,7 +14,7 @@ lefthook = "latest"
 # own bin/ (already on PATH) rather than leaving it unset. This repository's
 # own command-profile.json does NOT pin that resolved path, or any other
 # path, as agent-sandbox's "executable" — agent-sandbox is not even a
-# sandboxed command in that profile, and the profile's own comments record
+# policy command in that profile, and the profile's own comments record
 # why nothing in it pins an `executable` at all: a pin whose path does not
 # exist silently disables mediation for that command (nono falls back to the
 # first PATH match and runs it at the session's own grants, with

@@ -567,8 +567,8 @@ the shorthand would hand the agent a false denial with no way to see
 through it. Every edge in this profile is written the long way for exactly
 this reason.
 
-**`docker` is not declared in this repository's profile at all — not as a
-policy command, not at the floor.** A `docker` wrapper exists
+**`docker` is not declared in this repository's profile at all — no
+policy-command entry names it.** A `docker` wrapper exists
 (`internal/safe/dockercompose` and `cmd/safe_docker.go`: `docker` →
 wrapper → `realdocker` → the real binary — the same argv-parsing pattern
 `git`'s own entry used before this profile moved `git` to the direct
@@ -581,18 +581,27 @@ the Docker socket, and it is not what it looks like:
 > pathname AF_UNIX sockets — only the Linux *abstract* socket namespace —
 > so `/var/run/docker.sock` is reachable by any command that can execute
 > the `docker` binary, regardless of what `fs_read`/`fs_write` grant it
-> does or does not have. Not declaring `docker` in a profile means the
-> broker will not dispatch it at all — that boundary is real; *declaring*
-> it, with no filesystem grant anywhere near the socket, is not — the
-> daemon is reachable the moment the binary is. Once it is, the wrapper's
-> checks (below) are the *entire* defense, not a second layer behind a
-> filesystem bound, and reaching the daemon at all is root-equivalent: the
-> socket permits mounting `/` into a container. Gating the socket itself
-> needs `linux.af_unix_mediation` plus a `filesystem.unix_socket`
-> allowlist — a separate opt-in nono's profile guide documents under its
-> `no-docker` example — which this repository's profile does not
-> configure, because this repository's profile does not declare `docker`
-> at all.
+> does or does not have. Leaving `docker` undeclared does not stop the
+> broker from running it: an undeclared command gets no child sandbox, no
+> `can_use` edges and no argv gate at all — it simply runs at the broker's
+> own grants, like any other floor command, reachable the moment it sits in
+> a trusted `PATH` directory (see [Two tiers](#two-tiers)). Measured
+> directly against this repository's own profile: `docker --version` runs
+> — the broker dispatches it — and exits 255 only because the nix
+> `docker` package's own `bin/docker` stub fails its re-exec into
+> `libexec`, not because of any tool-sandbox denial. The socket is already
+> reachable from this profile's floor, whether or not `docker` is ever
+> mentioned in it; declaring `docker` (with the wrapper below) adds an
+> argv-level check that does not otherwise exist — it does not add a
+> filesystem boundary that otherwise would exist, because there isn't one
+> to add. Once declared, the wrapper's checks (below) are the *entire*
+> defense, not a second layer behind a filesystem bound, because reaching
+> the daemon at all is root-equivalent: the socket permits mounting `/`
+> into a container. Gating the socket itself needs
+> `linux.af_unix_mediation` plus a `filesystem.unix_socket` allowlist — a
+> separate opt-in nono's profile guide documents under its `no-docker`
+> example — which this repository's profile does not configure, because
+> this repository's profile does not declare `docker` at all.
 
 An operator who decides the wrapper's checks are sufficient can wire it in
 with this shape:

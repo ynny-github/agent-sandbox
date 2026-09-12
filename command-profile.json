@@ -208,9 +208,12 @@
       // and this sandbox already carries network (allow_domain below) and
       // read access to the global gitconfig, so that widening would let git
       // execute arbitrary agent-written content with network the moment it
-      // lands in the working tree — a write-then-execute path. Measured: a
-      // hand-written `.git/hooks/pre-commit` ran inside git's sandbox once
-      // this was temporarily enabled.
+      // lands in the working tree — a write-then-execute path. Measured: with
+      // exec_paths temporarily widened to $WORKDIR + /nix/store in a
+      // throwaway build of this profile (NOT the shipped state above — that
+      // widening was reverted, see task-3-report.md Addendum 3), a
+      // hand-written `.git/hooks/pre-commit` ran and printed its own output
+      // inside git's sandbox.
       //
       // Separately measured, with hooks temporarily enabled for the test:
       // even then, lefthook did not run and the commit was accepted

@@ -234,8 +234,8 @@
       // access to the global gitconfig, which the floor does NOT have
       // (`path_not_granted` at the floor; measured). Also measured, with
       // exec_paths temporarily widened in a throwaway build of this profile
-      // (NOT the shipped state above — that widening was reverted, see
-      // task-3-report.md Addendum 3): a hand-written
+      // (NOT the shipped state above — that widening was reverted; see
+      // commits 258b9a9 and 45eb9fa): a hand-written
       // `.git/hooks/pre-commit` ran and printed its own output inside git's
       // sandbox.
       "git": {

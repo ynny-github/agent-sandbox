@@ -11,12 +11,17 @@ lefthook = "latest"
 # directory" note). `mise run build` instead runs `go install`, which lands
 # outside $WORKDIR either way: GOBIN if set, GOPATH/bin otherwise. Measured
 # here as GOBIN, because mise's own Go plugin points it at that Go version's
-# own bin/ (already on PATH) rather than leaving it unset — this repository's
-# command-profile.json currently pins that exact resolved path as
-# agent-sandbox's "executable", so a build here and a session launched here
-# agree on which binary is the broker. That pin can drift from `go install`'s
-# actual target (a toolchain upgrade renumbers the path; GOBIN can also just
-# change) — see the Development section in README.md for what to do then.
+# own bin/ (already on PATH) rather than leaving it unset. This repository's
+# own command-profile.json does NOT pin that resolved path, or any other
+# path, as agent-sandbox's "executable" — agent-sandbox is not even a
+# sandboxed command in that profile, and the profile's own comments record
+# why nothing in it pins an `executable` at all: a pin whose path does not
+# exist silently disables mediation for that command (nono falls back to the
+# first PATH match and runs it at the session's own grants, with
+# `nono profile validate` still passing). A toolchain upgrade or a changed
+# GOBIN can still move where `go install` lands; see the Development section
+# in README.md for what that affects (PATH resolution of the broker
+# entrypoint, not a profile pin).
 [tasks.build]
 description = "Build agent-sandbox and install it outside the working tree (go install)"
 # -buildvcs=false because go build/install otherwise shells out to git to

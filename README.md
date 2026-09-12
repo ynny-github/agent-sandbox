@@ -5,35 +5,34 @@
 Run an AI coding agent (Claude Code) inside a
 [nono](https://github.com/tkancf/nono) sandbox, and mediate every shell
 command it issues through a host-side command broker that runs in its own
-sibling nono session. Which commands may run, what each may touch, and which
-invocations are refused is decided once, by a nono command profile the
-operator writes — not by `agent-sandbox.toml`.
+sibling nono session. What each command may touch is decided once, by a nono
+command profile the operator writes — not by `agent-sandbox.toml`.
 
 The point is not to lock the agent out of your machine. It is to make the
 boundary *explicit and inspectable*: `agent-sandbox ai explain` tells the
-agent which commands are policy-controlled, which run at the floor with no
-argv rules, and why any refusal fired, so a policy denial reads as a policy
-denial rather than an unexplained failure worth retrying.
+agent which commands run in their own sandbox, which run directly at the
+broker's own grants, and why any refusal fired, so a policy denial reads as a
+policy denial rather than an unexplained failure worth retrying.
 
 ```
 launcher
 ├── nono wrap  --profile <agent profile>    -- claude …         no command control here
 └── nono run   --profile <command profile>  -- agent-sandbox broker
                                                │
-                                               ├─ exec git   → shim → wrapper (parses the invocation)
-                                               │                    → shim → real git, its own child sandbox
-                                               └─ exec rg    → runs directly in the broker's own sandbox
+                                               ├─ exec git → shim → git, its own child sandbox
+                                               │                     └─ exec ssh → shim → ssh, its own
+                                               └─ exec rg  → runs directly in the broker's own sandbox
 ```
 
 The two sessions are siblings, never nested. There is no shell in the loop:
 the broker parses the agent's command line itself (pipelines, `&&`/`||`/`;`,
 redirections, globbing, `$(…)`, `for`/`if`, `cd` and the other shell builtins
-all work) and execs each simple command directly. Neither `bash` nor `sh` is
-declared as a policy command or a floor command, so the broker never
-dispatches a shell, in either tier — a claim about dispatch, not about what a
-dispatched toolchain can go on to run once it starts; see
-[the two profiles](#the-two-profiles) for a measured case where a
-compiler reaches a real `bash` binary anyway.
+all work) and execs each simple command directly. `bash` and `sh` are
+themselves declared commands with their own child sandbox, reachable from the
+session — invoking a shell directly is mediated the same way `git` is, not
+merely something a dispatched toolchain can still reach on its own; see
+[The two profiles](#the-two-profiles) for what that toolchain caveat still
+covers.
 
 ## Contents
 
@@ -155,50 +154,51 @@ and nono's own documentation says plainly that pointing `exec` at a
 general-purpose shell defeats a sandbox. There is no shell in this design to
 defeat.
 
-### Two tiers, and nothing else runs
+### Two tiers
 
-The command profile sorts every runnable program into one of two tiers. A
-program named in neither is never dispatched by the broker — that is the
-allowlist, and there is nothing else to check:
+The command profile sorts every runnable program into one of two tiers:
 
 - **Policy commands** are declared in the profile with their own child
-  sandbox. Some carry nono's own `invocation_policy` argv rules directly;
-  others — `git`, in this repository's own profile — are instead bound to a
-  wrapper binary that parses the tool's actual grammar and decides in Go,
-  with the real binary reachable only from that wrapper (see
-  [The two profiles](#the-two-profiles)). Either way, the broker
-  dispatches to a policy command only through nono's own generated shim —
-  never by an absolute path, a symlink, or any other indirection that skips
-  it. That guarantee is about how the broker itself dispatches; it is not a
-  guarantee about what a *different* command's own sandbox can still reach
-  and run — see below.
-- **Floor commands** are named in the broker's own `exec_paths` and run
-  directly in the broker's sandbox, with no argv rules of their own — there
-  is no shim to bypass because there is nothing being enforced.
+  sandbox — `git`, `ssh`, `bash` and `sh`, in this repository's own profile.
+  None of them carries nono's `invocation_policy` argv rules; what bounds
+  each is its own filesystem, network and environment grants, scoped per
+  caller edge (see [The two profiles](#the-two-profiles) for the worked
+  example). The broker dispatches to one of these only through nono's own
+  generated shim — never by an absolute path, a symlink, or any other
+  indirection that skips it. That guarantee is about how the broker itself
+  dispatches; it is not a guarantee about what a *different* command's own
+  sandbox can still reach and run — see below.
+- **Everything else** runs directly in the broker's own sandbox, at
+  whatever that sandbox's filesystem, network and execute grants allow.
+  There is no enumerated list of these commands: the broker is not itself a
+  policy command, so nothing in the profile bounds which program names it
+  may dispatch. Once Tool Sandbox activates, the broker's own execute grant
+  is built from the trusted directories on `PATH` — this profile's
+  `/nix/store`, `/run/current-system/sw` and mise-installed toolchains among
+  them — and that grant set, not a named list, is the boundary for
+  everything not in the first tier.
 
-A refusal always explains itself: a policy command's denial carries the
-`reason` its profile entry wrote; a command absent from both tiers is
-refused at `execve`, the same as an unrecognized command would be, with no
-further detail to give.
+A refusal from a policy command always explains itself: the denial
+carries the `reason` its profile entry's `from` edge wrote. A command that
+fails at the floor instead fails at plain `execve` permission — `Permission
+denied` or "no such file", the same as an unrecognized command would
+produce, with no `reason` field to give.
 
-One thing the two tiers do not cover: the broker's own shell builtins
-(`echo`, `cd`, `test`, `read`, and the others its embedded interpreter
-implements) run inside the broker process itself, at the broker's own
-filesystem grants — never through either tier. A redirect or a glob you
-write is bounded the same way.
+One thing neither tier covers: the broker's own shell builtins (`echo`,
+`cd`, `test`, `read`, and the others its embedded interpreter implements)
+run inside the broker process itself, at the broker's own filesystem
+grants — never through either tier. A redirect or a glob you write is
+bounded the same way.
 
-**Nor do the two tiers bound what a compiler or interpreter does once it
-runs.** The allowlist above is absolute about *what the broker itself will
-dispatch* — not about which programs can execute. A command the profile does
-not enumerate will never be dispatched by the broker; a toolchain that
-compiles and executes code is bounded only by what *its own* sandbox can
-reach, not by argv rules and not by which other tools are or are not
-enumerated elsewhere in the profile, and it can run whatever those grants
-reach — including a copy of a program neither tier names. This repository's
-own profile enumerates `go` for exactly this reason — see
-[The two profiles](#the-two-profiles) below for what that costs and
-how far the containment actually reaches once you look closely at what a Go
-program can do from inside `go`'s own grants.
+**Nor does either tier bound what a compiler or interpreter does once it
+runs.** Nothing here enumerates every program capable of executing code —
+only which four commands get their own sandbox. A toolchain that compiles
+and executes code (this profile runs `go` at the floor, for instance, not as
+a policy command) is bounded only by what *its own* process can reach —
+the broker's own sandbox, in `go`'s case — not by argv rules and not by
+which other tools are or are not declared elsewhere in the profile. See
+[The two profiles](#the-two-profiles) below for what that costs in
+practice.
 
 ### The filesystem is not virtualized
 
@@ -227,7 +227,7 @@ them to `nono`. See
 |---|---|
 | `agent-sandbox claude -- [claude args...]` | Launch Claude under nono, with the command broker running as a sibling session |
 | `agent-sandbox exec -- <command>` | Send one command to the broker and stream its output |
-| `agent-sandbox doctor` | Check that `nono` works, the broker socket can bind, both profiles exist and validate, the agent profile forwards `AGENT_SANDBOX_BROKER_SOCKET`, and the command profile does not grant write access to the broker's own binary. Exit 0 / 1 |
+| `agent-sandbox doctor` | Check that `nono` works, that Tool Sandbox can actually start on this host, the broker socket can bind, both profiles exist and validate, every path the command profile pins still exists, the agent profile forwards `AGENT_SANDBOX_BROKER_SOCKET`, and the command profile does not grant write access to the broker's own binary. Exit 0 / 1 |
 | `agent-sandbox debug -- [claude args...]` | Print the `nono` invocations for both sessions and the GitHub MCP config (token redacted) — without running anything |
 | `agent-sandbox ai explain` | Agent-facing description of the sandbox: how commands run, both tiers, and every denial's reason |
 | `agent-sandbox ai config-check` | Validate `agent-sandbox.toml` and both nono profiles the way launch reads them |
@@ -251,6 +251,14 @@ MCP is enabled.
 `doctor` checks what a launch depends on:
 
 - `nono` is on `PATH` and `nono --version` runs.
+- **Tool Sandbox can actually start on this host.** Presence of the `nono`
+  binary says nothing about this: nono starts and prints its version
+  regardless, and only refuses once `command_policies` actually activates
+  Tool Sandbox. doctor runs a real, throwaway `nono run` session under a
+  minimal probe profile to answer the question directly — catching, for
+  example, an unpatched nono on NixOS that cannot resolve its own ELF
+  dependency chain, a failure that would otherwise stay invisible until the
+  first real command inside a session fails the same way.
 - The command broker can **bind a unix socket** in its socket directory
   (`$XDG_STATE_HOME/agent-sandbox`, or `~/.local/state/agent-sandbox`). A
   plain write check is not enough — binding also catches the ~104-byte
@@ -270,6 +278,20 @@ MCP is enabled.
 - The command profile does not grant write access to the broker's own
   binary. doctor asks `nono why --profile <command profile> --path <broker
   binary> --op write` and fails if the answer is allowed.
+- **Every path the command profile pins under `command_policies` still
+  exists.** doctor asks nono what the profile's `executable_dirs`, each
+  policy command's `exec_paths`, and any `executable` resolve to, and
+  `stat`s every one. Both ways nono handles a missing one are silent, and
+  only one is a mere availability failure: a missing `exec_paths` entry is
+  skipped by design, so a multi-call tool quietly loses a helper; a missing
+  `executable` pin disables mediation for that command outright — nono
+  falls back to the first `PATH` match and runs it at the *session's* own
+  grants, `nono profile validate` still passes, and the audit trail records
+  only "tools: active, no invocations" (measured on nono 0.74.0). On NixOS,
+  where every one of these paths carries a store hash, a routine package
+  upgrade is enough to trigger either failure mode — which is also why
+  nothing in this repository's own profile pins an `executable` at all (see
+  [The two profiles](#the-two-profiles)).
 
 If any of these fail, `agent-sandbox claude` will not launch Claude at all.
 
@@ -395,218 +417,185 @@ git worktrees.
 `network_profile` or `allow_domain`, nono stands up a loopback proxy and
 injects proxy env vars (`http_proxy`/`HTTP_PROXY`/`https_proxy`/
 `HTTPS_PROXY`/`no_proxy`/`NO_PROXY`); `block: true` or
-`network_profile: null` stands up no proxy at all. A command_policies
-child's own `network` has exactly two effective states, measured: omitting
-the key blocks it outright (a bare `network: {}` behaves the same), and
-`{"allow_all": true}` grants Landlock permission to open raw sockets.
-A per-command `allow_domain` is not enforced.
+`network_profile: null` stands up no proxy at all. At the raw Landlock
+level, a command_policies child's own `network` has exactly two effective
+permission states, measured: omitting the key blocks it outright (a bare
+`network: {}` behaves the same), and either `{"allow_all": true}` or
+`{"allow_domain": [...]}` grants the same permission to open sockets at
+all. The *domain* restriction `allow_domain` implies is not a Landlock
+check — it is enforced entirely by nono's own proxy, which is why it
+depends on whether the proxy env vars actually reach that child (below),
+not on anything in the grant itself.
 
-Whether an `allow_all` child's traffic is actually bounded by the ceiling
-depends on nothing in its own `network` grant — it depends on whether the
-proxy env vars reach it. Each hop's own `environment.allow_vars` filters
-what it received from its caller, and if a *single* hop in the chain —
-including the session's own top-level `environment` section — omits the
-proxy vars, they are gone for every hop below it, and the leaf falls back
-to a direct, unmediated connection: `allow_all` without the proxy vars
-means genuinely unbounded, not "up to the ceiling". This is not a
-theoretical trap: an earlier revision of this profile set the ceiling to
-`network_profile: null` (unbounded on purpose) precisely because, at the
-time, `realgit`'s own chain omitted the proxy vars at every hop and so was
-already unbounded regardless of the ceiling's value — measured identical
-under `network_profile: "developer"` and `network_profile: null`. That is
-no longer this profile's shape (see below); it is recorded here as the
-failure mode the current shape exists to avoid.
+Whether a child's traffic is actually bounded the way its own `network`
+grant implies depends on nothing in that grant alone — it depends on
+whether the proxy env vars reach it. Each hop's own `environment.allow_vars`
+filters what it received from its caller, and if a *single* hop in the
+chain — including the session's own top-level `environment` section — omits
+the proxy vars, they are gone for every hop below it, and the leaf falls
+back to a direct, unmediated connection: an `allow_domain` grant without the
+proxy vars reaching it is not bounded to that domain at all, and an
+`allow_all` grant without them means genuinely unbounded, not "up to the
+ceiling".
 
-**This repository now binds `git` to GitHub, not to an unbounded ceiling.**
-The top-level `network` is
-`{"allow_domain": ["github.com", "*.githubusercontent.com"]}`, which stands
-up the proxy, and `environment.allow_vars` at *every* hop of the chain —
-the top-level session, `agent-sandbox`, `git`, and `realgit` alike —
-includes `http_proxy`, `HTTP_PROXY`, `https_proxy`, `HTTPS_PROXY`,
-`no_proxy`, `NO_PROXY` (measured: the six names are sufficient: no
-`NONO_*` variable had to be added for GitHub to work). With every hop
-carrying those vars, `realgit`'s `{"allow_all": true}` genuinely means "up
-to the ceiling" rather than "unrestricted": measured through the real
-broker, `git ls-remote https://github.com/git/git.git HEAD` returns a real
-ref, while `git ls-remote https://example.com/x`, a raw IP, and a
-nonexistent domain all fail identically with
-`CONNECT tunnel failed, response 403` — a genuine proxy denial, not a DNS
-or routing failure. **Omitting the proxy vars from any one of those four
-hops' `allow_vars` silently reopens `realgit` to the whole internet**,
-exactly as it did before this section's own chain was corrected — check
-all four when changing this profile, not just the one you touched.
+**`git`'s own network grant is scoped to GitHub, and governs the HTTPS
+transport only.** Its child sandbox sets `network:
+{"allow_domain": ["github.com", "*.githubusercontent.com"]}`, and the
+top-level `network` (the ceiling) allows the same two, so the proxy is
+actually standing up in front of it; both the session's own top-level
+`environment.allow_vars` and `git`'s own carry the six proxy variable names
+(`http_proxy`/`HTTP_PROXY`/`https_proxy`/`HTTPS_PROXY`/`no_proxy`/
+`NO_PROXY`), measured sufficient with no `NONO_*` variable needed. Measured
+through the real broker: `git ls-remote https://github.com/git/git.git HEAD`
+returns a real ref, while `git ls-remote https://example.com/x`, a raw IP,
+and a nonexistent domain all fail identically with `CONNECT tunnel failed,
+response 403` — a genuine proxy denial, not a DNS or routing failure.
+Omitting the proxy vars from either hop's `allow_vars` would silently reopen
+this to the whole internet, so check both when changing this profile, not
+just the one you touched. SSH remotes never go through this grant at all —
+they go out through the separate `ssh` command below.
+
+**`ssh`'s own network grant is `{"allow_all": true}`, and unlike `git`'s
+grant, that really is unrestricted.** The SSH protocol cannot be tunnelled
+through nono's HTTP(S) proxy, so an `allow_domain` grant there is rejected
+outright, and there is no proxy for an `allow_all` grant to be bound
+against either. `nono profile validate` warns `[allow_all_network]` on this
+entry, and — unlike a warning on a grant that the proxy chain actually
+bounds — this one should be taken literally: `ssh` can reach any host. What
+actually bounds it is everything else about its entry: it is reachable only
+from `git` (`session: "deny"` refuses a direct invocation from the session,
+exit 126), and its filesystem grants are narrow — `~/.ssh/id_main`,
+`~/.ssh/config` and `~/.ssh/known_hosts` read, `~/.ssh/known_hosts` write,
+nothing else. There is no live `ssh-agent` credential to bind on this host
+(`SSH_AUTH_SOCK` names a socket that no longer exists), so the identity file
+itself is the grant nono's own `credentials` mechanism would otherwise
+replace.
+
+**`bash` and `sh` carry no `network` key at all, and that absence is itself
+the denial** — not an oversight to "helpfully" fill in with `allow_domain`
+or `allow_all`. Both are confined to `$WORKDIR`, the nix store,
+`/run/current-system/sw` and the mise-installed toolchains, for both read
+and exec, with no network reach of any kind; measured directly, both
+`~/.ssh/id_main` and `~/.gitconfig` are denied from inside either sandbox.
+
+**Git hooks do not execute inside `git`'s sandbox.** `git commit` fails
+with `fatal: cannot exec '.git/hooks/commit-msg': Permission denied` unless
+run as `git commit --no-verify` — and because of that, **commit-message
+validation does not run inside this sandbox**: no hook here is going to
+catch a malformed message, so get it right before committing (this
+repository follows Conventional Commits; see
+`.claude/rules/git-commit.md`). Making hooks execute would need `$WORKDIR`
+and `/nix/store` added to `git`'s own `exec_paths` — a hook's shebang makes
+the kernel exec the interpreter, under `/nix/store`, as part of git's own
+`execve()` of the hook file itself. This profile deliberately does not do
+that: `$WORKDIR` is agent-writable, and `git`'s sandbox already carries
+network access and read access to the global gitconfig, so that widening
+would let git execute arbitrary agent-written content with network the
+moment it lands in the working tree — a write-then-execute path. It would
+also not buy back the validation it costs so much to get: measured
+separately, with hooks temporarily enabled, `lefthook` still did not run
+and a commit message that violates this repository's own Conventional
+Commits rule went through unvalidated. Net effect, with or without hooks
+executing: commit-message validation does not run inside this sandbox
+either way, so re-opening hook execution is not worth what it costs.
 
 **A worked example** — this repository's own `command-profile.json` at the
-repo root — declares `agent-sandbox` itself as the session's policy command
-(`can_use: ["git", "go"]`, `exec_paths` covering `rg`, `mise`, `gofmt` (as a
-single file, not its whole directory — see the note on multi-call binaries
-below), and the coreutils this repo's own workflows use). `git` and `go` are
-its two policy commands, for two different reasons:
+repo root — declares four policy commands: `git`, `ssh`, `bash` and `sh`.
+Everything else this repository's own workflows use (`go`, `rg`, `mise`,
+`gofmt`, the coreutils, …) runs at the floor instead, granted through
+`groups.include` and the top-level `filesystem`/`environment` sections, not
+through `command_policies`.
 
-- **`git` is bound to a wrapper, not to the real binary.** The profile pins
-  `git`'s `executable` back to the `agent-sandbox` binary itself, with
-  `argv_prepend: ["safe", "git"]` inserted after the shim's own `argv[0]`,
-  so `git status --short` reaches the wrapper as
-  `["safe", "git", "status", "--short"]` — exactly what
-  `agent-sandbox safe git` parses. The real binary gets a second name
-  reachable only from the wrapper (`realgit`), so there is no path to it
-  that skips the parser.
-- **`go` carries neither a wrapper nor an `invocation_policy`.** A compiler
-  is not something argv-level rules can usefully bound, but it still needs
-  its own child sandbox, because `go test` compiles and immediately executes
-  a test binary, and that write-then-execute directory has to stay out of
-  reach of every other command.
+None of the four pins an `executable`. A pin whose path does not exist
+silently disables mediation for that command: nono falls back to the first
+`PATH` match and runs it at the *session's* own grants, `nono profile
+validate` still passes, and the audit trail records only "tools: active, no
+invocations" (measured on nono 0.74.0). `git`'s real binary is a
+`/nix/store` path that changes on every nixpkgs update, so pinning it here
+would silently un-sandbox `git` on the next upgrade — which is also why
+`doctor`'s "profile paths" check (see [`doctor`](#doctor)) exists, verifying
+instead the paths this profile *does* pin (`executable_dirs`, and each
+command's own `exec_paths`).
 
-More on what a compiler being enumerable at all actually costs below.
+- **`git`** is reachable from the session and runs as the real binary
+  directly — there is no wrapper and no second name for it. Its child
+  sandbox grants read access to `$WORKDIR`, the object store
+  (`@git:common-dir`, `@git:worktree`, `@git:toplevel`, `@git:hooks-path`)
+  and the global/system git config (`@git:config-files`, which nono
+  resolves to the declared target of every `include.path`/
+  `includeIf.*.path` in those scopes only — `local` and `worktree` scopes
+  are excluded, so a repository cannot grant itself host access through its
+  own `.git/config`), plus `libexec/git-core` under `exec_paths` — needed
+  only for the HTTPS transport's separate `git-remote-https` binary; nono
+  skips a missing `exec_paths` entry silently, so a nixpkgs git update that
+  moves this path would break HTTPS transport with no diagnostic naming the
+  profile, which is exactly what `doctor`'s "profile paths" check catches.
+  `git`'s own `can_use: ["ssh"]` is the only reason `ssh` is reachable at
+  all — see [Network](#the-two-profiles) above for both commands' network
+  grants and the git-hooks trade-off.
+- **`ssh`** is reachable only from `git`; a direct session invocation is
+  refused (`session: "deny"`, exit 126).
+- **`bash` and `sh`** are reachable only from the session, deliberately not
+  from `git` — `git` cannot execute a hook at all (above), so a `git`-caller
+  edge for either would be dead weight.
 
-```json
-"git": {
-  "executable": "<agent-sandbox binary>",
-  "can_use": ["realgit"],
-  "from": { "agent-sandbox": { "sandbox": {
-    "argv_prepend": ["safe", "git"],
-    "...": "..."
-  } } }
-},
-"realgit": {
-  "executable": "/nix/store/…-git-2.54.0/bin/git",
-  "from": { "git": { "sandbox": { "...": "..." } } }
-}
-```
+None of the four carries an `invocation_policy` argv rule of any kind. An
+earlier revision of this project enforced git-specific rules — blocking an
+unconditional `push --force`, `reset --hard`, and similar — through a
+Go-based wrapper that parsed each invocation before deciding whether to
+exec the real binary. That wrapper (`internal/safe/git`, invoked via the
+`agent-sandbox` binary's own `safe` subcommand) still exists, is still
+built, and is still tested, but this profile no longer wires it in: `git`'s
+entry above execs
+the real binary directly, under no argv-level policy at all. **What bounds
+`git` in this profile is exclusively what its filesystem, network and
+`can_use` grants reach — not which git subcommand or flag it was given.** An
+operator who wants those argv-level rules back would need to wire the
+wrapper in explicitly (pin `git`'s `executable` to the `agent-sandbox`
+binary, add `argv_prepend: ["safe", "git"]`, and give the real binary a
+second name reachable only from the wrapper) — a capability decision this
+repository's own profile does not make.
 
-**`nono profile validate` warns that `realgit` "allows unrestricted child
-network" — that warning is generic and, for this profile, misleading if
-read literally.** `realgit`'s own grant is `{"allow_all": true}`, but the
-top-level ceiling and every hop's `environment.allow_vars` bound it to
-GitHub in practice (see "Network" above); the validator has no way to know
-that from `realgit`'s entry alone, since the same warning would fire
-whether or not the surrounding chain actually carries the proxy vars that
-make the bound real. Do not treat the warning's absence, or its presence,
-as evidence either way — check the actual chain.
-
-`git`'s wrapper (`internal/safe/git`, invoked as `agent-sandbox safe git`)
-parses the invocation instead of matching argv fragments, which is what lets
-it refuse two routes an `invocation_policy` rule cannot reach: a global
-option placed ahead of the subcommand (`git --no-pager config alias.h "reset
---hard"` walks a naive prefix matcher straight past the rule looking for
-`reset --hard`), and an alias written directly into `.git/config` with no
-`git` invocation at all — the wrapper resolves an unrecognized leading token
-against the repository's own configured aliases and re-checks the expansion,
-which is the only way to catch that second route. As of this writing the
-rule set refuses, among others: unconditional `--force`/`-f` on push,
-`reset --hard`, `clean -f`, force-deleting a branch, `filter-branch`/
-`filter-repo`, `update-ref -d`/`--delete`, `reflog expire`,
-`gc --prune=now`/`--prune=all`, bypassing hooks or signatures
-(`--no-verify`, `--no-gpg-sign`, `commit -n`), injecting an alias or an
-exec-capable config key via `-c`/`--config-env`, `stash drop`/`clear`,
-removing a remote or changing its URL (adding one is allowed), deleting a
-tag, discarding working-tree changes
-(`checkout -- .`/`restore --worktree`), writing config (`git config` reads
-are allowed; anything that is not a read is not), and `--exec-path`. The
-list above is a snapshot; `internal/safe/git/rules.go` is the source, and
-`agent-sandbox ai explain` renders it live from that same source (not from
-this document) for whichever profile is actually running. Do not point an
-agent at `agent-sandbox safe git --help` for this: `safe git` disables its
-own flag parsing, so `--help` passes straight through to real git and
-prints git's own help instead, not a rule set.
-
-**The `-c`/`--config-env` entries above (`execCapableConfigKeys` in
-`internal/safe/git/rules.go`) are a nine-key denylist, not the boundary,
-and treating them as the boundary is the mistake to avoid.** git has more
-exec-capable config keys than that nine — `diff.external`,
-`filter.*.clean`/`smudge`, `merge.*.driver`, `pager.*`,
-`protocol.*.command`, `uploadpack.packObjectsHook`, `trailer.*.command`,
-`core.gitProxy`, `gpg.<fmt>.program` among them — and every one of them is
-settable by the same route the alias check above exists to catch:
-`echo '[diff] external = …' >> .git/config` is a broker builtin, not an
-`execve`, so neither this wrapper's parser nor nono's shim is ever in the
-loop. What actually stops these is a layer underneath the wrapper, not the
-wrapper itself: `realgit`'s own `exec_paths` in the command profile names
-only `libexec/git-core`, so every shell-out one of those config keys would
-need — `sh -c`, a bare program name, `rebase -x`, `bisect run`,
-`submodule foreach`, `difftool --extcmd` — fails at `execve` under nono's
-Landlock execute restriction, regardless of what the parser did or did not
-catch. That narrow `exec_paths` is load-bearing and lives entirely in
-`command-profile.json`, not in this repository's Go source. Widening
-`realgit`'s `exec_paths` toward `/nix/store` — the natural fix to reach for
-when some unrelated git subcommand's shell-out fails — silently reopens
-every one of those config keys at once, because nothing in the wrapper's
-own rule set changed. The parser stops what it can see in argv; a narrow
-`exec_paths` stops what it cannot see at all; a git config key that runs a
-program is exactly what that second layer is holding back — for every
-route except one, measured and recorded as an accepted residual in the
-spec's "Accepted residual: `diff.external` reaches `ld-linux` directly"
-(a single-token `diff.external` reaches the pinned git binary's own dynamic
-linker regardless of `exec_paths`, and from there reaches arbitrary
-execution of anything readable under the sandbox).
-
-It is also worth being precise about what kind of rule each entry in the
-list above actually is. `hard-reset`, `clean-force`, `discard-changes`,
-`stash-destroy` and `tag-delete` are guardrails against an accidental
-invocation, not defenses against a deliberate one: `rm`, `mv` and `cp` are
-floor commands with write access to `$WORKDIR` in this repository's own
-profile, so `rm -rf .git` needs no git at all, and none of those five rules
-sits anywhere near that path. The rest of the list — `force-push`,
-`branch-force-delete`, `filter-history`, `update-ref-delete`, `gc-prune`,
-`bypass-hooks`, `alias-injection`, `config-exec-injection`,
-`remote-tamper`, `config-write` and `exec-path-injection` — are the ones
-doing boundary work against what git itself, or a config value it reads,
-can be made to do; presenting the whole list as one undifferentiated
-policy overstates the first five.
-
-`remote-tamper` in particular is not a network control, and its message
-says so: it refuses `remote remove`/`rm`/`set-url` through git's own CLI,
-but `remote add` is explicitly allowed, `remote.origin.url` is settable by
-the same direct `.git/config` write the alias check exists to catch, and
-`realgit`'s own child sandbox carries `"network": {"allow_all": true}`
-regardless. That grant is bounded, not unrestricted: this repository's
-session ceiling (the top-level `network` section) is
-`{"allow_domain": ["github.com", "*.githubusercontent.com"]}`, and every
-hop of this chain (`agent-sandbox` → `git` → `realgit`, including the
-session's own top-level `environment`) carries the proxy env vars in its
-`environment.allow_vars`, so `realgit`'s traffic is actually routed through
-nono's proxy and held to that allowlist (see "Network" above for the
-measurement: GitHub reaches, `example.com` and a raw IP both fail with a
-`403` proxy denial). What git can reach over the network is GitHub (and
-`*.githubusercontent.com`) only — nothing this wrapper checks narrows that
-further, but nothing about `remote add`/`remote.origin.url` widens it
-either, since the allowlist lives in the profile's `network` section, not
-in anything git's own config can influence.
-
-A refusal from the wrapper prints `blocked: <reason>` to stderr and
-**exits 1** — it is caught in Go before nono is ever involved, so it is not
-the `invocation_policy` exit code 126 an argv-rule denial produces (still
-true for a command that carries `invocation_policy` directly, and for
-nono's own tool-sandbox refusals, e.g. a command absent from `can_use`).
+None of these four edges is written with nono's `sandbox` shorthand
+(`"from": {"session": "sandbox"}` rather than the longer
+`{"session": {"sandbox": {...}}}`), even though nono runs both forms
+identically. `nono why --command` does not implement the shorthand: on this
+profile it answers DENIED, citing a missing `from.session`, for a command
+that demonstrably runs (measured, nono 0.74.0) — and `agent-sandbox ai
+explain` tells the agent to run exactly that query, so an edge written with
+the shorthand would hand the agent a false denial with no way to see
+through it. Every edge in this profile is written the long way for exactly
+this reason.
 
 **`docker` is not declared in this repository's profile at all — not as a
-policy command, not as a floor command.** A `docker` wrapper exists
-(`internal/safe/dockercompose` and `cmd/safe_docker.go`, identical shape to
-`git`'s: `docker` → wrapper → `realdocker` → the real binary) and is fully
-built and tested, but wiring it into a command profile is a capability
-decision an operator makes deliberately, not something to enable by
-copying this repository's profile. The reason is the Docker socket, and it
-is not what it looks like:
+policy command, not at the floor.** A `docker` wrapper exists
+(`internal/safe/dockercompose` and `cmd/safe_docker.go`: `docker` →
+wrapper → `realdocker` → the real binary — the same argv-parsing pattern
+`git`'s own entry used before this profile moved `git` to the direct
+sandbox described above) and is fully built and tested, but wiring it into
+a command profile is a capability decision an operator makes deliberately,
+not something to enable by copying this repository's profile. The reason is
+the Docker socket, and it is not what it looks like:
 
 > **The Docker socket is not filesystem-gated.** nono does not mediate
 > pathname AF_UNIX sockets — only the Linux *abstract* socket namespace —
 > so `/var/run/docker.sock` is reachable by any command that can execute
 > the `docker` binary, regardless of what `fs_read`/`fs_write` grant it
-> does or does not have. Not declaring `docker` in a profile is a real
-> allowlist boundary (the broker will not dispatch a name absent from both
-> tiers, full stop); *declaring* it, with no filesystem grant anywhere near
-> the socket, is not — the daemon is reachable the moment the binary is.
-> Once it is, the wrapper's checks (below) are the *entire* defense, not a
-> second layer behind a filesystem bound, and reaching the daemon at all is
-> root-equivalent: the socket permits mounting `/` into a container. Gating
-> the socket itself needs `linux.af_unix_mediation` plus a
-> `filesystem.unix_socket` allowlist — a separate opt-in nono's profile
-> guide documents under its `no-docker` example — which this repository's
-> profile does not configure, because this repository's profile does not
-> declare `docker` at all.
+> does or does not have. Not declaring `docker` in a profile means the
+> broker will not dispatch it at all — that boundary is real; *declaring*
+> it, with no filesystem grant anywhere near the socket, is not — the
+> daemon is reachable the moment the binary is. Once it is, the wrapper's
+> checks (below) are the *entire* defense, not a second layer behind a
+> filesystem bound, and reaching the daemon at all is root-equivalent: the
+> socket permits mounting `/` into a container. Gating the socket itself
+> needs `linux.af_unix_mediation` plus a `filesystem.unix_socket`
+> allowlist — a separate opt-in nono's profile guide documents under its
+> `no-docker` example — which this repository's profile does not
+> configure, because this repository's profile does not declare `docker`
+> at all.
 
 An operator who decides the wrapper's checks are sufficient can wire it in
-with the identical shape as `git`:
+with this shape:
 
 ```json
 "docker": {
@@ -664,71 +653,50 @@ moment it is pasted in.
 Neither is closed by anything in this repository. An operator enabling
 docker is accepting both until someone closes them.
 
-Four properties worth knowing before writing your own:
+Three facts this design turns on, each measured on nono 0.74.0:
+
+- **`executable_dirs` is required once Tool Sandbox activates, or the Go
+  toolchain cannot exec its own tools.** Activating Tool Sandbox at all
+  rebuilds the broker's own execute grant from the trusted directories on
+  `PATH`, and the Go toolchain's internal tools (`compile`, `link`, …) do
+  not live on `PATH` — without `command_policies.executable_dirs` naming
+  that mise-managed directory directly, `go build ./...` fails with
+  `fork/exec .../pkg/tool/linux_amd64/compile: permission denied`. Neither
+  `~` nor `$HOME` is expanded there, so the path is written literal, and it
+  is pinned to a minor Go version (`.mise.toml` pins `go = "1.25"`): a patch
+  upgrade does not break it, a minor bump does, loudly.
+- **A missing `executable` pin silently disables mediation for that
+  command, which is why nothing in this profile pins one** (see the worked
+  example above). `agent-sandbox doctor`'s "profile paths" check exists to
+  catch the paths that *are* pinned (`exec_paths`, `executable_dirs`) going
+  stale, not to catch a pin that was never made.
+- **`nono why --command` does not implement the `sandbox` shorthand, which
+  is why every edge in this profile is written `from.session`** rather than
+  the shorter form (see the worked example above) — the shorthand answers a
+  false DENIED for a command that demonstrably runs, and `ai explain` sends
+  the agent to ask exactly that question.
+
+Two more properties worth knowing:
 
 - **A toolchain that compiles and runs code is bounded only by its own
-  sandbox, not by which other commands are enumerated.** This repository's
-  own `go` entry has no `invocation_policy` at all — a compiler is not
-  something argv-level rules can usefully bound — and its own child sandbox
-  originally granted `/nix/store` read access, the same NixOS execute path
-  every other command needs. That combination is a real, measured bypass:
-  `go run` on a program that copies `git`'s (or `bash`'s) real binary into
-  `/tmp` and `exec`s it directly reaches the real binary, unmediated by any
-  shim or `invocation_policy`, exactly as if the copy-then-exec had been
-  attempted at the floor. Fixed here by removing `/nix/store` and
-  `/run/current-system/sw` from `go`'s own `fs_read`: the toolchain (built
-  with `CGO_ENABLED=0`, confirmed with `ldd` reporting "not a dynamic
-  executable") and everything it compiles here need neither for their own
-  linking, so the fix costs nothing `go test`/`go build` need — but it does
-  not make the underlying risk disappear. A dynamically linked binary staged
-  through `$WORKDIR` instead (readable to both the floor and to `go`) and
-  then copied to `/tmp` and exec'd now fails at the shared-library-loading
-  step, since `/tmp` is not `/nix/store` and the copy carries no working
-  runtime with it — measured directly, both for `git` and for `bash`. A
-  sufficiently deliberate attack that stages an entire dependency closure
-  (a copy of the dynamic linker plus every `.so` it needs) into `$WORKDIR`
-  and invokes the copied linker directly was not attempted and is not
-  claimed to be closed. If you enumerate a compiler or interpreter in your
-  own profile, treat this as the honest boundary: its own sandbox's reach,
-  not the two-tier model's absoluteness, is what actually bounds it.
-- **The installed binary's directory must be on the launcher's own `PATH`.**
-  The launcher invokes `agent-sandbox broker` by base name, never by an
-  absolute path: nono treats an absolute-path invocation of a declared
-  policy command as a direct exec bypass and refuses it. That name then
-  resolves the same way an ordinary shell would — through the *launcher
-  process's own* `PATH`, before any sandbox exists — not through
-  `command_policies.executable_dirs`, which measurably plays no part in
-  resolving the session entrypoint at all. This also means PATH resolution
-  finds whichever `agent-sandbox` comes first on it, not necessarily the one
-  you meant: a stale copy or an unrelated program sharing the name, earlier
-  on that PATH, would silently become the broker instead.
-- **Enumerating every runnable command is the real cost of this design.**
-  The broker will not *dispatch* a program absent from both tiers, which is
-  the allowlist working as intended — and also the profile's recurring
-  maintenance burden. That is a claim about dispatch, not about
-  reachability in general: a command with a compiler or interpreter in its
-  own sandbox can still execute code the broker never dispatched, exactly
-  the chain the compiler caveat above measures. On a NixOS host, coreutils
-  applets (`cat`, `ls`, `rm`, `cp`, …) are symlinks into one combined
-  multi-call binary: pinning each as its own
-  policy command silently disables enforcement, so they belong at the floor,
-  granted as one directory. A pinned `executable` must be the real program,
-  never a multi-call host or a version-manager shim — pointing an entry at
-  `mise` turns every mise-managed tool into an attempted direct exec of
-  `mise` itself. Nix's own `docker` package has the identical shape and cost
-  a real debugging session to find while testing the opt-in `docker` block
-  above: `bin/docker` is a small stub that re-execs `libexec/docker/docker`,
-  the actual CLI binary, and nono's per-command Landlock rule set — built
-  from the pinned executable's own direct library dependencies — does not
-  cover that second, indirectly invoked path. Pinning `realdocker` at
-  `bin/docker` crashed every invocation with `execve(...) = -1 EACCES`
-  (reported only as "Command exited with code 255", no other output); the
-  block above already pins `libexec/docker/docker` directly, for this
-  reason.
-- **`nono profile validate` checks JSON syntax and group references only** —
-  it does not catch every schema mistake (`exec_paths` itself is not in the
-  published JSON Schema, though the runtime honours it). Verify a real
-  workflow against a real `nono run` session, not just a passing `validate`.
+  sandbox's reach, not by which other commands are declared.** `go` is not
+  one of this profile's four policy commands — `go build`, `go test` and
+  `go run` all run directly in the broker's own sandbox, the same one every
+  other floor command shares. Whatever that sandbox's filesystem and
+  network grants reach, a program compiled and immediately executed there
+  can reach too — in principle including a copy of a program this profile
+  does sandbox elsewhere, made and exec'd through `/tmp` or `$WORKDIR`. The
+  two-tier model was never positioned to close this: it decides what the
+  broker itself dispatches by name, and a binary a compiled program execs
+  directly is not something the broker dispatches at all. If you enumerate
+  a compiler or interpreter's own toolchain in a profile you write, treat
+  its own sandbox's reach as the honest boundary, not the two-tier model's
+  absoluteness.
+- **`nono profile validate` checks JSON syntax and group references only**
+  — it does not catch every schema mistake (`exec_paths` itself is not in
+  the published JSON Schema, though the runtime honours it). Verify a real
+  workflow against a real `nono run` session, not just a passing
+  `validate`.
 
 ### User-scope config
 

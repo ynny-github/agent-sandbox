@@ -303,6 +303,20 @@ matching how the command profile behaves. See
 [User-scope config](#user-scope-config) for how the key behaves when set in
 `~/.config/agent-sandbox/config.toml`.
 
+Four grants do **not** belong in this file, because only the launcher knows
+their values and it passes each on the `nono wrap` command line:
+
+| grant | why it is dynamic |
+|---|---|
+| the `agent-sandbox` binary itself (`--read-file`) | the agent runs `agent-sandbox hook` and `agent-sandbox serve` as its own direct children — inside its own sandbox, not through the broker — and on a mise-managed toolchain the binary's path carries the Go version, so an upgrade renumbers it |
+| the main git directory of a worktree (`--allow`) | detected per invocation |
+| the generated GitHub MCP config (`--read-file`) | a temp file, new every launch |
+| the command broker's socket (`--allow-unix-socket`) | its name is derived from the launcher's PID |
+
+Without the first one nono refuses the execve and every command fails with
+nothing on screen to explain it, so the launcher refuses to start at all if it
+cannot locate its own binary.
+
 Because it is hand-written, this file can name any path nono's schema
 allows — including protected prefixes such as `~/.aws`, `~/.gnupg`,
 `~/.config/gh`, and `~/.kube` via `bypass_protection` — where the deleted

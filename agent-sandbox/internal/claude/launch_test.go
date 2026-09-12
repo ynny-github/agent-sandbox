@@ -196,15 +196,25 @@ func TestBuildArgs_HookMode_InjectsSettings(t *testing.T) {
 	}
 }
 
-func TestBuildArgs_McpMode_NoReadFile(t *testing.T) {
+// With no MCP config to hand the agent, the only --read-file is the launcher's
+// own binary (which the agent must be able to exec in either mode). Nothing
+// else is granted.
+func TestBuildArgs_McpMode_NoMCPConfigReadFile(t *testing.T) {
 	makeFakeNono(t)
+	self := pinExecutablePath(t)
 	cfg := &config.Config{ToolMode: "mcp"}
 	_, args, err := BuildArgs(cfg, Options{}, "", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if argsContain(args, "--read-file") {
-		t.Errorf("mcp mode should not grant --read-file; got %v", args)
+	var granted []string
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "--read-file" {
+			granted = append(granted, args[i+1])
+		}
+	}
+	if len(granted) != 1 || granted[0] != self {
+		t.Errorf("mcp mode with no MCP config must grant only the launcher binary %q; got %v", self, granted)
 	}
 }
 
@@ -270,8 +280,9 @@ func TestBuildArgs_InjectsMCPConfig(t *testing.T) {
 	}
 	ci := argsIndex(args, "claude")
 
-	ri := argsIndex(args, "--read-file")
-	if ri < 0 || args[ri+1] != "/tmp/asb-mcp-1.json" || ri > ci {
+	// The launcher's own binary is granted with the same flag, so match on the
+	// value rather than on the first occurrence.
+	if !hasFlagValue(args[:ci], "--read-file", "/tmp/asb-mcp-1.json") {
 		t.Fatalf("expected --read-file <mcp path> before claude; got %v", args)
 	}
 	if !argsContain(args, "--strict-mcp-config") {
@@ -919,4 +930,57 @@ func TestRun_MissingAgentProfileFailsBeforeLaunch(t *testing.T) {
 	if supervised != 0 {
 		t.Errorf("claude must not be launched when the agent profile is missing")
 	}
+}
+
+// The PreToolUse hook runs `agent-sandbox hook`, and in mcp mode Claude spawns
+// `agent-sandbox serve` as an MCP server. Both are direct children of the
+// agent, so they run inside the agent's own sandbox rather than through the
+// broker: without a grant for the binary itself, nono refuses the execve and
+// every command fails with nothing on screen to explain it. The path is the
+// launcher's own, so it is passed as a flag rather than written into the
+// hand-written profile, where a mise toolchain upgrade would silently
+// invalidate it.
+func TestBuildArgs_GrantsTheLauncherBinaryToTheAgent(t *testing.T) {
+	makeFakeNono(t)
+	self := pinExecutablePath(t)
+
+	cfg := &config.Config{ToolMode: "hook"}
+	_, args, err := BuildArgs(cfg, Options{}, "", "/tmp/p.json", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !hasFlagValue(args, "--read-file", self) {
+		t.Errorf("expected --read-file %s; got %v", self, args)
+	}
+	i := argsIndex(args, "--read-file")
+	if c := argsIndex(args, "claude"); i < 0 || c < 0 || i > c {
+		t.Errorf("the grant must precede the wrapped command; got %v", args)
+	}
+}
+
+// Launching without the grant produces a session in which every command fails
+// for a reason nothing reports, so an unknown binary path stops the launch
+// instead of starting a broken one.
+func TestBuildArgs_FailsWhenItsOwnPathIsUnknown(t *testing.T) {
+	makeFakeNono(t)
+	prev := executablePath
+	executablePath = func() (string, error) { return "", errors.New("os.Executable: not implemented") }
+	t.Cleanup(func() { executablePath = prev })
+
+	cfg := &config.Config{ToolMode: "hook"}
+	if _, _, err := BuildArgs(cfg, Options{}, "", "/tmp/p.json", ""); err == nil {
+		t.Fatal("expected an error when the launcher cannot locate its own binary, got nil")
+	}
+}
+
+// pinExecutablePath fixes the launcher's own binary path for a test and returns
+// it. BuildArgs grants that path unconditionally, so a test asserting on the
+// grant list needs it to be a known value rather than the test binary's.
+func pinExecutablePath(t *testing.T) string {
+	t.Helper()
+	const self = "/home/tester/.local/share/mise/installs/go/1.25.14/bin/agent-sandbox"
+	prev := executablePath
+	executablePath = func() (string, error) { return self, nil }
+	t.Cleanup(func() { executablePath = prev })
+	return self
 }

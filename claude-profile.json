@@ -6,6 +6,11 @@
   // is not brokered). Shell commands do not run here at all: they go through
   // the broker, under command-profile.json. Nothing needed only to *run a
   // command* belongs in this file.
+  // You do not grant the agent-sandbox binary here. The agent runs
+  // `agent-sandbox hook` and `agent-sandbox serve` as its own direct children,
+  // so it must be able to exec that binary — but only the launcher knows where
+  // it lives (a mise-managed toolchain puts the Go version in the path), so it
+  // passes `--read-file <its own path>` on the nono command line instead.
   "extends": "claude",
   "meta": { "name": "custom claude" },
 

@@ -94,6 +94,11 @@ func ValidatePassthrough(claudeOpts []string, githubMCPEnabled bool) error {
 	return nil
 }
 
+// executablePath resolves the launcher's own binary. It is a variable rather
+// than a direct os.Executable call only so tests can pin it; nothing outside
+// this package sets it.
+var executablePath = os.Executable
+
 // BuildArgs constructs the nono executable path and the argv used to launch
 // Claude under the sandbox for cfg. It injects the operator's profile at
 // profilePath via `--profile` (no user nono options are forwarded) and, in
@@ -107,6 +112,26 @@ func BuildArgs(cfg *config.Config, opts Options, mcpConfigPath,
 		return "", nil, fmt.Errorf("nono not found in PATH: %w", err)
 	}
 	args := []string{"nono", "wrap"}
+
+	// The agent runs `agent-sandbox hook` (hook mode) and `agent-sandbox serve`
+	// (mcp mode) as its own direct children — inside its own sandbox, not
+	// through the broker — so the launcher's binary has to be reachable from
+	// the agent profile. Without it nono refuses the execve and every command
+	// fails with nothing on screen to explain it.
+	//
+	// It is a flag rather than a line in the hand-written profile because only
+	// the launcher knows where it lives: on a mise-managed toolchain the path
+	// carries the Go version, so an upgrade renumbers it and a profile entry
+	// would silently stop matching. A read grant carries the execute right.
+	self, selfErr := executablePath()
+	if selfErr != nil {
+		return "", nil, fmt.Errorf("locate agent-sandbox: %w", selfErr)
+	}
+	// Landlock resolves symlinks, so grant the target rather than the link.
+	if resolved, rerr := filepath.EvalSymlinks(self); rerr == nil {
+		self = resolved
+	}
+	args = append(args, "--read-file", self)
 
 	cwd, cwdErr := os.Getwd()
 	if cwdErr == nil {

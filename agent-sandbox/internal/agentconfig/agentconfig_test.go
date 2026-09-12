@@ -199,4 +199,7 @@ func TestExplain_ReadsNoProfile(t *testing.T) {
 	if !strings.Contains(out, "Changing the config") {
 		t.Errorf("explain did not render its full document:\n%s", out)
 	}
+	if !strings.Contains(out, "does-not-exist.json") {
+		t.Errorf("explain did not name the missing profile path it was pointed at:\n%s", out)
+	}
 }

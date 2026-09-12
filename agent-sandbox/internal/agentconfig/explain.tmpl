@@ -10,7 +10,8 @@
 There is no shell in the loop. The broker parses your command line itself
 (pipelines, `&&`/`||`/`;`, redirections, globbing, `$(…)`, `for`/`if`, `cd` and
 the other shell builtins all work) and executes each simple command directly —
-never through `bash` or `sh`. Builtins run inside the broker itself, at the
+never implicitly through `bash` or `sh` (invoking either yourself is a
+different thing — see below). Builtins run inside the broker itself, at the
 broker's own grants, so a redirect or glob you write is bounded by those, not by
 whichever command's output it is attached to.
 
@@ -24,15 +25,24 @@ reading the JSON cannot:
 - `nono why --profile {{.ProfilePath}} --command <name>` — is this command
   policy-controlled, and may I invoke it? Add `--caller <name>` to ask about a
   chained edge rather than your own.
-- `nono why --profile {{.ProfilePath}} --path <p> --op read|write` — and
-  `--host` for network.
-- `nono profile show {{.ProfilePath}}` — the whole resolved profile.
+- `nono why --profile {{.ProfilePath}} --path <p> --op read|write` (`--host`
+  for network) answers for the **broker's own sandbox**, not a policy
+  command's. `--command` and `--path` do not combine: pass both and `--path`
+  is silently dropped, so this answers the command question instead — it
+  cannot tell you what a policy-controlled command's own child sandbox can
+  reach.
+- `nono profile show --json {{.ProfilePath}}` — the full resolved profile,
+  including each policy command's own sandbox under `command_policies` (its
+  `from.<caller>.sandbox`). The plain form without `--json` only summarises:
+  it lists policy-controlled command names, nothing about what any of them
+  can reach.
 
 `sh` and `bash` are themselves declared commands with their own child sandbox —
 reachable from the session, confined to the working directory's own data with
 no network, though able to run tools out of the nix store and the mise
-toolchains — so ask `nono why` for either one's specifics rather than assume it
-shares the session's own reach.
+toolchains. There is no `nono why --path` route into a child sandbox's own
+grants (see above); read `nono profile show --json` for either one's
+specifics rather than assume it shares the session's own reach.
 
 Neither command reports environment variables: `nono profile show` does not print
 `environment.allow_vars`. If a variable is not arriving, read that list in the
@@ -49,6 +59,11 @@ file itself. `agent-sandbox doctor` measures the one that matters most,
   through the nesting, is worth one attempt.
 - **Exit 127, or `Permission denied` from the program itself** — the path, host
   or binary is outside what the profile grants. Not a rule to phrase around.
+- **`agent-sandbox: refused: this pipeline pipes two or more policy-controlled
+  commands together …`, exit 126** — not a nono denial; the broker refused it
+  itself, before running anything, because two policy-controlled commands
+  (`git`, `ssh`, `bash`, `sh`) were piped directly together. Run them as
+  separate commands instead.
 - **`fatal: cannot exec '.git/hooks/commit-msg': Permission denied`** (or any
   other `.git/hooks/*`) — not a policy denial. Git hooks do not execute inside
   this sandbox at all; use `git commit --no-verify`. Because of that,

@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -663,10 +665,12 @@ func TestRenderResults_AllNG(t *testing.T) {
 	}
 }
 
-// nonoAnswers builds a runCommand stub covering the two nono subcommands
-// checkProfiles drives: `nono profile validate` (both profiles) and `nono why
-// --json` (the broker binary's writability). validateErr, when non-nil, fails
-// every validate; whyStatus is the status field the why answer carries.
+// nonoAnswers builds a runCommand stub covering the nono subcommands
+// checkProfiles and checkProfilePaths drive: `nono profile validate` (both
+// profiles), `nono profile show --json` (the command-policy paths query), and
+// `nono why --json` (the broker binary's writability). validateErr, when
+// non-nil, fails every validate; whyStatus is the status field the why answer
+// carries.
 //
 // It answers `nono --version` too, so a test can hand this to stubNonoSeams and
 // have checkNono pass on the same stub.
@@ -678,6 +682,10 @@ func nonoAnswers(validateErr error, whyStatus string) func(context.Context, stri
 			// stream; reproduce that so the parser's own tolerance is exercised
 			// rather than assumed.
 			return []byte("WARN something about a missing path\n{\"status\":\"" + whyStatus + "\"}\n"), nil
+		case len(args) > 1 && args[0] == "profile" && args[1] == "show":
+			// No command-policy paths pinned: checkProfilePaths should report ok
+			// with nothing to check, not fail to parse a validate answer.
+			return []byte(`{"command_policies":{"commands":{}}}`), nil
 		case len(args) > 0 && args[0] == "profile":
 			if validateErr != nil {
 				return []byte("JSON syntax invalid"), validateErr
@@ -800,5 +808,73 @@ func TestCheckToolSandbox_NonoRunFailureIsReportedWithAHint(t *testing.T) {
 	}
 	if !strings.Contains(r.hint, "tool-sandbox") {
 		t.Errorf("hint does not name tool-sandbox: %q", r.hint)
+	}
+}
+
+const profileShowJSON = `{
+  "name": "test",
+  "command_policies": {
+    "commands": {
+      "git": {
+        "executable": null,
+        "from": { "session": { "sandbox": {
+          "exec_paths": ["/does/not/exist/libexec/git-core", "%s"]
+        } } }
+      },
+      "ssh": { "executable": "/also/missing/bin/ssh", "from": {} }
+    }
+  }
+}`
+
+func TestCommandPolicyPaths_CollectsExecutablesAndExecPaths(t *testing.T) {
+	defer stubRunCommand(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return []byte(fmt.Sprintf(profileShowJSON, "/tmp")), nil
+	})()
+
+	got, err := commandPolicyPaths(context.Background(), "irrelevant.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"/does/not/exist/libexec/git-core", "/tmp", "/also/missing/bin/ssh"}
+	sort.Strings(got)
+	sort.Strings(want)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("commandPolicyPaths = %v, want %v", got, want)
+	}
+}
+
+func TestCheckProfilePaths_ReportsMissingPaths(t *testing.T) {
+	defer stubRunCommand(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return []byte(fmt.Sprintf(profileShowJSON, "/tmp")), nil
+	})()
+
+	dir := t.TempDir()
+	cfg := configWithBothProfiles(t, dir)
+	r := checkProfilePaths(context.Background(), cfg)
+
+	if r.ok {
+		t.Fatal("checkProfilePaths reported ok with two missing paths")
+	}
+	joined := strings.Join(r.details, "\n")
+	for _, want := range []string{"/does/not/exist/libexec/git-core", "/also/missing/bin/ssh"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("details do not name the missing path %q:\n%s", want, joined)
+		}
+	}
+	if !strings.Contains(r.hint, "silently") {
+		t.Errorf("hint does not explain the silence: %q", r.hint)
+	}
+}
+
+func TestCheckProfilePaths_OKWhenEveryPathExists(t *testing.T) {
+	dir := t.TempDir()
+	defer stubRunCommand(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return []byte(fmt.Sprintf(`{"command_policies":{"commands":{"git":{"executable":null,
+		  "from":{"session":{"sandbox":{"exec_paths":[%q]}}}}}}}`, dir)), nil
+	})()
+
+	cfg := configWithBothProfiles(t, dir)
+	if r := checkProfilePaths(context.Background(), cfg); !r.ok {
+		t.Errorf("checkProfilePaths not ok with every path present: %+v", r)
 	}
 }

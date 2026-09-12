@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -54,7 +55,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		// command_profile at it") instead of the generic one below, which the
 		// os.Stat check in validate (internal/config/config.go) made otherwise
 		// unreachable for this, the headline case doctor exists to catch.
-		results = append(results, checkProfiles(ctx, cfg))
+		results = append(results, checkProfiles(ctx, cfg), checkProfilePaths(ctx, cfg))
 	default:
 		results = append(results, checkResult{
 			name: "profiles",
@@ -459,6 +460,138 @@ func profileAllowsWrite(ctx context.Context, profilePath, binPath string) (bool,
 	default:
 		return false, fmt.Errorf("unexpected nono why status %q", answer.Status)
 	}
+}
+
+// commandPolicySandbox is the subset of a `nono profile show --json` sandbox
+// object this package reads.
+type commandPolicySandbox struct {
+	ExecPaths []string `json:"exec_paths"`
+}
+
+// commandPolicyEdge is one entry of a command's "from" map: normally an
+// object naming the caller's sandbox, but nono also allows a bare policy
+// string here — e.g. `"session": "deny"` for a command reachable only
+// through another command, not directly from the session. UnmarshalJSON
+// tolerates that shape by treating it as an edge with no sandbox (and so no
+// exec_paths), rather than failing to parse the whole profile over it.
+type commandPolicyEdge struct {
+	Sandbox commandPolicySandbox `json:"sandbox"`
+}
+
+func (e *commandPolicyEdge) UnmarshalJSON(data []byte) error {
+	if len(data) > 0 && data[0] == '"' {
+		*e = commandPolicyEdge{}
+		return nil
+	}
+	type alias commandPolicyEdge
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	*e = commandPolicyEdge(a)
+	return nil
+}
+
+// commandPolicyPaths returns every host path the command profile pins: each
+// command's "executable", and every "exec_paths" entry in every caller edge's
+// sandbox.
+//
+// The profile is read through `nono profile show --json`, never parsed from the
+// file: nono's own parser handles JSONC, fills defaults, and is the authority on
+// the schema. What this function adds is the part nono does not do — checking
+// the paths against this host. Asking nono and measuring ourselves is the
+// delegation rule; reading the file in Go would break it.
+//
+// nono writes warnings to stderr and runCommand combines the streams, so the
+// JSON object is found rather than assumed to start at byte zero.
+func commandPolicyPaths(ctx context.Context, profilePath string) ([]string, error) {
+	out, err := runCommand(ctx, "nono", "profile", "show", profilePath, "--json")
+	if err != nil {
+		return nil, fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
+	}
+	i := strings.IndexByte(string(out), '{')
+	if i < 0 {
+		return nil, fmt.Errorf("no JSON in nono profile show output: %s", strings.TrimSpace(string(out)))
+	}
+
+	var shown struct {
+		CommandPolicies struct {
+			Commands map[string]struct {
+				Executable *string                      `json:"executable"`
+				Sandbox    *commandPolicySandbox        `json:"sandbox"`
+				From       map[string]commandPolicyEdge `json:"from"`
+			} `json:"commands"`
+		} `json:"command_policies"`
+	}
+	if err := json.Unmarshal([]byte(string(out)[i:]), &shown); err != nil {
+		return nil, err
+	}
+
+	var paths []string
+	for _, cmd := range shown.CommandPolicies.Commands {
+		if cmd.Executable != nil && *cmd.Executable != "" {
+			paths = append(paths, *cmd.Executable)
+		}
+		if cmd.Sandbox != nil {
+			paths = append(paths, cmd.Sandbox.ExecPaths...)
+		}
+		for _, e := range cmd.From {
+			paths = append(paths, e.Sandbox.ExecPaths...)
+		}
+	}
+	return paths, nil
+}
+
+// checkProfilePaths reports command-policy paths that no longer exist on this
+// host. Both ways nono handles a missing one are silent, and one is a security
+// failure rather than an availability failure:
+//
+//   - a missing exec_paths entry is skipped by design, so a multi-call tool
+//     loses a helper with no diagnostic naming the profile;
+//   - a missing "executable" pin disables mediation for that command outright.
+//     nono falls back to the first PATH match and runs it at the session's
+//     grants, `nono profile validate` still passes, and the audit records
+//     "tools: active, no invocations" (measured, nono 0.74.0).
+//
+// On NixOS every such path carries a store hash, so any package update can
+// produce either state. This check is what makes that loud.
+func checkProfilePaths(ctx context.Context, cfg *config.Config) checkResult {
+	r := checkResult{name: "profile paths"}
+	profilePath := cfg.CommandProfilePath()
+
+	paths, err := commandPolicyPaths(ctx, profilePath)
+	if err != nil {
+		r.details = append(r.details, fmt.Sprintf("error: could not ask nono what %s pins: %v", profilePath, err))
+		r.hint = "could not verify the command profile's pinned paths; fix the error above and re-run doctor"
+		return r
+	}
+	if len(paths) == 0 {
+		r.ok = true
+		r.details = append(r.details, "no command-policy paths pinned")
+		return r
+	}
+
+	var missing []string
+	for _, p := range paths {
+		if _, err := os.Stat(p); err != nil {
+			missing = append(missing, p)
+		}
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		for _, p := range missing {
+			r.details = append(r.details, "missing: "+p)
+		}
+		r.hint = "the command profile pins paths that no longer exist on this host; nono fails " +
+			"silently on both — a missing exec_paths entry is skipped, and a missing `executable` " +
+			"pin disables mediation for that command entirely. Update " + profilePath +
+			" to the current paths (a package upgrade is the usual cause)"
+		return r
+	}
+
+	r.ok = true
+	r.details = append(r.details, fmt.Sprintf("%d pinned path(s), all present", len(paths)))
+	return r
 }
 
 func renderResults(w io.Writer, results []checkResult) {

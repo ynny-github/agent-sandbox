@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -116,7 +115,11 @@ func stubAllSeamsOK(t *testing.T) {
 			if name == "nono" {
 				return "/usr/bin/nono", nil
 			}
-			return "", exec.ErrNotFound
+			// Anything else — specifically toolSandboxProbeCommand ("true"),
+			// which checkToolSandbox looks up to probe with — resolves as if
+			// it were on PATH too, so this helper still stubs every seam a
+			// fully-OK doctor run touches.
+			return "/bin/" + name, nil
 		},
 		nonoAnswers(nil, "denied"),
 	)
@@ -757,5 +760,45 @@ func TestProfileAllowsWrite_ErrorsOnUnparseableOutput(t *testing.T) {
 	defer restore()
 	if _, err := profileAllowsWrite(context.Background(), "/p.json", "/bin/agent-sandbox"); err == nil {
 		t.Error("profileAllowsWrite err = nil, want an error when nono prints no JSON")
+	}
+}
+
+func TestCheckToolSandbox_NonoMissingFails(t *testing.T) {
+	stubNonoSeams(t,
+		func(name string) (string, error) {
+			if name == "nono" {
+				return "", errors.New(`exec: "nono": executable file not found in $PATH`)
+			}
+			return "/bin/" + name, nil
+		},
+		func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			t.Fatalf("runCommand called with nono missing: %s %v", name, args)
+			return nil, nil
+		},
+	)
+
+	r := checkToolSandbox(context.Background())
+	if r.ok {
+		t.Fatal("checkToolSandbox reported ok with nono missing")
+	}
+	if r.hint == "" {
+		t.Error("checkToolSandbox gave no hint on failure")
+	}
+}
+
+func TestCheckToolSandbox_NonoRunFailureIsReportedWithAHint(t *testing.T) {
+	stubNonoSeams(t,
+		func(name string) (string, error) { return "/bin/" + name, nil },
+		func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			return []byte("nono: resolve_shared_library failed"), errors.New("exit status 1")
+		},
+	)
+
+	r := checkToolSandbox(context.Background())
+	if r.ok {
+		t.Fatal("checkToolSandbox reported ok when nono run failed")
+	}
+	if !strings.Contains(r.hint, "tool-sandbox") {
+		t.Errorf("hint does not name tool-sandbox: %q", r.hint)
 	}
 }

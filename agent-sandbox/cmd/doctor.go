@@ -42,6 +42,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	cfg, cfgErr := config.Load(configPath)
 	results := []checkResult{
 		checkNono(ctx),
+		checkToolSandbox(ctx),
 		checkBrokerSocketDir(),
 	}
 	switch {
@@ -199,6 +200,156 @@ func checkBrokerSocketDir() checkResult {
 
 	return checkResult{name: name, ok: true,
 		details: []string{fmt.Sprintf("socket dir: %s", dir)}}
+}
+
+// toolSandboxProbeCommand is the program checkToolSandbox asks nono to run to
+// measure whether tool-sandbox can actually start on this host. "true" always
+// exits 0 and needs nothing from its environment, so if the probe fails, the
+// failure can only be tool-sandbox's own startup — never the probed program's
+// behaviour.
+const toolSandboxProbeCommand = "true"
+
+// checkToolSandbox answers the question the design spec assigns to doctor:
+// "that the nono on PATH can actually start tool-sandbox". That is not
+// hypothetical — an unpatched nono cannot start tool-sandbox on NixOS at all,
+// because it fails to resolve an ELF dependency chain that runs through a
+// symlinked libgcc_s.so.1. See, under docs/superpowers/specs, the documents
+// dated 2026-09-04 ("tool-sandbox blocked by claude") and 2026-09-05 ("broker
+// probes"). Presence of the nono binary (checkNono) says nothing about this:
+// nono starts, prints its version, and only refuses once command_policies
+// actually activates tool-sandbox.
+//
+// The probe runs a real, short-lived nono session — the only way to answer the
+// question, and cheap enough for an operator command that is not a hot path.
+// It declares toolSandboxProbeCommand as a session-entrypoint policy command
+// under a minimal profile and asks nono to run it. The profile includes the
+// "nix_runtime" policy group (one of nono's own built-in groups, cross-platform
+// and a no-op where Nix is not installed) so the probe also succeeds on a
+// working NixOS host rather than only ever failing for lack of /nix/store
+// access; without it, tool-sandbox's outer-session PATH scan cannot even load
+// the shim nono generates for the probe command, regardless of how the probe
+// command's own sandbox is configured. See
+// docs/superpowers/specs/2026-09-05-broker-probes.md's "dp1" entry for this
+// exact profile shape (as committed) measured against a working nono, a
+// separately patched nono, and a build carrying the ELF-closure bug -- and
+// for what happens without each piece: no groups.include -> the shim itself
+// cannot execute (exit 127, "execution still failed"); a raw "/" filesystem
+// grant -> nono refuses it outright as overlapping its own protected state
+// root.
+func checkToolSandbox(ctx context.Context) checkResult {
+	r := checkResult{name: "tool-sandbox"}
+
+	if _, err := lookPath("nono"); err != nil {
+		r.details = append(r.details, fmt.Sprintf("error: %v", err))
+		r.hint = "install nono and make sure it is on PATH (see the nono check above)"
+		return r
+	}
+	probeBin, err := lookPath(toolSandboxProbeCommand)
+	if err != nil {
+		// Fail loudly rather than silently reporting OK: a check that could not
+		// run at all must never look like a check that ran and passed.
+		r.details = append(r.details, fmt.Sprintf("error: %v", err))
+		r.hint = fmt.Sprintf("could not find %q on PATH to probe with; this check did not run", toolSandboxProbeCommand)
+		return r
+	}
+
+	dir, err := os.MkdirTemp("", "agent-sandbox-doctor-toolsandbox")
+	if err != nil {
+		r.details = append(r.details, fmt.Sprintf("error: %v", err))
+		r.hint = "could not create a temp directory to probe tool-sandbox in"
+		return r
+	}
+	defer os.RemoveAll(dir)
+
+	profilePath, err := writeToolSandboxProbeProfile(dir, probeBin)
+	if err != nil {
+		r.details = append(r.details, fmt.Sprintf("error: %v", err))
+		r.hint = "could not write the probe profile"
+		return r
+	}
+
+	out, err := runCommand(ctx, "nono", "run", "--silent",
+		"--profile", profilePath, "--workdir", dir, "--", toolSandboxProbeCommand)
+	if err != nil {
+		r.details = append(r.details, "nono run: "+strings.TrimSpace(string(out)))
+		r.hint = "the nono on PATH cannot start tool-sandbox on this host; " +
+			"every command the broker runs will fail the same way once a session starts " +
+			"(a common cause is an unpatched nono on NixOS, which cannot resolve its ELF dependency layout)"
+		return r
+	}
+
+	r.ok = true
+	r.details = append(r.details, "probed with: "+toolSandboxProbeCommand)
+	return r
+}
+
+// toolSandboxProbeProfile is the minimal nono profile checkToolSandbox runs
+// under. Its field shapes are the "dp1" entry in
+// docs/superpowers/specs/2026-09-05-broker-probes.md, which records this exact
+// shape measured to succeed against a working nono and fail distinctly
+// (nono's own ELF-resolution error) against a build that cannot resolve its
+// dependency closure.
+type toolSandboxProbeProfile struct {
+	Meta struct {
+		Name string `json:"name"`
+	} `json:"meta"`
+	Groups struct {
+		Include []string `json:"include"`
+	} `json:"groups"`
+	Filesystem struct {
+		Allow []string `json:"allow"`
+	} `json:"filesystem"`
+	Environment struct {
+		AllowVars []string `json:"allow_vars"`
+	} `json:"environment"`
+	CommandPolicies struct {
+		Commands map[string]toolSandboxProbeCommandPolicy `json:"commands"`
+	} `json:"command_policies"`
+}
+
+type toolSandboxProbeCommandPolicy struct {
+	Executable string `json:"executable"`
+	From       struct {
+		Session struct {
+			Sandbox struct {
+				FSReadFile  []string `json:"fs_read_file"`
+				Environment struct {
+					AllowVars []string `json:"allow_vars"`
+				} `json:"environment"`
+			} `json:"sandbox"`
+		} `json:"session"`
+	} `json:"from"`
+}
+
+// writeToolSandboxProbeProfile writes the probe profile into dir and returns
+// its path. probeBin is granted read access under its own command policy (so
+// the shim nono generates for it can be loaded and re-executed) and declared
+// as the session's sole policy command, so the session entrypoint is exactly
+// the thing checkToolSandbox asks nono to run.
+func writeToolSandboxProbeProfile(dir, probeBin string) (string, error) {
+	var p toolSandboxProbeProfile
+	p.Meta.Name = "agent-sandbox doctor tool-sandbox probe"
+	p.Groups.Include = []string{"nix_runtime"}
+	p.Filesystem.Allow = []string{dir}
+	p.Environment.AllowVars = []string{"PATH"}
+
+	var cmd toolSandboxProbeCommandPolicy
+	cmd.Executable = probeBin
+	cmd.From.Session.Sandbox.FSReadFile = []string{probeBin}
+	cmd.From.Session.Sandbox.Environment.AllowVars = []string{"PATH"}
+	p.CommandPolicies.Commands = map[string]toolSandboxProbeCommandPolicy{
+		toolSandboxProbeCommand: cmd,
+	}
+
+	data, err := json.MarshalIndent(&p, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, "probe-profile.json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 // selfPath is os.Executable, indirected so tests can place the broker binary

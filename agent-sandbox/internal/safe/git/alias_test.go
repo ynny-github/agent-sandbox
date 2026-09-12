@@ -11,13 +11,38 @@ import (
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/safe/git"
 )
 
+// isToolSandboxShim reports whether path is one of the shims nono generates
+// for a policy-controlled command. nono places them in a per-session directory
+// under /tmp whose name carries "nono-tool-sandbox", and prepends that
+// directory to PATH inside the session, so an in-sandbox exec.LookPath("git")
+// resolves here rather than to the real binary.
+func isToolSandboxShim(path string) bool {
+	return strings.Contains(path, "nono-tool-sandbox")
+}
+
+// skipIfGitIsShimmed skips when the "git" this test would exec is a nono
+// Tool Sandbox shim. These tests install a symlink named "git" in a temp
+// directory and run it, which nono classifies as a direct-exec bypass of a
+// policy-controlled command and refuses — so inside a session they measure
+// nono's dispatch rules, not this package's alias handling. The wrapper they
+// cover is not wired into any profile (see the 2026-09-12 spec); it is kept
+// for a possible return, and so are its tests.
+func skipIfGitIsShimmed(t *testing.T) {
+	t.Helper()
+	path, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not found in PATH")
+	}
+	if isToolSandboxShim(path) {
+		t.Skip("git resolves to a nono Tool Sandbox shim; run this suite outside a session")
+	}
+}
+
 // initRepo creates a real git repository in a fresh temp dir and returns its
 // path. It skips the test if git is not on PATH.
 func initRepo(t *testing.T) string {
 	t.Helper()
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not found in PATH")
-	}
+	skipIfGitIsShimmed(t)
 	dir := t.TempDir()
 	cmd := exec.Command("git", "init", "-q", dir)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -58,6 +83,7 @@ func appendConfig(t *testing.T, dir, body string) {
 // first place.
 func withFakeGitReal(t *testing.T) {
 	t.Helper()
+	skipIfGitIsShimmed(t)
 	real, err := exec.LookPath("git")
 	if err != nil {
 		t.Skip("git not found in PATH")
@@ -439,5 +465,25 @@ func TestRealBinary_HasNoGitDashPrefix(t *testing.T) {
 				"dispatch treats \"git-<word>\" as an attempt to run <word> as a "+
 				"builtin directly, which breaks this wrapper's exec target",
 			git.RealBinary)
+	}
+}
+
+// TestSkipIfGitIsShimmed_DetectsAToolSandboxShim checks the guard's own
+// predicate, so the skip logic is tested rather than merely trusted: the guard
+// only ever runs on a host where the condition is absent.
+func TestSkipIfGitIsShimmed_DetectsAToolSandboxShim(t *testing.T) {
+	cases := []struct {
+		path string
+		want bool
+	}{
+		{"/tmp/nono-tool-sandbox-1546093-1789190174496650138-5cad910d5efdf522/shims/git", true},
+		{"/nix/store/8yh8zbb0r4na7gkqk0db0gbdid2ax7zm-git-2.54.0/bin/git", false},
+		{"/usr/bin/git", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := isToolSandboxShim(c.path); got != c.want {
+			t.Errorf("isToolSandboxShim(%q) = %v, want %v", c.path, got, c.want)
+		}
 	}
 }

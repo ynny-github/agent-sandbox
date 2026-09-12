@@ -201,32 +201,26 @@
       // "fatal: cannot exec '.git/hooks/commit-msg': Permission denied";
       // use `git commit --no-verify`.
       //
-      // Making them execute is POSSIBLE — it needs $WORKDIR and /nix/store
-      // added to this exec_paths below, because a hook's shebang makes the
-      // KERNEL exec the interpreter (/bin/sh, under /nix/store) as part of
-      // git's own execve() of the hook file, before nono's command-name
-      // matching for "sh" can apply to the new process. This was measured
-      // and built (nono 0.74.0), then DELIBERATELY REVERTED: $WORKDIR is
-      // agent-writable, and this sandbox already carries network
-      // (allow_domain below) and read access to the global gitconfig — so
-      // that widening lets git execute arbitrary agent-written content, with
-      // network, the moment it lands in the working tree. That is a
-      // write-then-execute path, and it sits outside the confinement the
-      // user set for arbitrary-tool execution (workdir data, no network —
-      // see the sh/bash entries below, which honor that bar; git's own
-      // sandbox does not).
+      // Making them execute would need $WORKDIR and /nix/store added to this
+      // exec_paths below (a hook's shebang makes the kernel exec the
+      // interpreter, under /nix/store, as part of git's own execve() of the
+      // hook file). This is deliberately NOT done: $WORKDIR is agent-writable
+      // and this sandbox already carries network (allow_domain below) and
+      // read access to the global gitconfig, so that widening would let git
+      // execute arbitrary agent-written content with network the moment it
+      // lands in the working tree — a write-then-execute path. Measured: a
+      // hand-written `.git/hooks/pre-commit` ran inside git's sandbox once
+      // this was temporarily enabled.
       //
-      // It would also buy nothing: this repo's hooks invoke lefthook by a
-      // version-stamped absolute path
-      // (.../mise/installs/lefthook/2.1.10/lefthook_2.1.10_Linux_x86_64),
-      // whose basename matches no policy command name, so nothing mediates
-      // it even if the hook script itself could run — it prints "Can't find
-      // lefthook in PATH", exits 0, and the commit is accepted unvalidated
-      // either way. Pinning a command named after that version-stamped
-      // binary would "fix" the name-matching half and is separately not
-      // done: the version stamp changes on every lefthook upgrade, so the
-      // pin would silently stop matching, the same failure mode the "DO NOT
-      // pin executable" note above warns about for git itself.
+      // Separately measured, with hooks temporarily enabled for the test:
+      // even then, lefthook did not run and the commit was accepted
+      // unvalidated — a commit message that violates this repo's Conventional
+      // Commits hook went through here, while the identical message was
+      // rejected outside nono. The reason lefthook did not run was not
+      // isolated (this repo's hook tries a plain `lefthook` on PATH before
+      // falling back to a version-stamped absolute path; either could be
+      // the one failing) — do not assume a mechanism and do not "fix" one
+      // without re-measuring first.
       //
       // Net effect, with or without hooks executing: commit-message
       // validation does NOT run inside this sandbox. Do not re-open the
@@ -295,48 +289,60 @@
       },
 
       // Confined shell for the session: arbitrary tools may run inside this
-      // sandbox, but only against $WORKDIR and with no network. "session":
-      // "deny" is deliberately NOT set here, unlike ssh above — the session
-      // is the intended caller, not one to be blocked. NOT reachable from
-      // git (see the git entry's comment above) — git cannot exec a hook at
-      // all, so a from.git edge here would be dead weight.
+      // sandbox, reaching $WORKDIR, the nix store, the system path, and
+      // mise-installed toolchains (go, python, node, ...) — nothing else,
+      // with no network. "session": "deny" is deliberately NOT set here,
+      // unlike ssh above — the session is the intended caller, not one to be
+      // blocked. NOT reachable from git (see the git entry's comment above)
+      // — git cannot exec a hook at all, so a from.git edge here would be
+      // dead weight.
       "bash": {
         "from": {
           "session": { "sandbox": {
-            // /nix/store and /run/current-system/sw are read grants, not just
-            // exec grants: nono requires a matching fs_read for anything named
-            // in exec_paths, so without these bash cannot exec a single
-            // external program (measured: fs_read limited to $WORKDIR alone
-            // leaves bash unable to exec anything on PATH). This is what makes
-            // "arbitrary tools inside the confinement" possible while data
-            // access stays limited to fs_read/fs_write below.
-            "fs_read":     ["$WORKDIR", "/nix/store", "/run/current-system/sw"],
+            // /nix/store and /run/current-system/sw carry read AND exec
+            // grants, not just exec: without the matching fs_read entry,
+            // exec_paths alone does not let bash exec anything under a
+            // directory (measured: with /nix/store dropped from fs_read but
+            // left in exec_paths, `bash -c id` fails "Permission denied",
+            // exit 126). ~/.local/share/mise is the same read+exec pairing,
+            // needed because every toolchain this project uses (go, python,
+            // node, ...) is installed there, not under /nix/store. Literal
+            // absolute path: neither ~ nor $HOME is expanded here, same rule
+            // as executable_dirs above.
+            "fs_read":     ["$WORKDIR", "/nix/store", "/run/current-system/sw",
+                             "/home/yn/.local/share/mise"],
             "fs_write":    ["$WORKDIR"],
-            "exec_paths":  ["/nix/store", "/run/current-system/sw"],
+            "exec_paths":  ["/nix/store", "/run/current-system/sw",
+                             "/home/yn/.local/share/mise"],
             "environment": { "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM"] }
             // No "network" key at all. Its absence IS the denial — do not
             // "helpfully" fill it in with allow_domain/allow_all. Measured:
             // ~/.ssh/id_main and ~/.gitconfig are both denied from inside this
-            // sandbox, and outbound network is refused.
+            // sandbox, and outbound network is refused. Do NOT add
+            // ~/.config/mise here: tool binaries are in scope, mise's own
+            // configuration is not.
           } }
         }
       },
 
-      // Confined shell for the session only — same shape as bash above.
-      // NOT reachable from git, and carries no can_use of its own: git
-      // cannot exec a hook at all (see the git entry's comment above), so
-      // there is no live caller edge for this to invoke git through, and no
-      // git.from.sh edge accepting it as a caller either. $WORKDIR only, no
-      // network.
+      // Confined shell for the session only — same shape as bash above,
+      // including the mise toolchain reach. NOT reachable from git, and
+      // carries no can_use of its own: git cannot exec a hook at all (see
+      // the git entry's comment above), so there is no live caller edge for
+      // this to invoke git through, and no git.from.sh edge accepting it as
+      // a caller either.
       "sh": {
         "from": {
           "session": { "sandbox": {
-            "fs_read":     ["$WORKDIR", "/nix/store", "/run/current-system/sw"],
+            "fs_read":     ["$WORKDIR", "/nix/store", "/run/current-system/sw",
+                             "/home/yn/.local/share/mise"],
             "fs_write":    ["$WORKDIR"],
-            "exec_paths":  ["/nix/store", "/run/current-system/sw"],
+            "exec_paths":  ["/nix/store", "/run/current-system/sw",
+                             "/home/yn/.local/share/mise"],
             "environment": { "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM"] }
             // No "network" key at all, same as bash above — absence is the
-            // denial, not an oversight.
+            // denial, not an oversight. Do NOT add ~/.config/mise, same
+            // reasoning as bash above.
           } }
         }
       }

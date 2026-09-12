@@ -528,9 +528,45 @@ func (e *commandPolicyEdge) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// commandPolicyPaths returns every host path the command profile pins: the
-// profile's own "command_policies.executable_dirs", each command's
-// "executable", and every "exec_paths" entry in every caller edge's sandbox.
+// pinnedPath is a single "executable" pin, tagged with the command that owns
+// it so a failure message can name it.
+type pinnedPath struct {
+	Command string
+	Path    string
+}
+
+// execPathSet is one edge's exec_paths list — one per (command, caller edge),
+// or per command for the rare top-level "sandbox" shape with no "from"
+// wrapper. nono skips a missing entry in this list silently, so the set
+// (not any single path in it) is the unit that can fail: the command only
+// loses its helper directory entirely once every entry in its set is gone.
+type execPathSet struct {
+	Label string // e.g. "git" (top-level sandbox) or "git (from.session)" (a caller edge)
+	Paths []string
+}
+
+// pinnedPaths groups every host path a command profile pins by how nono
+// fails when one goes missing, because that difference decides what doctor
+// should report:
+//
+//   - Executables: a single "executable" pin. A missing one disables
+//     mediation for that command entirely — nono falls back to the first
+//     PATH match and runs it at the session's own grants.
+//   - ExecutableDirs: command_policies.executable_dirs entries. nono refuses
+//     to start the session at all if any single one of these is missing.
+//   - ExecPathSets: exec_paths lists. nono skips a missing entry in one of
+//     these silently; a set is only broken when every entry in it is gone.
+type pinnedPaths struct {
+	Executables    []pinnedPath
+	ExecutableDirs []string
+	ExecPathSets   []execPathSet
+}
+
+// commandPolicyPaths returns every host path the command profile pins,
+// grouped by pinnedPaths' three failure modes: the profile's own
+// "command_policies.executable_dirs", each command's "executable", and every
+// "exec_paths" entry in every caller edge's sandbox (or a command's
+// top-level "sandbox", for the rare shape with no "from" wrapper at all).
 //
 // The profile is read through `nono profile show --json`, never parsed from the
 // file: nono's own parser handles JSONC, fills defaults, and is the authority on
@@ -540,14 +576,18 @@ func (e *commandPolicyEdge) UnmarshalJSON(data []byte) error {
 //
 // nono writes warnings to stderr and runCommand combines the streams, so the
 // JSON object is found rather than assumed to start at byte zero.
-func commandPolicyPaths(ctx context.Context, profilePath string) ([]string, error) {
+//
+// Command and caller names are sorted before use so the result — and
+// anything checkProfilePaths reports from it — does not vary with Go's
+// randomized map iteration order.
+func commandPolicyPaths(ctx context.Context, profilePath string) (pinnedPaths, error) {
 	out, err := runCommand(ctx, "nono", "profile", "show", profilePath, "--json")
 	if err != nil {
-		return nil, fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
+		return pinnedPaths{}, fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
 	}
 	i := strings.IndexByte(string(out), '{')
 	if i < 0 {
-		return nil, fmt.Errorf("no JSON in nono profile show output: %s", strings.TrimSpace(string(out)))
+		return pinnedPaths{}, fmt.Errorf("no JSON in nono profile show output: %s", strings.TrimSpace(string(out)))
 	}
 
 	var shown struct {
@@ -561,23 +601,42 @@ func commandPolicyPaths(ctx context.Context, profilePath string) ([]string, erro
 		} `json:"command_policies"`
 	}
 	if err := json.Unmarshal([]byte(string(out)[i:]), &shown); err != nil {
-		return nil, err
+		return pinnedPaths{}, err
 	}
 
-	var paths []string
-	paths = append(paths, shown.CommandPolicies.ExecutableDirs...)
-	for _, cmd := range shown.CommandPolicies.Commands {
+	var pp pinnedPaths
+	pp.ExecutableDirs = append(pp.ExecutableDirs, shown.CommandPolicies.ExecutableDirs...)
+
+	names := make([]string, 0, len(shown.CommandPolicies.Commands))
+	for name := range shown.CommandPolicies.Commands {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		cmd := shown.CommandPolicies.Commands[name]
 		if cmd.Executable != nil && *cmd.Executable != "" {
-			paths = append(paths, *cmd.Executable)
+			pp.Executables = append(pp.Executables, pinnedPath{Command: name, Path: *cmd.Executable})
 		}
-		if cmd.Sandbox != nil {
-			paths = append(paths, cmd.Sandbox.ExecPaths...)
+		if cmd.Sandbox != nil && len(cmd.Sandbox.ExecPaths) > 0 {
+			pp.ExecPathSets = append(pp.ExecPathSets, execPathSet{Label: name, Paths: cmd.Sandbox.ExecPaths})
 		}
-		for _, e := range cmd.From {
-			paths = append(paths, e.Sandbox.ExecPaths...)
+
+		callers := make([]string, 0, len(cmd.From))
+		for caller := range cmd.From {
+			callers = append(callers, caller)
+		}
+		sort.Strings(callers)
+		for _, caller := range callers {
+			if paths := cmd.From[caller].Sandbox.ExecPaths; len(paths) > 0 {
+				pp.ExecPathSets = append(pp.ExecPathSets, execPathSet{
+					Label: fmt.Sprintf("%s (from.%s)", name, caller),
+					Paths: paths,
+				})
+			}
 		}
 	}
-	return paths, nil
+	return pp, nil
 }
 
 // expandHome resolves a leading "~" (bare, or "~/...") against the current
@@ -603,63 +662,114 @@ func expandHome(p string) string {
 	return filepath.Join(home, p[2:])
 }
 
-// checkProfilePaths reports command-policy paths that no longer exist on this
-// host. nono handles a missing one differently depending on which kind it is,
-// and only one of the two is silent:
+// checkProfilePaths reports command-policy paths that no longer exist on
+// this host, judging each of pinnedPaths' three groups by how nono itself
+// fails when an entry in it goes missing — the three modes do not fail the
+// same way, so treating them alike would make this check either too loud
+// (NG on a healthy host, for the exec_paths candidates a profile lists on
+// purpose so it can run on more than one host) or too quiet (missing a
+// severe case):
 //
-//   - a missing exec_paths entry is skipped by design, with a warning
-//     suppressed by the --silent the launcher passes, so a multi-call tool
-//     loses a helper with no diagnostic naming the profile;
-//   - a missing "executable" pin disables mediation for that command outright.
-//     nono falls back to the first PATH match and runs it at the session's
-//     grants, `nono profile validate` still passes, and the audit records
-//     "tools: active, no invocations" (measured, nono 0.74.0). This one is
-//     not silent — nono prints a warning and --silent does not suppress it —
-//     but the warning is easy to miss in a wall of launch output, and the
-//     danger it names is real.
+//   - a missing "executable" pin disables mediation for that command
+//     entirely: nono falls back to the first PATH match and runs it at the
+//     session's own grants, `nono profile validate` still passes, and the
+//     audit records "tools: active, no invocations" (measured, nono 0.74.0).
+//     This is not silent — nono prints a warning and --silent does not
+//     suppress it — but the warning is easy to miss in a wall of launch
+//     output, and the danger it names is real. NG on any single miss.
+//   - a missing command_policies.executable_dirs entry makes nono refuse to
+//     start the session at all (measured, nono 0.74.0). NG on any single
+//     miss, same as "executable" above.
+//   - a missing exec_paths entry is skipped by design, with its warning
+//     suppressed by the --silent the launcher passes — this is what makes a
+//     candidate list (several plausible locations for the same helper
+//     directory, so the same profile works on more than one kind of host)
+//     a legitimate thing to write. NG only when every entry in a given
+//     command's exec_paths set is gone, because only then does that command
+//     have no reachable helper directory left at all.
 //
 // On NixOS every such path carries a store hash, so any package update can
-// produce either state. This check is what makes that loud.
+// produce either state. This check is what makes that loud — without
+// drowning out the signal on a healthy host that happens to carry
+// non-NixOS candidates it will never use.
 func checkProfilePaths(ctx context.Context, cfg *config.Config) checkResult {
 	r := checkResult{name: "profile paths"}
 	profilePath := cfg.CommandProfilePath()
 
-	paths, err := commandPolicyPaths(ctx, profilePath)
+	pinned, err := commandPolicyPaths(ctx, profilePath)
 	if err != nil {
 		r.details = append(r.details, fmt.Sprintf("error: could not ask nono what %s pins: %v", profilePath, err))
 		r.hint = "could not verify the command profile's pinned paths; fix the error above and re-run doctor"
 		return r
 	}
-	if len(paths) == 0 {
+	if len(pinned.Executables) == 0 && len(pinned.ExecutableDirs) == 0 && len(pinned.ExecPathSets) == 0 {
 		r.ok = true
 		r.details = append(r.details, "no command-policy paths pinned")
 		return r
 	}
 
-	var missing []string
-	for _, p := range paths {
-		if _, err := os.Stat(expandHome(p)); err != nil {
-			missing = append(missing, p)
+	exists := func(p string) bool {
+		_, err := os.Stat(expandHome(p))
+		return err == nil
+	}
+
+	var problems []string
+	for _, e := range pinned.Executables {
+		if !exists(e.Path) {
+			problems = append(problems, fmt.Sprintf("%s: executable pin missing: %s", e.Command, e.Path))
 		}
 	}
-	if len(missing) > 0 {
-		sort.Strings(missing)
-		for _, p := range missing {
-			r.details = append(r.details, "missing: "+p)
+	for _, p := range pinned.ExecutableDirs {
+		if !exists(p) {
+			problems = append(problems, "executable_dirs entry missing: "+p)
 		}
-		r.hint = "the command profile pins paths that no longer exist on this host; a missing " +
-			"exec_paths entry is skipped silently (--silent suppresses its warning), while a " +
-			"missing `executable` pin disables mediation for that command entirely and prints a " +
-			"warning --silent does not suppress. Update " + profilePath +
+	}
+	resolvedSets := 0
+	for _, set := range pinned.ExecPathSets {
+		anyPresent := false
+		for _, p := range set.Paths {
+			if exists(p) {
+				anyPresent = true
+				break
+			}
+		}
+		if anyPresent {
+			resolvedSets++
+			continue
+		}
+		problems = append(problems, fmt.Sprintf("%s: every exec_paths entry is missing (%s)",
+			set.Label, strings.Join(set.Paths, ", ")))
+	}
+
+	if len(problems) > 0 {
+		sort.Strings(problems)
+		r.details = problems
+		r.hint = "the command profile pins paths that no longer exist on this host, and nono does " +
+			"not fail the same way for every kind: a missing `executable` pin disables mediation " +
+			"for that command entirely, and a missing `executable_dirs` entry stops nono from " +
+			"starting the session at all — both reported here on any single miss. nono skips a " +
+			"missing `exec_paths` entry silently instead, so that one is only reported once every " +
+			"entry in a command's own exec_paths set is gone (a single missing entry among several " +
+			"is expected — that is what a portable candidate list is for, and is not reported here " +
+			"on its own). Update " + profilePath +
 			" to the current paths (a package upgrade is the usual cause)"
 		return r
 	}
 
 	r.ok = true
-	r.details = append(r.details, fmt.Sprintf("%d pinned path(s), all present", len(paths)))
+	var parts []string
+	if n := len(pinned.Executables); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d executable pin(s) present", n))
+	}
+	if n := len(pinned.ExecutableDirs); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d executable_dirs entry(ies) present", n))
+	}
+	if resolvedSets > 0 {
+		parts = append(parts, fmt.Sprintf("%d command(s)' exec_paths resolve", resolvedSets))
+	}
+	r.details = append(r.details, strings.Join(parts, "; "))
 	return r
 }
-
 func renderResults(w io.Writer, results []checkResult) {
 	failed := 0
 	for _, r := range results {

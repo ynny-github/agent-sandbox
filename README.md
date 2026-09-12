@@ -280,24 +280,31 @@ MCP is enabled.
 - The command profile does not grant write access to the broker's own
   binary. doctor asks `nono why --profile <command profile> --path <broker
   binary> --op write` and fails if the answer is allowed.
-- **Every path the command profile pins under `command_policies` still
-  exists.** doctor asks nono what the profile's `executable_dirs`, each
-  policy command's `exec_paths`, and any `executable` resolve to, and
-  `stat`s every one. nono handles a missing one differently depending on
-  which kind it is, and only one of the two is silent: a missing
-  `exec_paths` entry is skipped by design, with its warning suppressed by
-  the `--silent` the launcher passes, so a multi-call tool quietly loses a
-  helper with no diagnostic naming the profile; a missing `executable` pin
-  disables mediation for that command outright — nono falls back to the
-  first `PATH` match and runs it at the *session's* own grants, `nono
-  profile validate` still passes, and the audit trail records only "tools:
-  active, no invocations" (measured on nono 0.74.0). That one is not
-  silent — nono prints a warning and `--silent` does not suppress it — but
-  the warning is easy to miss in a wall of launch output, and the danger it
-  names is real. On NixOS, where every one of these paths carries a store
-  hash, a routine package upgrade is enough to trigger either failure mode
-  — which is also why
-  nothing in this repository's own profile pins an `executable` at all (see
+- **Every path the command profile pins under `command_policies` is
+  checked, but not judged the same way.** doctor asks nono what the
+  profile's `executable_dirs`, each policy command's `executable`, and
+  every `exec_paths` entry resolve to, then groups them by how nono itself
+  fails when one goes missing: a missing `executable_dirs` entry, or a
+  missing `executable` pin, is reported the moment either happens — nono
+  refuses to start the session at all for the first, and silently disables
+  mediation for that command for the second, falling back to the first
+  `PATH` match and running it at the *session's* own grants (`nono profile
+  validate` still passes, and the audit trail records only "tools: active,
+  no invocations", measured on nono 0.74.0 — not fully silent, since nono
+  prints a warning and `--silent` does not suppress it, but the warning is
+  easy to miss in a wall of launch output, and the danger it names is
+  real). A missing `exec_paths` entry, by contrast, is skipped by nono
+  silently and is not itself reported: a command's own `exec_paths` are
+  only reported once *every* entry in that set is gone, because until then
+  the command still has a reachable helper directory. That is what makes a
+  portable candidate list — several plausible locations for the same
+  helper directory, so one profile can run on more than one kind of host —
+  legitimate instead of a doctor false alarm; see the worked example below
+  for this repository's own `git` entry, which carries exactly such a list.
+  On NixOS, where every one of these paths carries a store hash, a routine
+  package upgrade is enough to trigger the `executable_dirs`/`executable`
+  failure modes — which is also why nothing in this repository's own
+  profile pins an `executable` at all (see
   [The two profiles](#the-two-profiles)).
 
 If any of these fail, `agent-sandbox claude` will not launch Claude at all.

@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -835,11 +834,14 @@ func TestCommandPolicyPaths_CollectsExecutablesAndExecPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"/does/not/exist/libexec/git-core", "/tmp", "/also/missing/bin/ssh"}
-	sort.Strings(got)
-	sort.Strings(want)
+	want := pinnedPaths{
+		Executables: []pinnedPath{{Command: "ssh", Path: "/also/missing/bin/ssh"}},
+		ExecPathSets: []execPathSet{
+			{Label: "git (from.session)", Paths: []string{"/does/not/exist/libexec/git-core", "/tmp"}},
+		},
+	}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("commandPolicyPaths = %v, want %v", got, want)
+		t.Errorf("commandPolicyPaths = %+v, want %+v", got, want)
 	}
 }
 
@@ -866,11 +868,14 @@ func TestCommandPolicyPaths_IncludesExecutableDirs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"/does/not/exist/libexec/git-core", "/from/executable_dirs"}
-	sort.Strings(got)
-	sort.Strings(want)
+	want := pinnedPaths{
+		ExecutableDirs: []string{"/from/executable_dirs"},
+		ExecPathSets: []execPathSet{
+			{Label: "git (from.session)", Paths: []string{"/does/not/exist/libexec/git-core"}},
+		},
+	}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("commandPolicyPaths = %v, want %v (command_policies.executable_dirs must not be dropped)", got, want)
+		t.Errorf("commandPolicyPaths = %+v, want %+v (command_policies.executable_dirs must not be dropped)", got, want)
 	}
 }
 
@@ -910,17 +915,30 @@ func TestCommandPolicyPaths_ReadsAllThreeFromEdgeShapes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"/from/wrapped/edge", "/from/bare/policy"}
-	sort.Strings(got)
-	sort.Strings(want)
+	// "session": "deny" carries no sandbox and so no exec_paths — it must not
+	// appear as a (spurious, empty) set. The other two callers are sorted
+	// alphabetically ("bare_caller" before "wrapped_caller"), same as
+	// commandPolicyPaths sorts every caller name before use.
+	want := pinnedPaths{
+		ExecPathSets: []execPathSet{
+			{Label: "widget (from.bare_caller)", Paths: []string{"/from/bare/policy"}},
+			{Label: "widget (from.wrapped_caller)", Paths: []string{"/from/wrapped/edge"}},
+		},
+	}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("commandPolicyPaths = %v, want %v (the bare-sandbox \"from\" shape must not be dropped)", got, want)
+		t.Errorf("commandPolicyPaths = %+v, want %+v (the bare-sandbox \"from\" shape must not be dropped)", got, want)
 	}
 }
 
-func TestCheckProfilePaths_ReportsMissingPaths(t *testing.T) {
+// A missing "executable" pin is the severe case nono itself does not soften:
+// mediation for that command is disabled entirely, silently as far as the
+// broker's own behavior goes (it just runs the first PATH match at the
+// session's grants), so this must be reported on any single miss.
+func TestCheckProfilePaths_MissingExecutableIsNG(t *testing.T) {
 	defer stubRunCommand(func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		return []byte(fmt.Sprintf(profileShowJSON, "/tmp")), nil
+		return []byte(`{"command_policies":{"commands":{
+		  "ssh": {"executable": "/also/missing/bin/ssh", "from": {}}
+		}}}`), nil
 	})()
 
 	dir := t.TempDir()
@@ -928,16 +946,86 @@ func TestCheckProfilePaths_ReportsMissingPaths(t *testing.T) {
 	r := checkProfilePaths(context.Background(), cfg)
 
 	if r.ok {
-		t.Fatal("checkProfilePaths reported ok with two missing paths")
+		t.Fatal("checkProfilePaths reported ok with a missing executable pin")
 	}
 	joined := strings.Join(r.details, "\n")
-	for _, want := range []string{"/does/not/exist/libexec/git-core", "/also/missing/bin/ssh"} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("details do not name the missing path %q:\n%s", want, joined)
-		}
+	if !strings.Contains(joined, "/also/missing/bin/ssh") {
+		t.Errorf("details do not name the missing executable pin:\n%s", joined)
 	}
-	if !strings.Contains(r.hint, "silently") {
-		t.Errorf("hint does not explain the silence: %q", r.hint)
+}
+
+// command_policies.executable_dirs is the other single-entry field: nono
+// refuses to start the session at all if any one entry in it is missing, so
+// — like "executable" above, and unlike exec_paths below — a single miss is
+// enough to report NG.
+func TestCheckProfilePaths_MissingExecutableDirsEntryIsNG(t *testing.T) {
+	defer stubRunCommand(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return []byte(`{"command_policies":{
+		  "executable_dirs": ["/does/not/exist/from/executable_dirs"],
+		  "commands": {}
+		}}`), nil
+	})()
+
+	dir := t.TempDir()
+	cfg := configWithBothProfiles(t, dir)
+	r := checkProfilePaths(context.Background(), cfg)
+
+	if r.ok {
+		t.Fatal("checkProfilePaths reported ok with a missing executable_dirs entry")
+	}
+	joined := strings.Join(r.details, "\n")
+	if !strings.Contains(joined, "/does/not/exist/from/executable_dirs") {
+		t.Errorf("details do not name the missing executable_dirs entry:\n%s", joined)
+	}
+}
+
+// The whole point of a portable exec_paths candidate list (this repository's
+// own git entry lists a /nix/store path and two non-NixOS candidates
+// alongside it) is that nono skips a missing entry silently and the command
+// still works as long as *one* entry in the set resolves. A doctor that goes
+// NG here would be red on every healthy host that isn't NixOS, or isn't the
+// exact host the profile was written on — exactly the false alarm this test
+// guards against.
+func TestCheckProfilePaths_OKWhenOneOfSeveralExecPathsResolves(t *testing.T) {
+	present := t.TempDir()
+	defer stubRunCommand(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return []byte(fmt.Sprintf(`{"command_policies":{"commands":{"git":{"executable":null,
+		  "from":{"session":{"sandbox":{"exec_paths":[
+		    "/does/not/exist/a", %q, "/does/not/exist/b"
+		  ]}}}}}}}`, present)), nil
+	})()
+
+	dir := t.TempDir()
+	cfg := configWithBothProfiles(t, dir)
+	r := checkProfilePaths(context.Background(), cfg)
+	if !r.ok {
+		t.Errorf("checkProfilePaths not ok with one of three exec_paths entries present: %+v", r)
+	}
+}
+
+// The other half of the same rule: once every entry in a command's own
+// exec_paths set is missing, that command genuinely has no reachable helper
+// directory left, and this must be reported — naming the command, since
+// "every one of git's exec_paths is gone" is a different, more useful
+// sentence than "this one path is gone."
+func TestCheckProfilePaths_NGWhenEveryExecPathIsMissing(t *testing.T) {
+	defer stubRunCommand(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return []byte(`{"command_policies":{"commands":{"git":{"executable":null,
+		  "from":{"session":{"sandbox":{"exec_paths":[
+		    "/does/not/exist/a", "/does/not/exist/b"
+		  ]}}}}}}}`), nil
+	})()
+
+	dir := t.TempDir()
+	cfg := configWithBothProfiles(t, dir)
+	r := checkProfilePaths(context.Background(), cfg)
+
+	if r.ok {
+		t.Fatal("checkProfilePaths reported ok with every exec_paths entry missing")
+	}
+	joined := strings.Join(r.details, "\n")
+	if !strings.Contains(joined, "git (from.session)") {
+		t.Errorf("details do not name the command whose exec_paths are all missing:\n%s", joined)
 	}
 }
 

@@ -16,8 +16,10 @@ broker's own grants, so a redirect or glob you write is bounded by those, not by
 whichever command's output it is attached to.
 
 ## Where the boundary is
-Some commands run in their own child sandbox with their own filesystem, network
-and argv grants; the rest run at the broker's own grants. Which is which is
+Some commands run in their own child sandbox with their own filesystem and
+argv grants, plus a network switch bounded by the session's own domain list
+(a command's own network grant is on/off, not a scoped list of its own); the
+rest run at the broker's own grants. Which is which is
 decided by `{{.ProfilePath}}`, and this document deliberately does not copy that
 file — ask nono, which resolves groups, `~`, `$WORKDIR` and `@git:` tokens that
 reading the JSON cannot:

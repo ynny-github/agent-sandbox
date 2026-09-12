@@ -765,7 +765,12 @@ func checkProfilePaths(ctx context.Context, cfg *config.Config) checkResult {
 		parts = append(parts, fmt.Sprintf("%d executable_dirs entry(ies) present", n))
 	}
 	if resolvedSets > 0 {
-		parts = append(parts, fmt.Sprintf("%d command(s)' exec_paths resolve", resolvedSets))
+		// resolvedSets counts exec_paths SETS, one per (command, caller edge) —
+		// not distinct commands. A single command with several caller edges
+		// (this repository's own "go" has session/bash/sh edges, each with its
+		// own exec_paths) contributes one set per edge, so this number can
+		// exceed the number of commands it came from.
+		parts = append(parts, fmt.Sprintf("%d exec_paths set(s) resolve", resolvedSets))
 	}
 	r.details = append(r.details, strings.Join(parts, "; "))
 	return r

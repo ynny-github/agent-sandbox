@@ -32,7 +32,9 @@
       // -- not from the catalog: this profile's own session grants
       "$WORKDIR",
       "~/.local/state/agent-sandbox",
-      "/tmp",                                  // go test compiles into, then execs from, /tmp
+      "/tmp",                                  // scratch space floor commands may need (uv, npm, pip, mise, ...) —
+                                                // NOT why go test works: go is a policy command below now, with its
+                                                // own separate /tmp grant, and compiles into/execs from that one
 
       // -- capability: go   (groups are read-only, so the caches are named here)
       "~/go/pkg/mod",
@@ -216,10 +218,18 @@
       //
       // The security argument does not carry this on its own: the floor
       // already has a write-then-execute path of its own — a Go binary
-      // built into $WORKDIR runs at the floor — with a strictly larger
-      // network set (14 allow_domain hosts against this sandbox's 2), so
-      // widening exec_paths here to $WORKDIR + /nix/store would add no new
-      // class of capability. Measured. The one genuine delta it would
+      // built into $WORKDIR runs at the floor. Its network reach is the
+      // SAME as this sandbox's, not larger: a child's "network" key is an
+      // on/off switch for nono's own local proxy, and the proxy filters
+      // against the SESSION's top-level network.allow_domain, not the
+      // child's own declared list — measured, this sandbox's declared
+      // ["github.com", "*.githubusercontent.com"] notwithstanding, from
+      // inside it: `git ls-remote https://pypi.org/...` reaches pypi.org
+      // (session-listed, not here) and gets pypi's own 404, while
+      // `https://example.com/...` is refused by the proxy outright (listed
+      // in neither). So widening exec_paths here to $WORKDIR + /nix/store
+      // would add no new class of capability, network included. Measured.
+      // The one genuine delta it would
       // cost: arbitrary code running in git's child sandbox would gain read
       // access to the global gitconfig, which the floor does NOT have
       // (`path_not_granted` at the floor; measured). Also measured, with
@@ -256,8 +266,18 @@
             "exec_paths":   ["/nix/store/8yh8zbb0r4na7gkqk0db0gbdid2ax7zm-git-2.54.0/libexec/git-core",
                               "/usr/lib/git-core", "/usr/libexec/git-core"],
             // Governs HTTPS remotes only; SSH remotes go out through the ssh
-            // entry below. Requires the session's own top-level network block to
-            // be present — a child allow_domain against a proxy-less session
+            // entry below. This "network" key is an on/off switch for
+            // nono's own local proxy, not a narrower allowlist: the proxy
+            // filters against the SESSION's own top-level
+            // network.allow_domain (14 hosts), not the list declared here.
+            // Measured: from inside this sandbox, `git ls-remote` reaches
+            // pypi.org (session-listed, not in the two domains below) and
+            // is refused example.com (in neither list). What actually
+            // gates HTTPS here is (a) this key being present at all, and
+            // (b) the six proxy env vars just below being forwarded, so
+            // the child can find nono's local proxy — which in turn
+            // requires the session's own top-level network block to stay
+            // present: a child "network" key against a proxy-less session
             // fails at init with "no loopback proxy env was present".
             "network":      { "allow_domain": ["github.com", "*.githubusercontent.com"] },
             "environment":  { "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM",
@@ -394,36 +414,47 @@
       // binary and then execs it — could never have been added there. A
       // per-command policy has neither restriction.
       //
-      // Network: granted, narrowly, to proxy.golang.org and sum.golang.org —
-      // the same two hosts the session's own top-level network.allow_domain
-      // already lists, and the only two the Go toolchain itself ever
-      // contacts. Measured both ways with a module not already in
-      // ~/go/pkg/mod: with no "network" key, `go mod tidy` fails at DNS
-      // resolution ("dial udp ... socket: operation not permitted"); with
-      // this "network" key plus the six proxy env vars below, it succeeds,
-      // provided ~/go/pkg/sumdb is also writable (sum.golang.org's client
-      // caches signed tree data there, a directory `go mod`/`go get` write to
-      // even though it is not under ~/go/pkg/mod) — without it the fetch gets
-      // as far as downloading the module and then fails writing the sumdb
-      // cache. Chose to grant it: every module this repository currently
-      // depends on is already cached, so day-to-day `go build`/`go test`
-      // never exercise this, but a future dependency bump would need it, and
-      // two fixed hosts is narrower than the 14-host network set `go` had
-      // when it ran at the session floor before this change (that included
-      // github.com, pypi.org, registry.npmjs.org, crates.io, pub.dev, ... —
-      // domains go itself never has a reason to contact). The child
-      // allow_domain depends on the session's own top-level "network" block
-      // staying present — against a proxy-less session it fails at init with
-      // "no loopback proxy env was present" (measured).
+      // Network: this "network" key is granted, listing proxy.golang.org
+      // and sum.golang.org — the only two hosts the Go toolchain itself
+      // ever contacts. But that list is not what enforces anything: a
+      // child's "network" key is an on/off switch for nono's own local
+      // proxy, and the proxy filters against the SESSION's own top-level
+      // network.allow_domain (14 hosts), not the two declared here — so
+      // this edge's real reach, once turned on, is the same 14-host set
+      // every other proxied edge in this profile reaches, not a narrower
+      // one (measured the same way as git's edge above: an unrelated
+      // domain substituted for the two below made no difference to
+      // whether proxy.golang.org itself was reachable, because it is
+      // already on the session's own list). Measured both ways with a
+      // module not already in ~/go/pkg/mod: with no "network" key, `go mod
+      // tidy` fails at DNS resolution ("dial udp ... socket: operation not
+      // permitted"); with this "network" key plus the six proxy env vars
+      // below, it succeeds, provided ~/go/pkg/sumdb is also writable
+      // (sum.golang.org's client caches signed tree data there, a
+      // directory `go mod`/`go get` write to even though it is not under
+      // ~/go/pkg/mod) — without it the fetch gets as far as downloading
+      // the module and then fails writing the sumdb cache. Chose to grant
+      // it: every module this repository currently depends on is already
+      // cached, so day-to-day `go build`/`go test` never exercise this,
+      // but a future dependency bump would need it. The child "network"
+      // key depends on the session's own top-level "network" block staying
+      // present — against a proxy-less session it fails at init with "no
+      // loopback proxy env was present" (measured).
       //
       // Caveat, stated plainly: a toolchain that compiles and immediately
       // runs code is bounded only by what its own sandbox reaches — not by
       // which other commands are declared. This one reaches $WORKDIR and
       // /tmp with both write and exec, because `go test` needs exactly that
-      // to compile a binary and then run it. That is narrower than the
-      // session-wide floor access `go` had before this entry existed, and it
-      // is still the honest boundary: anything this sandbox can write into
-      // $WORKDIR or /tmp, it can also execute.
+      // to compile a binary and then run it, and it can write to
+      // ~/go/pkg/sumdb (used above) — the one capability this edge adds
+      // beyond the floor's own go_runtime/mise_manager groups, which do not
+      // grant it; low risk on its own (a signed checksum-database cache,
+      // and GOFLAGS/GONOSUM* are not in this edge's allow_vars), but real.
+      // The filesystem reach here is narrower than the session-wide floor
+      // access `go` had before this entry existed, even though the network
+      // reach is not, and the filesystem boundary is still the honest one:
+      // anything this sandbox can write into $WORKDIR or /tmp, it can also
+      // execute.
       "go": {
         "from": {
           "session": { "sandbox": {

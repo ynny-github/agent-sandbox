@@ -427,7 +427,8 @@ schema.
 meant, never a literal path — that is what lets one profile serve multiple
 git worktrees.
 
-**Network.** The top-level `network` section is a ceiling. When it sets
+**Network.** The top-level `network` section is a ceiling, **and it is
+also the only place domain filtering actually happens.** When it sets
 `network_profile` or `allow_domain`, nono stands up a loopback proxy and
 injects proxy env vars (`http_proxy`/`HTTP_PROXY`/`https_proxy`/
 `HTTPS_PROXY`/`no_proxy`/`NO_PROXY`); `block: true` or
@@ -436,38 +437,53 @@ level, a command_policies child's own `network` has exactly two effective
 permission states, measured: omitting the key blocks it outright (a bare
 `network: {}` behaves the same), and either `{"allow_all": true}` or
 `{"allow_domain": [...]}` grants the same permission to open sockets at
-all. The *domain* restriction `allow_domain` implies is not a Landlock
-check — it is enforced entirely by nono's own proxy, which is why it
-depends on whether the proxy env vars actually reach that child (below),
-not on anything in the grant itself.
+all — **a child's own `allow_domain` is an on/off switch for reaching
+nono's proxy, not a narrower domain list of its own.** The proxy filters
+every request that reaches it against the **session's** own top-level
+`network.allow_domain` — never against whatever list the child that sent
+the request happens to declare. Measured directly against `git`'s child
+sandbox, whose own `allow_domain` names only two GitHub hosts:
+`git ls-remote https://pypi.org/nonexistent` reaches `pypi.org` and gets
+its own 404 (`repository '.../nonexistent/' not found`) — `pypi.org` is on
+the session's 14-host list and on neither of git's two — while
+`git ls-remote https://example.com/x`, on neither list, is refused by the
+proxy outright (`CONNECT tunnel failed, response 403`).
 
-Whether a child's traffic is actually bounded the way its own `network`
-grant implies depends on nothing in that grant alone — it depends on
-whether the proxy env vars reach it. Each hop's own `environment.allow_vars`
-filters what it received from its caller, and if a *single* hop in the
-chain — including the session's own top-level `environment` section — omits
-the proxy vars, they are gone for every hop below it, and the leaf falls
-back to a direct, unmediated connection: an `allow_domain` grant without the
-proxy vars reaching it is not bounded to that domain at all, and an
-`allow_all` grant without them means genuinely unbounded, not "up to the
-ceiling".
+Two separate questions decide what a child's traffic can actually reach,
+and conflating them is the mistake to avoid: whether it reaches nono's
+proxy **at all**, and, once it does, **what** the proxy filters against.
+The first depends on the proxy env vars actually reaching that child: each
+hop's own `environment.allow_vars` filters what it received from its
+caller, and if a *single* hop in the chain — including the session's own
+top-level `environment` section — omits the proxy vars, they are gone for
+every hop below it, and the leaf falls back to a direct, unmediated
+connection: a grant without the proxy vars reaching it — `allow_domain` or
+`allow_all` alike — means genuinely unbounded network, not "up to that
+grant's own ceiling". The second, once the vars do reach the proxy, is
+always the session's own top-level `network.allow_domain` — never the
+child's, which (see above) is otherwise inert for filtering purposes.
 
-**`git`'s own network grant is scoped to GitHub, and governs the HTTPS
-transport only.** Its child sandbox sets `network:
-{"allow_domain": ["github.com", "*.githubusercontent.com"]}`, and the
-top-level `network` (the ceiling) allows the same two, so the proxy is
-actually standing up in front of it; both the session's own top-level
+**`git`'s own network grant names two GitHub hosts, but that list is not
+what bounds `git`'s reach — the session's top-level list is.** Its child
+sandbox sets `network: {"allow_domain": ["github.com",
+"*.githubusercontent.com"]}`; both the session's own top-level
 `environment.allow_vars` and `git`'s own carry the six proxy variable names
 (`http_proxy`/`HTTP_PROXY`/`https_proxy`/`HTTPS_PROXY`/`no_proxy`/
-`NO_PROXY`), measured sufficient with no `NONO_*` variable needed. Measured
-through the real broker: `git ls-remote https://github.com/git/git.git HEAD`
-returns a real ref, while `git ls-remote https://example.com/x`, a raw IP,
-and a nonexistent domain all fail identically with `CONNECT tunnel failed,
-response 403` — a genuine proxy denial, not a DNS or routing failure.
-Omitting the proxy vars from either hop's `allow_vars` would silently reopen
-this to the whole internet, so check both when changing this profile, not
-just the one you touched. SSH remotes never go through this grant at all —
-they go out through the separate `ssh` command below.
+`NO_PROXY`), measured sufficient with no `NONO_*` variable needed, so
+`git`'s traffic does reach the proxy — and what the proxy then filters
+against is the session's own 14-host list, not `git`'s own two. Measured
+through the real broker: `git ls-remote https://github.com/git/git.git
+HEAD` returns a real ref (on both lists); `git ls-remote
+https://pypi.org/nonexistent` also succeeds in reaching `pypi.org` and gets
+its own 404 (on the session's list, not `git`'s); `git ls-remote
+https://example.com/x`, a raw IP, and a nonexistent domain all fail
+identically with `CONNECT tunnel failed, response 403` — none are on the
+session's list either. Omitting the proxy vars from either hop's
+`allow_vars` would silently reopen this to the whole internet (an
+unproxied, unmediated connection, not narrowed to nothing), so check both
+when changing this profile, not just the one you touched. SSH remotes
+never go through this grant at all — they go out through the separate
+`ssh` command below.
 
 **`ssh`'s own network grant is `{"allow_all": true}`, and unlike `git`'s
 grant, that really is unrestricted.** The SSH protocol cannot be tunnelled
@@ -567,10 +583,14 @@ instead the paths this profile *does* pin (each command's own `exec_paths`).
   `~/go/pkg/sumdb` and `$XDG_CACHE_HOME/go-build` for the module cache,
   build cache and checksum database, `$WORKDIR` and `/tmp` with both write
   and exec (`go test` compiles a binary into `/tmp` and immediately runs
-  it), and — only on the `from.session` edge — network reachability to
-  `proxy.golang.org` and `sum.golang.org`, the same two hosts already in
-  this profile's own top-level `network.allow_domain`. See the "Three
-  facts" list further down for why it exists and what it costs.
+  it), and — only on the `from.session` edge — a `network` key naming
+  `proxy.golang.org` and `sum.golang.org`. Per [Network](#the-two-profiles)
+  above, that list does not itself narrow anything: it turns on nono's
+  proxy, and the proxy filters against the session's own top-level
+  `network.allow_domain` (14 hosts, including those same two), so this
+  edge's real reach is that full session list, not just the two named
+  here. See the "Three facts" list further down for why it exists and what
+  it costs.
 
 None of the five carries an `invocation_policy` argv rule of any kind. An
 earlier revision of this project enforced git-specific rules — blocking an

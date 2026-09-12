@@ -197,24 +197,44 @@
       // Measured on nono 0.74.0. `agent-sandbox doctor` checks the paths below
       // still exist for the same reason.
       //
-      // Git hooks DO execute here, through the sh/bash entries below (git's
-      // can_use lists both, and each carries a from.git edge back). `git
-      // commit` works normally — no `--no-verify` needed.
+      // Git hooks do NOT execute from this sandbox. `git commit` fails with
+      // "fatal: cannot exec '.git/hooks/commit-msg': Permission denied";
+      // use `git commit --no-verify`.
       //
-      // *** BUT commit-message validation does NOT run here, silently. ***
-      // This repo's hooks invoke lefthook by a version-stamped absolute path
-      // (.git/hooks/commit-msg calls
-      // .../mise/installs/lefthook/2.1.10/lefthook_2.1.10_Linux_x86_64
-      // directly, not a `lefthook` on PATH), and that basename matches no
-      // policy command name, so nothing mediates it: the hook shim prints
-      // "Can't find lefthook in PATH", exits 0, and the commit proceeds
-      // unchecked. Pinning a command named after that version-stamped binary
-      // would "fix" it and is deliberately not done: the version stamp
-      // changes on every lefthook upgrade, so the pin would silently stop
-      // matching, same failure mode the "DO NOT pin executable" note above
-      // warns about for git itself. Measured on nono 0.74.0.
+      // Making them execute is POSSIBLE — it needs $WORKDIR and /nix/store
+      // added to this exec_paths below, because a hook's shebang makes the
+      // KERNEL exec the interpreter (/bin/sh, under /nix/store) as part of
+      // git's own execve() of the hook file, before nono's command-name
+      // matching for "sh" can apply to the new process. This was measured
+      // and built (nono 0.74.0), then DELIBERATELY REVERTED: $WORKDIR is
+      // agent-writable, and this sandbox already carries network
+      // (allow_domain below) and read access to the global gitconfig — so
+      // that widening lets git execute arbitrary agent-written content, with
+      // network, the moment it lands in the working tree. That is a
+      // write-then-execute path, and it sits outside the confinement the
+      // user set for arbitrary-tool execution (workdir data, no network —
+      // see the sh/bash entries below, which honor that bar; git's own
+      // sandbox does not).
+      //
+      // It would also buy nothing: this repo's hooks invoke lefthook by a
+      // version-stamped absolute path
+      // (.../mise/installs/lefthook/2.1.10/lefthook_2.1.10_Linux_x86_64),
+      // whose basename matches no policy command name, so nothing mediates
+      // it even if the hook script itself could run — it prints "Can't find
+      // lefthook in PATH", exits 0, and the commit is accepted unvalidated
+      // either way. Pinning a command named after that version-stamped
+      // binary would "fix" the name-matching half and is separately not
+      // done: the version stamp changes on every lefthook upgrade, so the
+      // pin would silently stop matching, the same failure mode the "DO NOT
+      // pin executable" note above warns about for git itself.
+      //
+      // Net effect, with or without hooks executing: commit-message
+      // validation does NOT run inside this sandbox. Do not re-open the
+      // hook-execution path to try to fix that — it was tried, it does not
+      // fix it, and it costs arbitrary execution with network. Measured on
+      // nono 0.74.0.
       "git": {
-        "can_use": ["ssh", "sh", "bash"],
+        "can_use": ["ssh"],
         "from": {
           "session": { "sandbox": {
             // Global/system git config plus the declared target of every
@@ -227,43 +247,17 @@
             // worktree; @git:worktree covers the main repo root, without which
             // `git worktree add` fails at getcwd() with EPERM.
             "fs_write":     ["$WORKDIR", "@git:common-dir", "@git:worktree", "@git:toplevel"],
-            // git-remote-https is a separate binary under libexec/git-core;
-            // without this line, HTTPS fails with "fatal: cannot exec
-            // 'remote-https': Permission denied". nono SKIPS exec_paths
-            // entries that do not exist, so a nixpkgs git update breaks
-            // HTTPS here silently. doctor checks for that.
-            //
-            // /nix/store and /run/current-system/sw are ALSO required here —
-            // not for git-remote-https, but because a hook script's shebang
-            // (`#!/bin/sh`) makes the KERNEL exec the interpreter (/bin/sh,
-            // a symlink resolving under /nix/store) as part of git's own
-            // execve() of the hook file, before nono's command_policies name
-            // matching for "sh" ever gets a chance to apply. fs_read already
-            // covers /nix/store; exec_paths is the separate grant that
-            // supplies the EXECUTE right. Without it: "fatal: cannot exec
-            // '.git/hooks/commit-msg': Permission denied", indistinguishable
-            // from a missing hook-name policy edge. Measured on nono 0.74.0.
-            "exec_paths":   ["@git:hooks-path", "$WORKDIR", "/nix/store", "/run/current-system/sw",
-                             "/nix/store/8yh8zbb0r4na7gkqk0db0gbdid2ax7zm-git-2.54.0/libexec/git-core"],
+            // Needed ONLY for HTTPS transport: git-remote-https is a separate
+            // binary under libexec/git-core. Without this, local operations and
+            // SSH remotes still work and HTTPS fails with
+            // "fatal: cannot exec 'remote-https': Permission denied".
+            // nono SKIPS exec_paths entries that do not exist, so a nixpkgs git
+            // update breaks HTTPS here silently. doctor checks for that.
+            "exec_paths":   ["/nix/store/8yh8zbb0r4na7gkqk0db0gbdid2ax7zm-git-2.54.0/libexec/git-core"],
             // Governs HTTPS remotes only; SSH remotes go out through the ssh
             // entry below. Requires the session's own top-level network block to
             // be present — a child allow_domain against a proxy-less session
             // fails at init with "no loopback proxy env was present".
-            "network":      { "allow_domain": ["github.com", "*.githubusercontent.com"] },
-            "environment":  { "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM",
-                                             "http_proxy", "HTTP_PROXY", "https_proxy",
-                                             "HTTPS_PROXY", "no_proxy", "NO_PROXY"] }
-          } },
-          // Lets a hook script (invoked as sh, see below) call back into git
-          // — e.g. `git rev-parse` — without which most hooks cannot even
-          // find the repo root. Copy of the session sandbox above, same
-          // exec_paths reasoning (interpreter resolution for a nested shebang).
-          "sh": { "sandbox": {
-            "fs_read_file": ["@git:config-files"],
-            "fs_read":      ["@git:hooks-path", "$WORKDIR", "/nix/store", "/run/current-system/sw"],
-            "fs_write":     ["$WORKDIR", "@git:common-dir", "@git:worktree", "@git:toplevel"],
-            "exec_paths":   ["@git:hooks-path", "$WORKDIR", "/nix/store", "/run/current-system/sw",
-                             "/nix/store/8yh8zbb0r4na7gkqk0db0gbdid2ax7zm-git-2.54.0/libexec/git-core"],
             "network":      { "allow_domain": ["github.com", "*.githubusercontent.com"] },
             "environment":  { "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM",
                                              "http_proxy", "HTTP_PROXY", "https_proxy",
@@ -303,8 +297,9 @@
       // Confined shell for the session: arbitrary tools may run inside this
       // sandbox, but only against $WORKDIR and with no network. "session":
       // "deny" is deliberately NOT set here, unlike ssh above — the session
-      // is the intended caller, not one to be blocked. Also reachable from
-      // git, so a `#!/usr/bin/env bash` hook behaves like a `#!/bin/sh` one.
+      // is the intended caller, not one to be blocked. NOT reachable from
+      // git (see the git entry's comment above) — git cannot exec a hook at
+      // all, so a from.git edge here would be dead weight.
       "bash": {
         "from": {
           "session": { "sandbox": {
@@ -323,25 +318,17 @@
             // "helpfully" fill it in with allow_domain/allow_all. Measured:
             // ~/.ssh/id_main and ~/.gitconfig are both denied from inside this
             // sandbox, and outbound network is refused.
-          } },
-          // Same confinement as the session edge above, for a git hook
-          // written as a bash script.
-          "git": { "sandbox": {
-            "fs_read":     ["$WORKDIR", "/nix/store", "/run/current-system/sw"],
-            "fs_write":    ["$WORKDIR"],
-            "exec_paths":  ["/nix/store", "/run/current-system/sw"],
-            "environment": { "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM"] }
           } }
         }
       },
 
-      // Confined shell reachable from BOTH the session and git — this is
-      // what makes a `#!/bin/sh` git hook actually execute (git's can_use
-      // lists "sh"). can_use: ["git"] plus git's from.sh edge above lets a
-      // hook call back into git (e.g. `git rev-parse`). Same confinement as
-      // bash: $WORKDIR only, no network.
+      // Confined shell for the session only — same shape as bash above.
+      // NOT reachable from git, and carries no can_use of its own: git
+      // cannot exec a hook at all (see the git entry's comment above), so
+      // there is no live caller edge for this to invoke git through, and no
+      // git.from.sh edge accepting it as a caller either. $WORKDIR only, no
+      // network.
       "sh": {
-        "can_use": ["git"],
         "from": {
           "session": { "sandbox": {
             "fs_read":     ["$WORKDIR", "/nix/store", "/run/current-system/sw"],
@@ -350,12 +337,6 @@
             "environment": { "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM"] }
             // No "network" key at all, same as bash above — absence is the
             // denial, not an oversight.
-          } },
-          "git": { "sandbox": {
-            "fs_read":     ["$WORKDIR", "/nix/store", "/run/current-system/sw"],
-            "fs_write":    ["$WORKDIR"],
-            "exec_paths":  ["/nix/store", "/run/current-system/sw"],
-            "environment": { "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM"] }
           } }
         }
       }

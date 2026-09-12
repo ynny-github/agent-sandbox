@@ -2,6 +2,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -468,27 +469,62 @@ type commandPolicySandbox struct {
 	ExecPaths []string `json:"exec_paths"`
 }
 
-// commandPolicyEdge is one entry of a command's "from" map: normally an
-// object naming the caller's sandbox, but nono also allows a bare policy
-// string here — e.g. `"session": "deny"` for a command reachable only
-// through another command, not directly from the session. UnmarshalJSON
-// tolerates that shape by treating it as an edge with no sandbox (and so no
-// exec_paths), rather than failing to parse the whole profile over it.
+// commandPolicyEdge is one entry of a command's "from" map. nono's own type
+// (CommandFromConfig, an untagged three-variant enum) lets this be any of:
+//
+//   - Deny(String): a bare policy string, e.g. `"session": "deny"` for a
+//     command reachable only through another command, not the session
+//     directly. Carries no sandbox and so no exec_paths.
+//   - Edge(CommandEdgeConfig): an object wrapping the sandbox under a nested
+//     "sandbox" key, alongside sibling fields like "invocation_policy":
+//     `"session": {"sandbox": {...}, "invocation_policy": {...}}`.
+//   - Policy(CommandSandboxConfig): the sandbox fields used directly as the
+//     edge value, with no "sandbox" wrapper at all:
+//     `"session": {"fs_read": [...], "exec_paths": [...]}`.
+//
+// UnmarshalJSON must tell Edge and Policy apart by the presence of the
+// "sandbox" key, not by whether decoding into {Sandbox commandPolicySandbox
+// `json:"sandbox"`} succeeds: a Policy object has no "sandbox" key, so that
+// decode always succeeds anyway, quietly producing a zero-value sandbox and
+// throwing away every field — including exec_paths — with no error. That
+// silent loss is exactly what this whole check exists to prevent, so it must
+// not happen here of all places.
 type commandPolicyEdge struct {
-	Sandbox commandPolicySandbox `json:"sandbox"`
+	Sandbox commandPolicySandbox
 }
 
 func (e *commandPolicyEdge) UnmarshalJSON(data []byte) error {
-	if len(data) > 0 && data[0] == '"' {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) > 0 && trimmed[0] == '"' {
+		// Deny(String): ignore the policy string, no sandbox to read.
 		*e = commandPolicyEdge{}
 		return nil
 	}
-	type alias commandPolicyEdge
-	var a alias
-	if err := json.Unmarshal(data, &a); err != nil {
-		return err
+
+	// Object cases only from here. Probe for the "sandbox" wrapper key rather
+	// than guessing from decode success, per the type's doc comment above.
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return fmt.Errorf("command-policy edge is neither a string nor an object: %w", err)
 	}
-	*e = commandPolicyEdge(a)
+
+	if raw, ok := probe["sandbox"]; ok {
+		// Edge(CommandEdgeConfig): decode the nested sandbox object.
+		var sb commandPolicySandbox
+		if err := json.Unmarshal(raw, &sb); err != nil {
+			return fmt.Errorf("command-policy edge's \"sandbox\" field: %w", err)
+		}
+		e.Sandbox = sb
+		return nil
+	}
+
+	// Policy(CommandSandboxConfig): no "sandbox" wrapper, so the object
+	// itself is the sandbox.
+	var sb commandPolicySandbox
+	if err := json.Unmarshal(data, &sb); err != nil {
+		return fmt.Errorf("command-policy edge: %w", err)
+	}
+	e.Sandbox = sb
 	return nil
 }
 

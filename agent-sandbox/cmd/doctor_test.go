@@ -843,6 +843,50 @@ func TestCommandPolicyPaths_CollectsExecutablesAndExecPaths(t *testing.T) {
 	}
 }
 
+// nono's CommandFromConfig is an untagged three-variant enum: a "from" edge's
+// value may be a bare policy string (Deny), an object wrapping the sandbox
+// under a nested "sandbox" key (Edge), or a sandbox object used directly as
+// the edge value with no wrapper at all (Policy). This profile carries all
+// three at once, on the same command, so the test pins the whole contract
+// rather than only whichever shape a prior fix happened to add.
+//
+// The Policy shape is the one that regressed silently: decoding it into
+// {Sandbox commandPolicySandbox `json:"sandbox"`} finds no "sandbox" key,
+// succeeds anyway with a zero-value sandbox, and drops exec_paths with no
+// error — the exact failure this check exists to prevent, reproduced in the
+// parser itself.
+const profileShowThreeEdgeShapesJSON = `{
+  "command_policies": {
+    "commands": {
+      "widget": {
+        "executable": null,
+        "from": {
+          "session": "deny",
+          "wrapped_caller": { "sandbox": { "exec_paths": ["/from/wrapped/edge"] } },
+          "bare_caller": { "exec_paths": ["/from/bare/policy"] }
+        }
+      }
+    }
+  }
+}`
+
+func TestCommandPolicyPaths_ReadsAllThreeFromEdgeShapes(t *testing.T) {
+	defer stubRunCommand(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return []byte(profileShowThreeEdgeShapesJSON), nil
+	})()
+
+	got, err := commandPolicyPaths(context.Background(), "irrelevant.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"/from/wrapped/edge", "/from/bare/policy"}
+	sort.Strings(got)
+	sort.Strings(want)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("commandPolicyPaths = %v, want %v (the bare-sandbox \"from\" shape must not be dropped)", got, want)
+	}
+}
+
 func TestCheckProfilePaths_ReportsMissingPaths(t *testing.T) {
 	defer stubRunCommand(func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		return []byte(fmt.Sprintf(profileShowJSON, "/tmp")), nil

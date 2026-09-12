@@ -15,7 +15,6 @@
     "include": [
       // -- baseline (baselineGroups; granted whatever the capability list says)
       "nix_runtime",      // NixOS: /nix/store is where every executable lives
-      "git_config",       // toolchains shell out to git without saying so
 
       // -- one group per runtime capability
       "go_runtime",       // capability: go
@@ -84,10 +83,7 @@
 
       // -- capability: docker
       "~/.docker",
-      "~/.orbstack",
-
-      // -- capability: ssh
-      "~/.ssh"
+      "~/.orbstack"
     ],
 
     "read_file": [
@@ -101,17 +97,13 @@
 
     "allow_file": [
       // -- baseline (baselineAllowFile)
-      "/dev/null",
-
-      // -- capability: ssh
-      "~/.ssh/known_hosts"
+      "/dev/null"
     ],
 
     "bypass_protection": [
       // catalog `bypass`: these prefixes are protected by nono, and a grant
       // against one is refused without this opt-in.
       "~/.docker",                             // capability: docker
-      "~/.ssh",                                // capability: ssh
       "~/.bashrc"                              // capability: bashrc
     ]
   },
@@ -175,5 +167,128 @@
       "mise.jdx.dev",                   // version/registry metadata
       "api.github.com"                  // release listings mise resolves tools through
     ]
+  },
+
+  "command_policies": {
+    // Not about git. Activating Tool Sandbox at all rebuilds the outer session's
+    // execute grant from the trusted directories on PATH, and go's internal
+    // toolchain does not live on PATH: without this line `go build ./...` dies
+    // with "fork/exec .../pkg/tool/linux_amd64/compile: permission denied".
+    // Neither ~ nor $HOME is expanded here, so the path is literal. "1.25" is
+    // mise's minor-version symlink and .mise.toml pins go = "1.25", so a patch
+    // upgrade does not break it; a minor bump does, loudly.
+    // /tmp cannot be added: nono refuses a group/world-writable executable dir.
+    "executable_dirs": ["/home/yn/.local/share/mise/installs/go/1.25/pkg/tool/linux_amd64"],
+
+    "commands": {
+      // DO NOT shorten "from": {"session": …} to the "sandbox" shorthand. nono
+      // runs both identically, but `nono why --profile <this> --command git`
+      // does not implement the shorthand: it answers DENIED / missing
+      // from.session for a command that demonstrably runs. `ai explain` tells
+      // the agent to run exactly that query, so the false denial would reach
+      // the agent unmediated. Measured on nono 0.74.0.
+      //
+      // DO NOT pin "executable" here either. A pin whose path does not exist
+      // silently disables mediation for the command: nono falls back to the
+      // first PATH match and runs it at the SESSION's grants, `nono profile
+      // validate` still passes, and the audit records "tools: active, no
+      // invocations". git's path is a /nix/store path that changes on every
+      // nixpkgs update, so a pin here would un-sandbox git on the next upgrade.
+      // Measured on nono 0.74.0. `agent-sandbox doctor` checks the paths below
+      // still exist for the same reason.
+      //
+      // Git hooks CANNOT run from this sandbox. The chain a hook needs is
+      // git -> sh -> lefthook -> git, and that last git hop hits nono's
+      // supervisor.sock defect (measured on 0.74.0: "tool-sandbox shim failed
+      // to connect to .../supervisor.sock: Operation not permitted"). No
+      // profile widening reaches it — do not add a git->bash hook chain and
+      // do not add the hooks directory to exec_paths, that does not fix it.
+      // Consequence: `git commit` fails here with "fatal: cannot exec
+      // '.git/hooks/commit-msg': Permission denied"; use
+      // `git commit --no-verify` instead. See the spec's "Known issue: the
+      // shim cannot always reach the supervisor" section.
+      "git": {
+        "can_use": ["ssh"],
+        "from": { "session": { "sandbox": {
+          // Global/system git config plus the declared target of every
+          // include.path / includeIf.*.path in those scopes. local and worktree
+          // scopes are deliberately excluded by nono, so a repository cannot
+          // grant itself host access through its own .git/config.
+          "fs_read_file": ["@git:config-files"],
+          "fs_read":      ["@git:hooks-path", "$WORKDIR", "/nix/store", "/run/current-system/sw"],
+          // @git:common-dir covers the object store when $WORKDIR is a linked
+          // worktree; @git:worktree covers the main repo root, without which
+          // `git worktree add` fails at getcwd() with EPERM.
+          "fs_write":     ["$WORKDIR", "@git:common-dir", "@git:worktree", "@git:toplevel"],
+          // Needed ONLY for HTTPS transport: git-remote-https is a separate
+          // binary under libexec/git-core. Without this, local operations and
+          // SSH remotes still work and HTTPS fails with
+          // "fatal: cannot exec 'remote-https': Permission denied".
+          // nono SKIPS exec_paths entries that do not exist, so a nixpkgs git
+          // update breaks HTTPS here silently. doctor checks for that.
+          "exec_paths":   ["/nix/store/8yh8zbb0r4na7gkqk0db0gbdid2ax7zm-git-2.54.0/libexec/git-core"],
+          // Governs HTTPS remotes only; SSH remotes go out through the ssh
+          // entry below. Requires the session's own top-level network block to
+          // be present — a child allow_domain against a proxy-less session
+          // fails at init with "no loopback proxy env was present".
+          "network":      { "allow_domain": ["github.com", "*.githubusercontent.com"] },
+          "environment":  { "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM",
+                                           "http_proxy", "HTTP_PROXY", "https_proxy",
+                                           "HTTPS_PROXY", "no_proxy", "NO_PROXY"] }
+        } } }
+      },
+
+      // The only reason ~/.ssh can come off the floor. Reachable from git and
+      // from nothing else: direct session ssh is refused with exit 126.
+      "ssh": {
+        "from": {
+          "session": "deny",
+          "git": { "sandbox": {
+            // The official git-ssh example brokers $SSH_AUTH_SOCK as a
+            // local-socket credential and prefers that to a raw key grant. Not
+            // usable here: SSH_AUTH_SOCK is set on this host but points at a
+            // socket that no longer exists, and a profile declaring the
+            // credential fails before launch. If a live agent ever becomes
+            // standard, replace the id_main grant with:
+            //   "credentials": { "ssh-agent": { "type": "local-socket",
+            //     "path": "$SSH_AUTH_SOCK", "mode": "connect",
+            //     "env_var": "SSH_AUTH_SOCK" } }
+            // at command_policies level, and "use_credentials": ["ssh-agent"] here.
+            "fs_read_file":  ["~/.ssh/id_main", "~/.ssh/config", "~/.ssh/known_hosts"],
+            "fs_write_file": ["~/.ssh/known_hosts"],
+            "fs_read":       ["/nix/store", "/run/current-system/sw"],
+            // `nono profile validate` warns [allow_all_network] on this line.
+            // Accepted: ssh cannot be routed through nono's HTTP proxy, and
+            // allow_domain without an enforceable proxy is rejected outright.
+            "network":       { "allow_all": true },
+            "environment":   { "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM"] }
+          } }
+        }
+      },
+
+      // Confined shell for the session: arbitrary tools may run inside this
+      // sandbox, but only against $WORKDIR and with no network. "session":
+      // "deny" is deliberately NOT set here, unlike ssh above — the session
+      // is the intended caller, not one to be blocked.
+      "bash": {
+        "from": { "session": { "sandbox": {
+          // /nix/store and /run/current-system/sw are read grants, not just
+          // exec grants: nono requires a matching fs_read for anything named
+          // in exec_paths, so without these bash cannot exec a single
+          // external program (measured: fs_read limited to $WORKDIR alone
+          // leaves bash unable to exec anything on PATH). This is what makes
+          // "arbitrary tools inside the confinement" possible while data
+          // access stays limited to fs_read/fs_write below.
+          "fs_read":     ["$WORKDIR", "/nix/store", "/run/current-system/sw"],
+          "fs_write":    ["$WORKDIR"],
+          "exec_paths":  ["/nix/store", "/run/current-system/sw"],
+          "environment": { "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM"] }
+          // No "network" key at all. Its absence IS the denial — do not
+          // "helpfully" fill it in with allow_domain/allow_all. Measured:
+          // ~/.ssh/id_main and ~/.gitconfig are both denied from inside this
+          // sandbox, and outbound network is refused.
+        } } }
+      }
+    }
   }
 }

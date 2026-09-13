@@ -81,11 +81,7 @@
 
       // -- capability: mise
       "~/.local/share/mise",
-      "~/.config/mise",
-
-      // -- capability: docker
-      "~/.docker",
-      "~/.orbstack"
+      "~/.config/mise"
     ],
 
     "read_file": [
@@ -106,7 +102,6 @@
     "bypass_protection": [
       // catalog `bypass`: these prefixes are protected by nono, and a grant
       // against one is refused without this opt-in.
-      "~/.docker",                             // capability: docker
       "~/.bashrc"                              // capability: bashrc
     ]
   },
@@ -499,6 +494,69 @@
                                              "MISE*", "__MISE*"] }
           } }
         }
+      },
+
+      // The docker daemon is root-equivalent: `docker run -v /:/host` mounts
+      // the entire host filesystem into a container the caller then owns.
+      // This entry's filesystem grants do not, and cannot, bound what the
+      // daemon then does on the command's behalf — they bound only which
+      // command may reach the daemon in the first place. Read everything
+      // below with that distinction in mind: nothing here "sandboxes
+      // docker" in the sense the other entries sandbox their own command.
+      //
+      // No unix-socket grant appears here, and none is needed: exec_paths
+      // alone is what lets docker reach /var/run/docker.sock — measured,
+      // `docker ps` reaches the daemon from this child sandbox with no
+      // filesystem.unix_socket entry anywhere in this file. The floor
+      // cannot do the same: a floor `curl -s --unix-socket
+      // /var/run/docker.sock http://localhost/version` is refused with
+      // "no matching unix_socket capability", exit 7, both before and
+      // after this entry existed. Measured.
+      //
+      // ~/.docker moved here from the floor's own filesystem.read (it used
+      // to sit there next to `~/.orbstack`; neither path exists on this
+      // host, so that floor grant conferred nothing and the
+      // `bypass_protection` opt-in it required only printed a warning on
+      // every run). It is one of nono's protected paths, but a child edge
+      // can grant a protected path without the floor's `bypass_protection`
+      // opt-in — child sandboxes have no way to express bypass_protection
+      // at all, and none is needed here. Measured.
+      //
+      // The nix store path below carries docker's build hash and goes
+      // stale the next time nixpkgs bumps the docker package; `agent-sandbox
+      // doctor` checks it, same as git's exec_paths above. The two non-Nix
+      // entries are portability, not redundancy: nono skips whichever
+      // exec_paths entries do not exist on this host, and doctor only flags
+      // an exec_paths set when EVERY entry in it is missing — so carrying
+      // `/usr/libexec/docker` and `/usr/lib/docker` alongside the pinned nix
+      // path costs nothing and keeps this working on a non-Nix host. Same
+      // reasoning, and the same portability shape, as git's exec_paths list
+      // above. The path is deliberately the `libexec/docker` directory, not
+      // `bin/docker`: on NixOS, `bin/docker` is a small stub that re-execs
+      // `libexec/docker/docker` by absolute path, and only the directory the
+      // real binary lives under needs to be exec-reachable here.
+      //
+      // No argv-level policy either: this entry execs the real docker
+      // binary directly, the same shape as git's own entry above. A
+      // separate wrapper exists (`internal/safe/dockercompose`,
+      // `cmd/safe_docker.go`) that checks `run`/`exec`/`compose` invocations
+      // for `--privileged`, host-path or docker-socket bind mounts, and
+      // similar — but it is not wired in here, so it buys back nothing for
+      // this profile. Its two known gaps are unaffected by that either way,
+      // for an operator who does wire it in later: `docker create` followed
+      // by `docker start` reaches the same running state as `docker run`
+      // with no dangerous flag present on either individual call, and
+      // `--mount type=volume,volume-opt=device=...,volume-opt=o=bind` is a
+      // bind mount in substance that the wrapper's check does not catch (it
+      // keys on `type=bind` specifically, not this spec's `type=volume`).
+      "docker": {
+        "from": { "session": { "sandbox": {
+          "fs_read":    ["$WORKDIR", "/nix/store", "/run/current-system/sw", "~/.docker"],
+          "fs_write":   ["$WORKDIR"],
+          "exec_paths": ["/nix/store/k9xql8h1fgvf6mdj4w8h2sfqwh6jr3w2-docker-29.6.2/libexec/docker",
+                         "/usr/libexec/docker", "/usr/lib/docker"],
+          "environment": { "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM"] }
+        } } }
       }
     }
   }

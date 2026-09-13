@@ -192,7 +192,7 @@ bounded the same way.
 
 **Nor does either tier bound what a compiler or interpreter does once it
 runs.** Nothing here enumerates every program capable of executing code —
-only which five commands get their own sandbox, and being one of them is not
+only which six commands get their own sandbox, and being one of them is not
 by itself a narrower boundary: a toolchain that compiles and executes code is
 bounded only by what *its own* process can reach, whether that process is
 `python` or `rustc` running at the floor (this repository's own profile does
@@ -530,13 +530,13 @@ executing: commit-message validation does not run inside this sandbox
 either way, so re-opening hook execution is not worth what it costs.
 
 **A worked example** — this repository's own `command-profile.json` at the
-repo root — declares five policy commands: `git`, `ssh`, `bash`, `sh` and
-`go`. Everything else this repository's own workflows use (`rg`, `mise`,
-`gofmt`, the coreutils, …) runs at the floor instead, granted through
-`groups.include` and the top-level `filesystem`/`environment` sections, not
-through `command_policies`.
+repo root — declares six policy commands: `git`, `ssh`, `bash`, `sh`, `go`
+and `docker`. Everything else this repository's own workflows use (`rg`,
+`mise`, `gofmt`, the coreutils, …) runs at the floor instead, granted
+through `groups.include` and the top-level `filesystem`/`environment`
+sections, not through `command_policies`.
 
-None of the five pins an `executable`. A pin whose path does not exist
+None of the six pins an `executable`. A pin whose path does not exist
 disables mediation for that command entirely: nono falls back to the first
 `PATH` match and runs it at the *session's* own grants, `nono profile
 validate` still passes, and the audit trail records only "tools: active, no
@@ -592,7 +592,7 @@ instead the paths this profile *does* pin (each command's own `exec_paths`).
   here. See the "Three facts" list further down for why it exists and what
   it costs.
 
-None of the five carries an `invocation_policy` argv rule of any kind. An
+None of the six carries an `invocation_policy` argv rule of any kind. An
 earlier revision of this project enforced git-specific rules — blocking an
 unconditional `push --force`, `reset --hard`, and similar — through a
 Go-based wrapper that parsed each invocation before deciding whether to
@@ -609,7 +609,7 @@ binary, add `argv_prepend: ["safe", "git"]`, and give the real binary a
 second name reachable only from the wrapper) — a capability decision this
 repository's own profile does not make.
 
-None of these five commands' edges is written with nono's `sandbox` shorthand
+None of these six commands' edges is written with nono's `sandbox` shorthand
 (`"from": {"session": "sandbox"}` rather than the longer
 `{"session": {"sandbox": {...}}}`), even though nono runs both forms
 identically. `nono why --command` does not implement the shorthand: on this
@@ -620,44 +620,65 @@ the shorthand would hand the agent a false denial with no way to see
 through it. Every edge in this profile is written the long way for exactly
 this reason.
 
-**`docker` is not declared in this repository's profile at all — no
-policy-command entry names it.** A `docker` wrapper exists
-(`internal/safe/dockercompose` and `cmd/safe_docker.go`: `docker` →
-wrapper → `realdocker` → the real binary — the same argv-parsing pattern
-`git`'s own entry used before this profile moved `git` to the direct
-sandbox described above) and is fully built and tested, but wiring it into
-a command profile is a capability decision an operator makes deliberately,
-not something to enable by copying this repository's profile. The reason is
-the Docker socket, and it is not what it looks like:
+**`docker` is a declared policy command, reachable from the session like
+`git`.** Its entry execs the real docker binary directly — no `executable`
+pin (same staleness reason as git: a `/nix/store` docker build changes hash
+on every nixpkgs bump) and no argv-level policy of any kind. **What bounds
+`docker` in this profile is exclusively what its `fs_read`/`fs_write`/
+`exec_paths` grants reach — not which docker subcommand or flag it was
+given.** A separate wrapper exists (`internal/safe/dockercompose` and
+`cmd/safe_docker.go`: `docker` → wrapper → `realdocker` → the real binary —
+the same argv-parsing pattern `git`'s own entry used before this profile
+moved `git` to the direct sandbox described above) and is fully built and
+tested, but this entry does not wire it in — the same choice this profile
+already made for `git`.
 
-> **The Docker socket is not filesystem-gated.** nono does not mediate
-> pathname AF_UNIX sockets — only the Linux *abstract* socket namespace —
-> so `/var/run/docker.sock` is reachable by any command that can execute
-> the `docker` binary, regardless of what `fs_read`/`fs_write` grant it
-> does or does not have. Leaving `docker` undeclared does not stop the
-> broker from running it: an undeclared command gets no child sandbox, no
-> `can_use` edges and no argv gate at all — it simply runs at the broker's
-> own grants, like any other floor command, reachable the moment it sits in
-> a trusted `PATH` directory (see [Two tiers](#two-tiers)). Measured
-> directly against this repository's own profile: `docker --version` runs
-> — the broker dispatches it — and exits 255 only because the nix
-> `docker` package's own `bin/docker` stub fails its re-exec into
-> `libexec`, not because of any tool-sandbox denial. The socket is already
-> reachable from this profile's floor, whether or not `docker` is ever
-> mentioned in it; declaring `docker` (with the wrapper below) adds an
-> argv-level check that does not otherwise exist — it does not add a
-> filesystem boundary that otherwise would exist, because there isn't one
-> to add. Once declared, the wrapper's checks (below) are the *entire*
-> defense, not a second layer behind a filesystem bound, because reaching
-> the daemon at all is root-equivalent: the socket permits mounting `/`
-> into a container. Gating the socket itself needs
-> `linux.af_unix_mediation` plus a `filesystem.unix_socket` allowlist — a
-> separate opt-in nono's profile guide documents under its `no-docker`
-> example — which this repository's profile does not configure, because
-> this repository's profile does not declare `docker` at all.
+> **The docker daemon is root-equivalent, and this entry does not change
+> that.** `docker run -v /:/host` mounts the entire host filesystem into a
+> container the caller then owns. Nothing this entry's `fs_read`/`fs_write`
+> grants say constrains what the daemon then does on `docker`'s behalf —
+> the daemon is a separate, already-root process on the other end of the
+> socket. What this entry bounds is exclusively *which command may reach
+> the daemon in the first place*, not what the daemon will do once reached.
+> Read every fact below with that distinction in mind; nothing here
+> "sandboxes docker" in the sense the other entries sandbox their own
+> command.
+>
+> **No unix-socket capability is declared, and none is needed.** nono
+> mediates AF_UNIX connections, but measured, `exec_paths` alone is what
+> lets `docker ps` reach `/var/run/docker.sock` from this entry's child
+> sandbox — there is no `filesystem.unix_socket` grant anywhere in this
+> file. The floor cannot do the same: `curl -s --unix-socket
+> /var/run/docker.sock http://localhost/version`, run at the floor, is
+> refused with "no matching unix_socket capability", exit 7 — measured both
+> before and after this entry existed. What actually gates reaching the
+> daemon is Tool Sandbox's own command-identity check (is this invocation
+> `docker`, and does its `exec_paths` resolve), not a socket-specific rule.
+>
+> **`~/.docker` moved here from the floor's own `filesystem.read`,** where
+> it used to sit next to `~/.orbstack` — neither path exists on this host,
+> so that floor grant conferred nothing, and the `bypass_protection` opt-in
+> it required printed a warning on every single run. `~/.docker` is one of
+> nono's protected paths, but a *child* edge can grant a protected path
+> without the floor's `bypass_protection` opt-in: child sandboxes have no
+> way to express `bypass_protection` at all, and measured, none is needed
+> for a child edge to read it.
+>
+> **The `bin/docker` → `libexec/docker/docker` stub shape still matters.**
+> On NixOS, `bin/docker` (what `PATH` resolves to) is a small stub that
+> re-execs `libexec/docker/docker` by absolute path. This entry's
+> `exec_paths` names the `libexec/docker` directory itself, not `bin/docker`,
+> so the stub's own re-exec lands inside a granted path. The nix store path
+> carries docker's build hash and goes stale on the next nixpkgs docker
+> upgrade, the same caveat as git's own `exec_paths` above; `agent-sandbox
+> doctor` checks it, and the two non-Nix candidates alongside it
+> (`/usr/libexec/docker`, `/usr/lib/docker`) keep the set non-empty on a
+> non-Nix host, at no cost — nono skips whichever entry does not exist, the
+> same portability shape git's own `exec_paths` list uses.
 
-An operator who decides the wrapper's checks are sufficient can wire it in
-with this shape:
+An operator who additionally wants argv-level rules on top of this entry can
+still wire the wrapper in, with this shape — mutually exclusive with the
+entry above, since a profile can only declare one `docker` command policy:
 
 ```json
 "docker": {
@@ -674,32 +695,24 @@ with this shape:
 }
 ```
 
-Three things worth knowing before doing that. First, the `executable` above
-is deliberately `libexec/docker/docker`, not the more obvious
-`bin/docker`: on NixOS, `bin/docker` is a small stub that re-execs
-`libexec/docker/docker` by absolute path, and nono's per-command Landlock
-rule set (built from the pinned executable's own direct library
-dependencies) does not cover that second, indirectly invoked path —
-pinning the stub crashes every invocation, silently (`execve(...) = -1
-EACCES`, reported only as "Command exited with code 255"). Second, the
-wrapper's checks (`internal/safe/dockercompose` and `cmd/safe_docker.go`;
-read the source for the exact, current rule set — `--help` passes straight
-through to real docker and prints docker's own help, never the wrapper's
-rule set: the plain `docker` path never intercepts it because the wrapper
-disables its own flag parsing, and the `compose` path skips model
-resolution outright once it sees `--help`, since help executes nothing and
-needs no model) are argv/model-level,
-not filesystem-level: a `compose` invocation is checked against its
-*resolved* model (`docker compose config`) — host-path mounts, the Docker
-socket, `privileged`, host `network`/`pid`/`ipc`, dangerous capabilities,
-disabled seccomp/apparmor — and every other invocation is checked at the
-argv level for `run`/`exec`, `--privileged`, and a host-path or
-Docker-socket bind mount.
+Two things worth knowing before choosing that shape over the direct entry
+this repository ships. First, the wrapper's checks (`internal/safe/dockercompose`
+and `cmd/safe_docker.go`; read the source for the exact, current rule set —
+`--help` passes straight through to real docker and prints docker's own
+help, never the wrapper's rule set: the plain `docker` path never
+intercepts it because the wrapper disables its own flag parsing, and the
+`compose` path skips model resolution outright once it sees `--help`, since
+help executes nothing and needs no model) are argv/model-level, not
+filesystem-level: a `compose` invocation is checked against its *resolved*
+model (`docker compose config`) — host-path mounts, the Docker socket,
+`privileged`, host `network`/`pid`/`ipc`, dangerous capabilities, disabled
+seccomp/apparmor — and every other invocation is checked at the argv level
+for `run`/`exec`, `--privileged`, and a host-path or Docker-socket bind
+mount.
 
-Third, and this is the one that matters most given the socket fact above:
-the wrapper's checks have two known gaps, both accepted only because
-docker was otherwise unreachable — a premise this opt-in block removes the
-moment it is pasted in.
+Second, and this is the one that matters most given the root-equivalence
+fact above: the wrapper's checks, if wired in, would still have two known
+gaps.
 - `docker create` followed by `docker start` reaches the same running
   state as `docker run` with none of the dangerous flags present on either
   individual invocation — `create` is not itself refused (nothing about
@@ -712,8 +725,11 @@ moment it is pasted in.
   since it keys on `type=bind` specifically and this spec's `type` is
   `volume`.
 
-Neither is closed by anything in this repository. An operator enabling
-docker is accepting both until someone closes them.
+Neither gap is closed by anything in this repository, wrapper wired in or
+not. The direct entry this profile actually ships carries no argv checks at
+all — not even the two-gaps-wide coverage the wrapper would add — so an
+operator running this profile as shipped is accepting the daemon's full,
+root-equivalent reach outright, by design; see the callout above.
 
 Three facts this design turns on, each measured on nono 0.74.0:
 
@@ -754,8 +770,8 @@ Two more properties worth knowing:
 - **A toolchain that compiles and runs code is bounded only by its own
   sandbox's reach, not by which other commands are declared, and not by
   which tier it is in.** `python` and `rustc` are not among this profile's
-  five policy commands, so each runs directly in the broker's own sandbox,
-  the same one every other floor command shares. `go` *is* one of the five
+  six policy commands, so each runs directly in the broker's own sandbox,
+  the same one every other floor command shares. `go` *is* one of the six
   — and being a policy command buys back nothing on this point, only a
   narrower sandbox to be bounded by: its own edge grants `$WORKDIR` and
   `/tmp` with both write and exec, because `go test` compiles a binary into

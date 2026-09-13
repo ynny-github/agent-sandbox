@@ -671,6 +671,36 @@ already made for `git`.
 > picture, and is a deliberate grant those entries already made, not a
 > leak this one introduced.
 >
+> **The profile now also carries `"linux": { "af_unix_mediation":
+> "pathname" }` and a matching `filesystem.unix_socket_dir_bind` entry —
+> and neither one closes the gap just described, today, on this host.**
+> `af_unix_mediation` is nono's session-level switch for AF_UNIX
+> mediation (default Off); there is no per-command equivalent to flip
+> instead, because a command policy's own child sandbox has no
+> connect-side field to express it — nono's `CommandSandboxConfig` carries
+> only `unix_socket_bind`, a bind grant, and only since nono 0.76.0 (PR
+> #1780). This host runs nono 0.74.0, whose child schema does not have
+> that field at all. Measured with both new lines applied, 3/3 runs: the
+> same `bash -c` curl to `/var/run/docker.sock` above still reaches the
+> daemon and prints its version JSON, unchanged. These two lines are
+> carried for the nono version this repository intends to move to, not
+> because they close anything now — do not read their presence as a claim
+> that this gap is fixed. Whether upgrading nono actually closes it is
+> also unverified here: nono 0.77.0 builds on this host but cannot start
+> Tool Sandbox at all on NixOS (`failed to resolve ELF dependency
+> 'libgcc_s.so.1'`), and 0.77.0's own child schema still only has
+> `unix_socket_bind` — no connect side — so a per-child connect rule
+> remains inexpressible there too.
+>
+> **`unix_socket_dir_bind` is mandatory, not redundant, once
+> `af_unix_mediation` is `"pathname"`.** Pathname mediation gates AF_UNIX
+> bind as well as connect, and the command broker binds its own socket in
+> `~/.local/state/agent-sandbox` at startup. Measured on nono 0.74.0: with
+> mediation on and this grant absent, the broker cannot bind its socket
+> and the whole system fails to start. The existing `filesystem.allow`
+> entry for the same directory does not cover this — that one is a plain
+> path grant with no bearing on bind once mediation is on.
+>
 > **`~/.docker` moved here from the floor's own `filesystem.read`,** where
 > it used to sit next to `~/.orbstack` — neither path exists on this host,
 > so that floor grant conferred nothing, and the `bypass_protection` opt-in

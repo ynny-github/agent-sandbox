@@ -106,7 +106,21 @@
       // catalog `bypass`: these prefixes are protected by nono, and a grant
       // against one is refused without this opt-in.
       "~/.bashrc"                              // capability: bashrc
-    ]
+    ],
+
+    // Paired with "linux": { "af_unix_mediation": "pathname" } below — see
+    // that key's comment for what the pair is carried for and what it does
+    // not yet do. This grant is mandatory the moment mediation is
+    // "pathname", not redundant with the plain "~/.local/state/agent-sandbox"
+    // entry under "allow" above: pathname mediation gates AF_UNIX *bind* as
+    // well as connect, and the broker binds its own socket in this same
+    // directory at startup. Measured on nono 0.74.0, with mediation set to
+    // "pathname" and this entry absent: the broker fails to bind its
+    // socket and the whole system fails to start. Do not delete this
+    // thinking the "allow" entry already covers it — that one is a plain
+    // path grant with no bearing on bind once mediation is on; this one is
+    // the bind grant mediation specifically requires, and both are needed.
+    "unix_socket_dir_bind": ["~/.local/state/agent-sandbox"]
   },
 
   "environment": {
@@ -169,6 +183,49 @@
       "api.github.com"                  // release listings mise resolves tools through
     ]
   },
+
+  // The hole this is carried for: Tool Sandbox's child sandboxes carry NO
+  // AF_UNIX mediation at all on this host's nono, so any declared command's
+  // child can speak to host unix sockets, docker.sock included, which is
+  // root-equivalent. Measured on nono 0.74.0: the FLOOR mediates it —
+  // `curl -s --unix-socket /var/run/docker.sock http://localhost/version`,
+  // run at the floor, is refused ("no matching unix_socket capability",
+  // exit 7) — but the identical curl, run through `bash -c` or `sh -c`
+  // (both declared commands below, neither one named docker), reaches the
+  // daemon and prints its version JSON. Not about the `docker` name: a raw
+  // python3 AF_UNIX connect to the same socket from inside `bash`, no
+  // docker binary involved anywhere, reaches it too. `bash -c 'docker ps'`
+  // is already refused by can_use — that is a different, and much
+  // narrower, guarantee than "the socket is gated."
+  //
+  // "af_unix_mediation": "pathname" is nono's session-level switch for
+  // AF_UNIX mediation, default Off. It is session-wide by construction, not
+  // per-command: a command policy's own child sandbox ("sandbox" object
+  // under command_policies.commands above) has no connect-side field of
+  // its own to express this — nono's CommandSandboxConfig carries only
+  // unix_socket_bind (a bind grant, not a connect gate), and only since
+  // nono 0.76.0 (PR #1780). On 0.74.0, the child schema does not have that
+  // field at all, so there is no per-command way to ask for connect-side
+  // mediation even if this switch is flipped on.
+  //
+  // Consequently: on this host, TODAY, with nono 0.74.0, the hole above is
+  // STILL OPEN with this key present. Measured, 3/3 runs: with this line
+  // and the matching filesystem.unix_socket_dir_bind grant above both
+  // applied, `bash -c '<the curl above>'` still reaches the daemon and
+  // prints its version JSON, unchanged from before this key existed. This
+  // key is carried for the nono version this repository intends to move
+  // to, on the premise that a session-level switch plus a future
+  // connect-side child field closes it there — that outcome is NOT
+  // verified here. nono 0.77.0 builds on this host but cannot start Tool
+  // Sandbox at all on NixOS ("failed to resolve ELF dependency
+  // 'libgcc_s.so.1' for .../shims/bash"); tmp/nono-nixos-elf-fix.patch
+  // applies cleanly to 0.77.0 and is correctly wired in, and even so no
+  // longer fixes that failure. And 0.77.0's own child schema still only
+  // has unix_socket_bind — no connect side — so a per-child connect rule
+  // remains inexpressible there too. Do not read this key's presence as a
+  // claim that upgrading nono will close the hole; it states the mechanism
+  // and carries it forward, nothing more.
+  "linux": { "af_unix_mediation": "pathname" },
 
   "command_policies": {
     "commands": {

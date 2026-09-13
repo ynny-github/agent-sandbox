@@ -692,14 +692,24 @@ already made for `git`.
 > `unix_socket_bind` — no connect side — so a per-child connect rule
 > remains inexpressible there too.
 >
-> **`unix_socket_dir_bind` is mandatory, not redundant, once
-> `af_unix_mediation` is `"pathname"`.** Pathname mediation gates AF_UNIX
-> bind as well as connect, and the command broker binds its own socket in
-> `~/.local/state/agent-sandbox` at startup. Measured on nono 0.74.0: with
-> mediation on and this grant absent, the broker cannot bind its socket
-> and the whole system fails to start. The existing `filesystem.allow`
-> entry for the same directory does not cover this — that one is a plain
-> path grant with no bearing on bind once mediation is on.
+> **`filesystem.unix_socket_dir_bind` is carried for a broker started
+> without the launcher's own bind flag — it is not what makes the real
+> launch path work today.** The command broker binds its own socket in
+> `~/.local/state/agent-sandbox` at startup. On nono 0.74.0, a broker
+> started without `--allow-unix-socket-bind` has that bind refused unless
+> this grant is present — measured true with `af_unix_mediation` present,
+> and equally true with it absent entirely; the bind gate is not tied to
+> mediation being on. It is NOT load-bearing for the one production launch
+> path this repository actually uses: `BrokerArgs`
+> (`agent-sandbox/internal/claude/launch.go`, around line 511) always
+> passes `--allow-unix-socket-bind` itself, and through that flag the
+> broker binds and the round trip is clean whether or not this grant is
+> present — measured. This entry exists so the profile stands on its own
+> for a broker started some other way — by hand, or by something other
+> than `agent-sandbox claude` — where no launcher flag covers it. Not
+> redundant with the plain `~/.local/state/agent-sandbox` entry under
+> `filesystem.allow` above: that one is a read/write path grant and says
+> nothing about bind.
 >
 > **`~/.docker` moved here from the floor's own `filesystem.read`,** where
 > it used to sit next to `~/.orbstack` — neither path exists on this host,

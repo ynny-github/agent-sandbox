@@ -644,16 +644,32 @@ already made for `git`.
 > "sandboxes docker" in the sense the other entries sandbox their own
 > command.
 >
-> **No unix-socket capability is declared, and none is needed.** nono
-> mediates AF_UNIX connections, but measured, `exec_paths` alone is what
-> lets `docker ps` reach `/var/run/docker.sock` from this entry's child
-> sandbox — there is no `filesystem.unix_socket` grant anywhere in this
-> file. The floor cannot do the same: `curl -s --unix-socket
-> /var/run/docker.sock http://localhost/version`, run at the floor, is
-> refused with "no matching unix_socket capability", exit 7 — measured both
-> before and after this entry existed. What actually gates reaching the
-> daemon is Tool Sandbox's own command-identity check (is this invocation
-> `docker`, and does its `exec_paths` resolve), not a socket-specific rule.
+> **No unix-socket capability is declared for `docker`, and none is needed
+> for `docker` itself** — but that is a narrower, and more honest, claim
+> than "the socket is gated." Measured, `exec_paths` alone is what lets
+> `docker ps` reach `/var/run/docker.sock` from this entry's child sandbox;
+> there is no `filesystem.unix_socket` grant anywhere in this file. The
+> **floor** is unix-socket mediated and refuses it: `curl -s
+> --unix-socket /var/run/docker.sock http://localhost/version`, run at the
+> floor, is refused with "no matching unix_socket capability", exit 7.
+>
+> **But Tool Sandbox's child sandboxes carry no unix-socket mediation at
+> all — not just this entry's, and this entry did not create the gap.**
+> The identical `curl` command, run through `bash -c` or `sh -c` (both
+> already-declared commands, each able to exec `curl` off their own
+> `/nix/store`/`/run/current-system/sw` `exec_paths`), reaches the daemon
+> and gets a real response, with no `filesystem.unix_socket` grant on
+> either entry — measured. This predates `docker`'s entry: it was
+> introduced the moment `bash`/`sh` became declared commands, not by
+> declaring `docker` here. Do not read this entry as the thing gating
+> daemon access — narrowing or deleting it would not close that route,
+> and adding it did not open a new one. What this entry actually bounds is
+> which command may run under the *name* `docker`, with `exec_paths` that
+> reach the daemon directly by that name, without going through `bash`/
+> `sh` first. `bash`/`sh` being able to exec `curl` (or any other
+> socket-speaking binary) off their own `exec_paths` is part of that
+> picture, and is a deliberate grant those entries already made, not a
+> leak this one introduced.
 >
 > **`~/.docker` moved here from the floor's own `filesystem.read`,** where
 > it used to sit next to `~/.orbstack` — neither path exists on this host,
@@ -695,22 +711,29 @@ entry above, since a profile can only declare one `docker` command policy:
 }
 ```
 
-Two things worth knowing before choosing that shape over the direct entry
-this repository ships. First, the wrapper's checks (`internal/safe/dockercompose`
-and `cmd/safe_docker.go`; read the source for the exact, current rule set —
-`--help` passes straight through to real docker and prints docker's own
-help, never the wrapper's rule set: the plain `docker` path never
-intercepts it because the wrapper disables its own flag parsing, and the
-`compose` path skips model resolution outright once it sees `--help`, since
-help executes nothing and needs no model) are argv/model-level, not
-filesystem-level: a `compose` invocation is checked against its *resolved*
-model (`docker compose config`) — host-path mounts, the Docker socket,
-`privileged`, host `network`/`pid`/`ipc`, dangerous capabilities, disabled
-seccomp/apparmor — and every other invocation is checked at the argv level
-for `run`/`exec`, `--privileged`, and a host-path or Docker-socket bind
-mount.
+Three things worth knowing before choosing that shape over the direct entry
+this repository ships. First, the `realdocker` `executable` above is
+deliberately `libexec/docker/docker`, not the more obvious `bin/docker`: on
+NixOS, `bin/docker` is a small stub that re-execs `libexec/docker/docker`
+by absolute path, and nono's per-command Landlock rule set (built from the
+pinned executable's own direct library dependencies) does not cover that
+second, indirectly invoked path — pinning the stub crashes every
+invocation, silently (`execve(...) = -1 EACCES`, reported only as "Command
+exited with code 255"). Second, the wrapper's checks
+(`internal/safe/dockercompose` and `cmd/safe_docker.go`; read the source
+for the exact, current rule set — `--help` passes straight through to real
+docker and prints docker's own help, never the wrapper's rule set: the
+plain `docker` path never intercepts it because the wrapper disables its
+own flag parsing, and the `compose` path skips model resolution outright
+once it sees `--help`, since help executes nothing and needs no model) are
+argv/model-level, not filesystem-level: a `compose` invocation is checked
+against its *resolved* model (`docker compose config`) — host-path mounts,
+the Docker socket, `privileged`, host `network`/`pid`/`ipc`, dangerous
+capabilities, disabled seccomp/apparmor — and every other invocation is
+checked at the argv level for `run`/`exec`, `--privileged`, and a host-path
+or Docker-socket bind mount.
 
-Second, and this is the one that matters most given the root-equivalence
+Third, and this is the one that matters most given the root-equivalence
 fact above: the wrapper's checks, if wired in, would still have two known
 gaps.
 - `docker create` followed by `docker start` reaches the same running

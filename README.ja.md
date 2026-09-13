@@ -697,17 +697,35 @@ docker ビルドは nixpkgs が更新されるたびにハッシュが変わり�
 > エントリが自分のコマンドをサンドボックス化するのと同じ意味で「docker
 > をサンドボックス化」してはいません。
 >
-> **unix ソケットの capability は宣言されておらず、必要でもありません。**
-> nono は AF_UNIX の接続を仲介しますが、実測したところ、`docker ps` が
-> このエントリの子サンドボックスから `/var/run/docker.sock` へ到達できて
-> いるのは `exec_paths` だけの働きです — このファイルのどこにも
-> `filesystem.unix_socket` の許可はありません。フロアは同じことができ
-> ません: フロアで実行した `curl -s --unix-socket /var/run/docker.sock
-> http://localhost/version` は「no matching unix_socket capability」で
-> 拒否され、終了コードは 7 です — このエントリが存在する前も後も、実測
-> して同じでした。デーモンへの到達を実際に制限しているのは、ソケット
-> 専用のルールではなく、Tool Sandbox 自身のコマンド識別チェック (この
-> 呼び出しは `docker` か、その `exec_paths` は解決するか) です。
+> **`docker` 自体には unix ソケットの capability は宣言されておらず、
+> `docker` 自体にはそれで十分です** — ただしこれは「ソケットが制限されて
+> いる」よりずっと狭い、より正直な主張です。実測したところ、`docker ps`
+> がこのエントリの子サンドボックスから `/var/run/docker.sock` へ到達
+> できているのは `exec_paths` だけの働きです。このファイルのどこにも
+> `filesystem.unix_socket` の許可はありません。**フロア** は unix ソケット
+> を仲介しており、これを拒否します: フロアで実行した `curl -s
+> --unix-socket /var/run/docker.sock http://localhost/version` は
+> 「no matching unix_socket capability」で拒否され、終了コードは 7 です。
+>
+> **しかし Tool Sandbox の子サンドボックスには unix ソケットの仲介が
+> 一切ありません — このエントリだけの話ではなく、このエントリがその
+> 穴を作ったわけでもありません。** 同じ `curl` コマンドを `bash -c` や
+> `sh -c` (どちらもすでに宣言済みのコマンドで、それぞれ自分自身の
+> `/nix/store`/`/run/current-system/sw` の `exec_paths` から `curl` を
+> exec できます) 経由で実行すると、デーモンへ到達して本物の応答を得ます
+> — どちらのエントリにも `filesystem.unix_socket` の許可はありません。
+> 実測しました。これは `docker` のエントリより前から存在します: `bash`/
+> `sh` が宣言済みコマンドになった瞬間に生まれたものであり、ここで
+> `docker` を宣言したことで生まれたものではありません。このエントリを
+> デーモンへの到達を制限しているものだと読まないでください — このエントリ
+> を狭めても削除しても、その経路は閉じません。逆に、このエントリを
+> 加えたことで新しい経路が開いたわけでもありません。このエントリが実際に
+> 制限しているのは、*`docker` という名前* でどのコマンドが動けるか、
+> つまり `bash`/`sh` を経由せずにその名前で直接デーモンへ到達できる
+> `exec_paths` を誰が持てるか、という狭い範囲です。`bash`/`sh` が自分の
+> `exec_paths` から `curl` (あるいは他のソケットを話せるバイナリ) を
+> exec できることもこの全体像の一部であり、それはこのエントリが生んだ
+> 漏れではなく、それらのエントリがすでに下していた意図的な許可です。
 >
 > **`~/.docker` はフロア自身の `filesystem.read` からここへ移動しました。**
 > 以前は `~/.orbstack` と並んでそこにありましたが、どちらのパスもこの
@@ -751,23 +769,30 @@ docker ビルドは nixpkgs が更新されるたびにハッシュが変わり�
 }
 ```
 
-その形を上の直接エントリより選ぶ前に知っておくべきことが 2 つあります。
-第一に、ラッパーのチェック (`internal/safe/dockercompose` と
-`cmd/safe_docker.go`。正確で最新のルールセットはソースを読んでください —
-`--help` は実 docker にそのまま通り、ラッパーのルールセットではなく
-docker 自身のヘルプを表示します: 通常の `docker` の経路では、ラッパーが
-自分自身のフラグ解析を無効にしているためそもそも横取りされず、`compose`
-の経路では、`--help` を見た時点でモデル解決自体を丸ごとスキップします —
-ヘルプは何も実行しないので、モデルを必要としないからです) は argv・
-モデルレベルであり、ファイルシステムレベルではありません: `compose` の
-呼び出しは *解決済みの* モデル (`docker compose config`) に照らして
-チェックされます — ホストパスのマウント、Docker ソケット、`privileged`、
-ホストの `network`/`pid`/`ipc`、危険な capability、無効化された
-seccomp/apparmor。それ以外のすべての呼び出しは argv レベルで `run`/`exec`、
-`--privileged`、ホストパスまたは Docker ソケットへのバインドマウントを
-チェックします。
+その形を上の直接エントリより選ぶ前に知っておくべきことが 3 つあります。
+第一に、上の `realdocker` の `executable` は意図的に `bin/docker` ではなく
+`libexec/docker/docker` になっています: NixOS では `bin/docker` は絶対
+パスで `libexec/docker/docker` に re-exec するだけの小さなスタブで、
+nono のコマンドごとの Landlock ルールセット (固定した実行ファイル自身の
+直接的なライブラリ依存関係から構築される) はこの間接的に呼び出される
+第二のパスを許可しません — スタブを固定するとすべての呼び出しが黙って
+クラッシュします (`execve(...) = -1 EACCES`、"Command exited with code
+255" としか報告されません)。第二に、ラッパーのチェック
+(`internal/safe/dockercompose` と `cmd/safe_docker.go`。正確で最新の
+ルールセットはソースを読んでください — `--help` は実 docker にそのまま
+通り、ラッパーのルールセットではなく docker 自身のヘルプを表示します:
+通常の `docker` の経路では、ラッパーが自分自身のフラグ解析を無効にして
+いるためそもそも横取りされず、`compose` の経路では、`--help` を見た
+時点でモデル解決自体を丸ごとスキップします — ヘルプは何も実行しないので、
+モデルを必要としないからです) は argv・モデルレベルであり、ファイル
+システムレベルではありません: `compose` の呼び出しは *解決済みの* モデル
+(`docker compose config`) に照らしてチェックされます — ホストパスの
+マウント、Docker ソケット、`privileged`、ホストの `network`/`pid`/`ipc`、
+危険な capability、無効化された seccomp/apparmor。それ以外のすべての
+呼び出しは argv レベルで `run`/`exec`、`--privileged`、ホストパスまたは
+Docker ソケットへのバインドマウントをチェックします。
 
-第二に、これが上の root 相当という事実を踏まえると最も重要です:
+第三に、これが上の root 相当という事実を踏まえると最も重要です:
 ラッパーを組み込んだとしても、そのチェックには既知の抜け穴が 2 つ残り
 ます。
 - `docker create` の後に `docker start` を実行すると、個々の呼び出しの

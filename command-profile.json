@@ -22,8 +22,11 @@
       "node_runtime",     // capability: node
       "rust_runtime",     // capability: rust
       "mise_manager"      // capability: mise (read side; env vars below)
-      // dart, flutter, docker, ssh and bashrc have no nono group — they spell
-      // out their paths in filesystem below.
+      // dart, flutter and bashrc have no nono group — they spell out their
+      // paths in filesystem below. docker and ssh have no nono group
+      // either, but neither spells its paths out in filesystem any more:
+      // both are declared commands now, and spell their paths out under
+      // command_policies.commands instead.
     ]
   },
 
@@ -504,14 +507,33 @@
       // below with that distinction in mind: nothing here "sandboxes
       // docker" in the sense the other entries sandbox their own command.
       //
-      // No unix-socket grant appears here, and none is needed: exec_paths
-      // alone is what lets docker reach /var/run/docker.sock — measured,
-      // `docker ps` reaches the daemon from this child sandbox with no
-      // filesystem.unix_socket entry anywhere in this file. The floor
-      // cannot do the same: a floor `curl -s --unix-socket
-      // /var/run/docker.sock http://localhost/version` is refused with
-      // "no matching unix_socket capability", exit 7, both before and
-      // after this entry existed. Measured.
+      // No unix-socket grant appears here, and none is needed for docker
+      // itself: exec_paths alone is what lets docker reach
+      // /var/run/docker.sock — measured, `docker ps` reaches the daemon
+      // from this child sandbox with no filesystem.unix_socket entry
+      // anywhere in this file. The FLOOR is unix-socket mediated and
+      // refuses it: `curl -s --unix-socket /var/run/docker.sock
+      // http://localhost/version`, run at the floor, is refused with "no
+      // matching unix_socket capability", exit 7, both before and after
+      // this entry existed. Measured.
+      //
+      // But Tool Sandbox's child sandboxes carry NO unix-socket mediation
+      // AT ALL — this is not specific to docker's own entry, and this
+      // entry does not create it. The identical curl command, run through
+      // `bash -c` or `sh -c` (both already-declared commands, each able to
+      // exec `curl` off their own /nix/store or /run/current-system/sw
+      // exec_paths), reaches the daemon and gets a real response, with no
+      // filesystem.unix_socket grant on either entry. This gap predates
+      // this entry — it was introduced the moment bash/sh became declared
+      // commands, not by adding docker here — so do NOT read this entry as
+      // the thing gating daemon access: deleting or narrowing it would not
+      // close that route, and did not open it either. What this entry
+      // actually bounds is narrower and more honest: which command may run
+      // under the *name* docker, with exec_paths that reach the daemon
+      // directly by that name, without first going through bash/sh.
+      // bash/sh being able to exec curl (or any other socket-speaking
+      // binary) off their own exec_paths is part of that picture, and is a
+      // deliberate grant, not a leak of this one. Measured.
       //
       // ~/.docker moved here from the floor's own filesystem.read (it used
       // to sit there next to `~/.orbstack`; neither path exists on this

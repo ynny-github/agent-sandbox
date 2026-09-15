@@ -9,7 +9,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
+	"time"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
@@ -25,11 +27,113 @@ import (
 // Everything the shell language does with the filesystem — globbing, redirects,
 // command substitution — is performed here and is therefore bounded by the
 // broker's own sandbox, not by the agent's.
-type ShellExecutor struct{}
+type ShellExecutor struct {
+	// pacer is shared by every request this executor serves, which is what
+	// makes it process-wide: cmd/broker.go builds exactly one ShellExecutor
+	// and hands it to the server, whose Serve spawns a goroutine per
+	// connection. The budget being paced belongs to the one nono session all
+	// of those goroutines launch into, so a per-request limiter would not
+	// bound anything.
+	pacer *launchPacer
+}
 
-// NewShellExecutor returns a ShellExecutor. It holds no state; one value serves
-// every request.
-func NewShellExecutor() *ShellExecutor { return &ShellExecutor{} }
+// PolicyLaunchBurst and PolicyLaunchInterval pace how fast policy-controlled
+// commands may be launched: PolicyLaunchBurst of them may start with no wait
+// at all, and the budget refills at one launch per PolicyLaunchInterval. See
+// launchPacer for what is being rationed and how the numbers were arrived at.
+const (
+	PolicyLaunchBurst    = 4
+	PolicyLaunchInterval = 500 * time.Millisecond
+)
+
+// NewShellExecutor returns a ShellExecutor. Its only state is the launch pacer
+// below, which is deliberately per-executor rather than per-request: see the
+// pacer field.
+func NewShellExecutor() *ShellExecutor { return &ShellExecutor{pacer: &launchPacer{}} }
+
+// launchPacer rations how fast policy-controlled commands are launched.
+//
+// The defect it exists for, measured on nono 0.77.0 / Ubuntu 24.04 against
+// this repository's command-profile.json: policy-controlled commands launched
+// back-to-back inside ONE nono session exhaust something the session reclaims
+// only over time, and every launch past that point dies before the command
+// itself runs, with "Sandbox initialization failed: tool-sandbox shim failed
+// to connect to <TMPDIR>/nono-tool-sandbox-<id>/supervisor.sock: Operation
+// not permitted". Measured with `git --version` run 12 times through xargs
+// inside one session:
+//
+//	~50ms apart   ooooooxxxxxx / ooooooxxxxxx / oooooxoxxxxx   (3 runs)
+//	250ms apart   oooooxoooooo
+//	500ms apart   oooooooooooo / oooooooooooo / oooooooooooo   (3 runs)
+//
+// The same 12 commands run as 12 SEPARATE `nono run` sessions are 12/12, so
+// what is exhausted belongs to the session, not to the host — and the broker
+// is one long-lived session by construction (it must be the session
+// entrypoint for the profile to govern everything it executes, and nono
+// refuses to nest), so spacing the launches is the lever this side of the
+// boundary actually has.
+//
+// The numbers: PolicyLaunchInterval is the smallest spacing measured clean,
+// and PolicyLaunchBurst is set below the 5-6 launches measured free from a
+// cold start, so a burst cannot spend the whole budget. They are not read
+// from nono, which reports nothing about this budget; re-measure before
+// changing them, and re-measure on a nono upgrade.
+//
+// Only the broker's own launches are paced, and only those need to be.
+// Measured against this profile with a synthetic `bash -> git` edge (the real
+// profile's own nesting edges are `bash`/`sh` -> `go` and `git` -> `ssh`,
+// neither cheap to drive here): a policy command launching 12 more policy
+// commands from inside its own child sandbox is 12/12, and session-level
+// launches issued immediately afterwards are 3/3 — 3 runs of both. What is
+// exhausted is spent by launches made from the session, which is exactly the
+// set execHandler makes. A different nesting shape was not measured, so treat
+// this as "the shape this repository can produce", not as a law.
+//
+// Not the trigger, despite an earlier note in this repository saying so: the
+// session's top-level "network" block. With every network key removed from
+// the profile — top-level and child alike — the same burst still fails
+// identically (3/3 runs). That earlier finding was measured on nono 0.74.0
+// and does not hold on 0.77.0.
+type launchPacer struct {
+	mu sync.Mutex
+	// ready is when the next launch may start. It runs ahead of the clock
+	// while launches are being spent and is clamped back to at most a full
+	// burst behind it, which is what "the bucket refills up to
+	// PolicyLaunchBurst" means expressed as a single instant rather than a
+	// token count and a refill timer.
+	ready time.Time
+}
+
+// wait blocks until this launch's turn, or until ctx is done. It reports
+// whether the launch may proceed; false means ctx ended the wait and the
+// caller must not start the command.
+//
+// The turn is claimed under the lock and waited for outside it, so concurrent
+// callers queue in the order they arrived rather than all racing for the same
+// instant.
+func (p *launchPacer) wait(ctx context.Context) bool {
+	p.mu.Lock()
+	now := time.Now()
+	if floor := now.Add(-(PolicyLaunchBurst - 1) * PolicyLaunchInterval); p.ready.Before(floor) {
+		p.ready = floor
+	}
+	at := p.ready
+	p.ready = p.ready.Add(PolicyLaunchInterval)
+	p.mu.Unlock()
+
+	d := time.Until(at)
+	if d <= 0 {
+		return true
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
 
 // Run evaluates command with cwd as the working directory, streaming output to
 // stdout and stderr, and returns the exit status of the last command.
@@ -72,7 +176,7 @@ func (e *ShellExecutor) Run(ctx context.Context, command, cwd string,
 	runner, err := interp.New(
 		interp.Dir(cwd),
 		interp.StdIO(stdin, stdout, stderr),
-		interp.ExecHandler(execHandler),
+		interp.ExecHandler(e.execHandler),
 	)
 	if err != nil {
 		return 0, fmt.Errorf("broker: build interpreter: %w", err)
@@ -207,7 +311,7 @@ func flattenPipeStages(bc *syntax.BinaryCmd) []*syntax.Stmt {
 
 // execHandler is the only place this process performs an execve. Everything the
 // interpreter treats as a simple command — and nothing else — arrives here.
-func execHandler(ctx context.Context, args []string) error {
+func (e *ShellExecutor) execHandler(ctx context.Context, args []string) error {
 	hc := interp.HandlerCtx(ctx)
 
 	// LookPathDir resolves against hc.Dir and hc.Env rather than this process's
@@ -218,6 +322,13 @@ func execHandler(ctx context.Context, args []string) error {
 	if err != nil {
 		fmt.Fprintf(hc.Stderr, "agent-sandbox: %s: command not found\n", args[0])
 		return interp.NewExitStatus(127)
+	}
+
+	// Pace only the policy-controlled commands: they are the ones whose
+	// launch spends the session budget launchPacer rations, and delaying a
+	// floor command would buy nothing.
+	if isPolicyControlledPath(path) && !e.pacer.wait(ctx) {
+		return interp.NewExitStatus(126)
 	}
 
 	cmd := exec.CommandContext(ctx, path, args[1:]...)

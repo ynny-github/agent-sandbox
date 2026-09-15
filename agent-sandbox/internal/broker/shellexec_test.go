@@ -484,3 +484,101 @@ func TestShellExecutorAllowsABuiltinPipedToAPolicyCommand(t *testing.T) {
 		t.Errorf("stdout = %q, want %q", out, "hello")
 	}
 }
+
+// TestShellExecutorPacesConsecutivePolicyCommands covers the launch-rate
+// defect measured on nono 0.77.0 (Ubuntu 24.04, this repository's
+// command-profile.json): policy-controlled commands launched back-to-back
+// inside one nono session exhaust something the session reclaims only over
+// time, and the shim for every launch past that point fails with "Sandbox
+// initialization failed: tool-sandbox shim failed to connect to
+// .../supervisor.sock". Measured with `git --version` run 12 times through
+// xargs in a single session: at ~50ms apart, 6 succeed and the rest fail
+// (3/3 runs); at 500ms apart, 12/12 succeed (3/3 runs). Spacing the launches
+// is what avoids it, so that is what this asserts.
+func TestShellExecutorPacesConsecutivePolicyCommands(t *testing.T) {
+	dir := t.TempDir()
+	shimsDir := fakePolicyShim(t, dir, "pacing-test", "fakepolicy")
+	t.Setenv("PATH", shimsDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	line := strings.TrimSuffix(strings.Repeat("fakepolicy; ", broker.PolicyLaunchBurst+2), "; ")
+	start := time.Now()
+	code, _, errOut := runShell(t, dir, line, "")
+	elapsed := time.Since(start)
+
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0 (stderr: %q)", code, errOut)
+	}
+	if want := 2 * broker.PolicyLaunchInterval; elapsed < want {
+		t.Errorf("elapsed = %v, want at least %v: the two launches past the burst should each wait for the bucket to refill", elapsed, want)
+	}
+}
+
+// TestShellExecutorDoesNotPaceFloorCommands guards the other side of the
+// pacing rule: only policy-controlled commands spend the session budget
+// launchPacer rations, so a line made of floor commands must run at full
+// speed. A regression here would slow every command the broker serves.
+func TestShellExecutorDoesNotPaceFloorCommands(t *testing.T) {
+	dir := t.TempDir()
+
+	// cat, not the `true` builtin: a builtin never reaches the exec handler
+	// at all, so it could not show a pacing regression even if one existed.
+	line := strings.TrimSuffix(strings.Repeat("cat /dev/null; ", broker.PolicyLaunchBurst+2), "; ")
+	start := time.Now()
+	code, _, errOut := runShell(t, dir, line, "")
+	elapsed := time.Since(start)
+
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0 (stderr: %q)", code, errOut)
+	}
+	if elapsed >= broker.PolicyLaunchInterval {
+		t.Errorf("elapsed = %v, want well under %v: floor commands must not be paced", elapsed, broker.PolicyLaunchInterval)
+	}
+}
+
+// TestShellExecutorStopsPacingWhenTheContextIsCancelled covers the broker's
+// own cancellation path: Server.handle cancels the request context when the
+// client goes away, and a pacing wait that ignored it would keep a dead
+// request's line crawling through its remaining launches, one per interval.
+func TestShellExecutorStopsPacingWhenTheContextIsCancelled(t *testing.T) {
+	dir := t.TempDir()
+	shimsDir := fakePolicyShim(t, dir, "pacing-cancel-test", "fakepolicy")
+	t.Setenv("PATH", shimsDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	// Six launches past the burst: finishing this line unpaced-by-nothing
+	// would take six intervals of waiting.
+	line := strings.TrimSuffix(strings.Repeat("fakepolicy; ", broker.PolicyLaunchBurst+6), "; ")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		time.Sleep(PolicyLaunchCancelDelay)
+		cancel()
+	}()
+
+	var out, errb syncBuffer
+	var in io.Reader
+	start := time.Now()
+	code, err := broker.NewShellExecutor().Run(ctx, line, dir, in, &out, &errb)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("Run(): %v", err)
+	}
+	if code == 0 {
+		t.Errorf("exit = 0, want non-zero: the line was cancelled partway through")
+	}
+	// The bound is what makes this test about the pacer rather than about
+	// the interpreter: mvdan.cc/sh checks the context between statements, so
+	// a pacer that ignored it would still stop the line — but only after
+	// sitting out the full interval it was already waiting. Returning inside
+	// that wait is the behaviour under test, so the bound sits between the
+	// cancellation delay and one interval.
+	if want := broker.PolicyLaunchInterval / 2; elapsed >= want {
+		t.Errorf("elapsed = %v, want under %v: the cancellation must interrupt the pacing wait, not merely follow it", elapsed, want)
+	}
+}
+
+// PolicyLaunchCancelDelay fires the cancellation above early in the first
+// paced launch's wait, leaving room to tell "the wait was interrupted" apart
+// from "the wait finished and then the line stopped".
+const PolicyLaunchCancelDelay = broker.PolicyLaunchInterval / 10

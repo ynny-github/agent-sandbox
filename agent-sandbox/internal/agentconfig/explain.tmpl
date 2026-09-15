@@ -56,9 +56,10 @@ file itself. `agent-sandbox doctor` measures the one that matters most,
   reason names the exact edge. Do not retry; ask the operator to change the
   profile.
 - **Exit 126 saying the shim `failed to connect to … supervisor.sock`** — not a
-  policy denial. A policy-controlled command invoked from deep inside nested
-  shell scripts can fail this way. Re-running the command directly, rather than
-  through the nesting, is worth one attempt.
+  policy denial. Policy-controlled commands launched in quick succession inside
+  one nono session exhaust a budget the session refills only over time. The
+  broker paces its own launches to stay under it, so this should be rare; when
+  it does appear, re-running the command is worth one attempt.
 - **Exit 127, or `Permission denied` from the program itself** — the path, host
   or binary is outside what the profile grants. Not a rule to phrase around.
 - **`agent-sandbox: refused: this pipeline pipes two or more policy-controlled

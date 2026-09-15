@@ -47,7 +47,6 @@ covers.
   - [The two profiles](#the-two-profiles)
   - [User-scope config](#user-scope-config)
 - [Environment variables (`--env`)](#environment-variables---env)
-- [GitHub MCP](#github-mcp)
 - [Development](#development)
 - [License](#license)
 
@@ -230,7 +229,7 @@ them to `nono`. See
 | `agent-sandbox claude -- [claude args...]` | Launch Claude under nono, with the command broker running as a sibling session |
 | `agent-sandbox exec -- <command>` | Send one command to the broker and stream its output |
 | `agent-sandbox doctor` | Check that `nono` works, that Tool Sandbox can actually start on this host, the broker socket can bind, both profiles exist and validate, every path the command profile pins still exists, the agent profile forwards `AGENT_SANDBOX_BROKER_SOCKET`, and the command profile does not grant write access to the broker's own binary. Exit 0 / 1 |
-| `agent-sandbox debug -- [claude args...]` | Print the `nono` invocations for both sessions and the GitHub MCP config (token redacted) — without running anything |
+| `agent-sandbox debug -- [claude args...]` | Print the `nono` invocations for both sessions — without running anything |
 | `agent-sandbox ai explain` | Agent-facing description of the sandbox: how commands run, both tiers, and every denial's reason |
 | `agent-sandbox ai config-check` | Validate `agent-sandbox.toml` and both nono profiles the way launch reads them |
 | `agent-sandbox command-router` | Start the MCP server (`tool_mode = "mcp"`) |
@@ -245,8 +244,8 @@ options to `nono` — both profiles come from the config file and the command
 profile it points at.
 
 `--settings` is reserved by `agent-sandbox` and rejected as a passthrough
-option. `--mcp-config` / `--strict-mcp-config` are rejected too when the GitHub
-MCP is enabled.
+option — it carries the PreToolUse hook that routes every command through the
+broker. Nothing else is reserved.
 
 ### `doctor`
 
@@ -364,7 +363,6 @@ their values and it passes each on the `nono wrap` command line:
 |---|---|
 | the `agent-sandbox` binary itself (`--read-file`) | the agent runs `agent-sandbox hook` and `agent-sandbox serve` as its own direct children — inside its own sandbox, not through the broker — and on a mise-managed toolchain the binary's path carries the Go version, so an upgrade renumbers it |
 | the main git directory of a worktree (`--allow`) | detected per invocation |
-| the generated GitHub MCP config (`--read-file`) | a temp file, new every launch |
 | the command broker's socket (`--allow-unix-socket`) | its name is derived from the launcher's PID |
 
 Without the first one nono refuses the execve and every command fails with
@@ -904,19 +902,6 @@ command that can reach the broker socket can recurse into the broker, which
 spawns handlers with no concurrency cap — a host-side fork bomb. A value
 silently not reaching the agent is exactly the failure this paragraph exists
 to pre-empt.
-
-## GitHub MCP
-
-The built-in GitHub MCP server is enabled when `GITHUB_MCP_TOKEN` is non-empty;
-otherwise it is not configured at all. Its value is passed to the MCP server as
-`GITHUB_PERSONAL_ACCESS_TOKEN`.
-
-```bash
-agent-sandbox claude --env file:.secrets.env -- --model opus
-# .secrets.env: GITHUB_MCP_TOKEN=ghp_...
-```
-
-`agent-sandbox debug` prints the resulting MCP config with the token redacted.
 
 ## Development
 

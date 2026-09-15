@@ -40,7 +40,7 @@ func runClaude(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("config error: %w", err)
 	}
 
-	if err := claude.ValidatePassthrough(opts.ClaudeOpts, claude.GithubMCPEnabled()); err != nil {
+	if err := claude.ValidatePassthrough(opts.ClaudeOpts); err != nil {
 		return err
 	}
 

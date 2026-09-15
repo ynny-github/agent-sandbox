@@ -78,17 +78,15 @@ func ParseArgs(args []string, defaultConfig string) (string, Options, error) {
 	return configFile, opts, nil
 }
 
-// ValidatePassthrough rejects claude passthrough options that agent-sandbox
-// reserves for itself: --settings always, and --mcp-config / --strict-mcp-config
-// when the built-in GitHub MCP config is enabled.
-func ValidatePassthrough(claudeOpts []string, githubMCPEnabled bool) error {
+// ValidatePassthrough rejects the one claude passthrough option agent-sandbox
+// reserves for itself: --settings, which carries the PreToolUse hook that
+// routes every command through the broker. --mcp-config and
+// --strict-mcp-config used to be reserved too, while agent-sandbox generated
+// an MCP config of its own; it no longer generates one, so they pass through.
+func ValidatePassthrough(claudeOpts []string) error {
 	for _, arg := range claudeOpts {
 		if strings.HasPrefix(arg, "--settings") {
 			return fmt.Errorf("--settings is not allowed")
-		}
-		if githubMCPEnabled &&
-			(strings.HasPrefix(arg, "--mcp-config") || strings.HasPrefix(arg, "--strict-mcp-config")) {
-			return fmt.Errorf("%s is not allowed when the GitHub MCP is enabled (GITHUB_MCP_TOKEN set)", arg)
 		}
 	}
 	return nil
@@ -159,8 +157,8 @@ func probeHook(profilePath, self string) error {
 // profilePath via `--profile` (no user nono options are forwarded) and, in
 // hook mode, injects the PreToolUse hook via `claude --settings`; otherwise it
 // disables the Bash and Monitor tools. The injected settings carry the hook
-// and the GitHub MCP denies only; the profile contributes nothing to them.
-func BuildArgs(cfg *config.Config, opts Options, mcpConfigPath,
+// only; the profile contributes nothing to them.
+func BuildArgs(cfg *config.Config, opts Options,
 	profilePath string, brokerSocket string) (string, []string, error) {
 	nonoPath, err := exec.LookPath("nono")
 	if err != nil {
@@ -191,9 +189,6 @@ func BuildArgs(cfg *config.Config, opts Options, mcpConfigPath,
 		}
 	}
 
-	if mcpConfigPath != "" {
-		args = append(args, "--read-file", mcpConfigPath)
-	}
 	if brokerSocket != "" {
 		args = append(args, "--allow-unix-socket", brokerSocket)
 	}
@@ -204,7 +199,7 @@ func BuildArgs(cfg *config.Config, opts Options, mcpConfigPath,
 	args = append(args, "claude")
 	args = append(args, "--append-system-prompt", agentconfig.Pointer())
 
-	settingsStr, err := settingsJSON(mcpConfigPath, cfg.ToolMode == "hook")
+	settingsStr, err := settingsJSON(cfg.ToolMode == "hook")
 	if err != nil {
 		return "", nil, err
 	}
@@ -214,9 +209,6 @@ func BuildArgs(cfg *config.Config, opts Options, mcpConfigPath,
 	if cfg.ToolMode != "hook" {
 		args = append(args, "--disallowed-tools", "Bash,Monitor")
 	}
-	if mcpConfigPath != "" {
-		args = append(args, "--strict-mcp-config", "--mcp-config", mcpConfigPath)
-	}
 
 	args = append(args, opts.ClaudeOpts...)
 	return nonoPath, args, nil
@@ -225,7 +217,6 @@ func BuildArgs(cfg *config.Config, opts Options, mcpConfigPath,
 // runDeps holds the launcher's collaborators so run can be tested without
 // touching the command broker, the real process, or os.Exit.
 type runDeps struct {
-	writeMCPConfig func(*config.Config) (string, func(), error)
 	// agentProfile resolves — and existence-checks — the nono profile the
 	// launched agent runs under. It stays a dependency so tests can drive run
 	// without touching the filesystem.
@@ -263,32 +254,15 @@ func Run(cfg *config.Config, opts Options) error {
 // the mode it applies to, and only Run builds this set.
 func defaultDeps() runDeps {
 	return runDeps{
-		writeMCPConfig: writeGithubMCPConfig,
-		agentProfile:   defaultAgentProfile,
-		verifyHook:     probeHook,
-		startBroker:    startCommandBroker,
-		supervise:      superviseProcess,
-		exit:           os.Exit,
+		agentProfile: defaultAgentProfile,
+		verifyHook:   probeHook,
+		startBroker:  startCommandBroker,
+		supervise:    superviseProcess,
+		exit:         os.Exit,
 	}
 }
 
 func run(cfg *config.Config, opts Options, d runDeps) error {
-	var mcpConfigPath string
-	var cleanupMCP func()
-	if GithubMCPEnabled() {
-		path, cleanup, err := d.writeMCPConfig(cfg)
-		if err != nil {
-			return fmt.Errorf("github mcp config: %w", err)
-		}
-		cleanupMCP = cleanup
-		mcpConfigPath = path
-	}
-	defer func() {
-		if cleanupMCP != nil {
-			cleanupMCP()
-		}
-	}()
-
 	profilePath, err := d.agentProfile(cfg)
 	if err != nil {
 		return err
@@ -314,7 +288,7 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 		}
 	}()
 
-	nonoPath, nonoArgs, err := BuildArgs(cfg, opts, mcpConfigPath, profilePath, brokerSocket)
+	nonoPath, nonoArgs, err := BuildArgs(cfg, opts, profilePath, brokerSocket)
 	if err != nil {
 		return err
 	}
@@ -325,10 +299,6 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 
 	code := d.supervise(nonoPath, nonoArgs)
 
-	if cleanupMCP != nil {
-		cleanupMCP()
-		cleanupMCP = nil
-	}
 	if cleanupBroker != nil {
 		cleanupBroker()
 		cleanupBroker = nil

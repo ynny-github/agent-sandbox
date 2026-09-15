@@ -50,7 +50,6 @@ launcher
   - [2 つのプロファイル](#2-つのプロファイル)
   - [ユーザースコープ設定](#ユーザースコープ設定)
 - [環境変数 (`--env`)](#環境変数---env)
-- [GitHub MCP](#github-mcp)
 - [開発](#開発)
 - [ライセンス](#ライセンス)
 
@@ -227,7 +226,7 @@ nono のスキーマで直接書くファイルです。agent-sandbox はその�
 | `agent-sandbox claude -- [claude の引数...]` | コマンドブローカーを兄弟セッションとして起動した状態で、nono 下に Claude を立ち上げる |
 | `agent-sandbox exec -- <command>` | コマンドを 1 つブローカーへ送り、出力をストリームする |
 | `agent-sandbox doctor` | `nono` が動作するか、このホストで実際に Tool Sandbox を起動できるか、ブローカーソケットが bind できるか、両方のプロファイルが存在し検証を通るか、コマンドプロファイルが固定しているパスがすべて存在するか、エージェント用プロファイルが `AGENT_SANDBOX_BROKER_SOCKET` を転送するか、コマンドプロファイルが自身のバイナリへの書き込みを許可していないかを確認。exit 0 / 1 |
-| `agent-sandbox debug -- [claude の引数...]` | 実行はせずに、両セッション分の `nono` コマンドと GitHub MCP 設定 (トークンは伏字) を表示 |
+| `agent-sandbox debug -- [claude の引数...]` | 実行はせずに、両セッション分の `nono` コマンドを表示 |
 | `agent-sandbox ai explain` | サンドボックスの、エージェント向け説明 — コマンドがどう動くか、2 つの階層、各拒否の理由 |
 | `agent-sandbox ai config-check` | 起動時と同じ手順で `agent-sandbox.toml` と両方の nono プロファイルを検証 |
 | `agent-sandbox command-router` | MCP サーバーを起動 (`tool_mode = "mcp"`) |
@@ -242,8 +241,8 @@ nono のスキーマで直接書くファイルです。agent-sandbox はその�
 プロファイルから決まります。
 
 `--settings` は `agent-sandbox` が予約しており、パススルーオプションとして拒否
-されます。GitHub MCP が有効なときは `--mcp-config` / `--strict-mcp-config` も
-拒否されます。
+されます — 全コマンドを broker に通す PreToolUse フックを載せているためです。
+予約しているのはこれだけです。
 
 ### `doctor`
 
@@ -386,7 +385,6 @@ profile = "claude-profile.json"
 |---|---|
 | `agent-sandbox` バイナリ自身 (`--read-file`) | エージェントは `agent-sandbox hook` と `agent-sandbox serve` を自分の直接の子として — broker 経由ではなく自分のサンドボックス内で — 実行する。mise 管理のツールチェーンではバイナリのパスに Go のバージョンが入るので、アップグレードで番号が変わる |
 | worktree の main git ディレクトリ (`--allow`) | 起動ごとに検出する |
-| 生成された GitHub MCP 設定 (`--read-file`) | 毎回新しい一時ファイル |
 | コマンドブローカーのソケット (`--allow-unix-socket`) | 名前がランチャの PID から作られる |
 
 1 つ目が無いと nono は execve を拒否し、画面に何の説明も出ないままあらゆる
@@ -983,19 +981,6 @@ agent-sandbox exec --env file:.env -- go test ./...
 上限なしにハンドラを spawn するため、ホスト側のフォーク爆弾になります。
 値が黙ってエージェントに届かない、というのがまさにこの段落が防ごうとして
 いる失敗です。
-
-## GitHub MCP
-
-組み込みの GitHub MCP サーバーは、`GITHUB_MCP_TOKEN` が空でないときに有効になります。
-空の場合はそもそも設定されません。値は `GITHUB_PERSONAL_ACCESS_TOKEN` として MCP
-サーバーに渡されます。
-
-```bash
-agent-sandbox claude --env file:.secrets.env -- --model opus
-# .secrets.env の中身: GITHUB_MCP_TOKEN=ghp_...
-```
-
-`agent-sandbox debug` は、トークンを伏字にした MCP 設定を表示します。
 
 ## 開発
 

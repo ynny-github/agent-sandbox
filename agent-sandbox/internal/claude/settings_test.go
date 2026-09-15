@@ -2,12 +2,11 @@ package claude
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 )
 
 func TestHookSettingsJSON(t *testing.T) {
-	got, err := settingsJSON("", true)
+	got, err := settingsJSON(true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -47,73 +46,12 @@ func TestHookSettingsJSON(t *testing.T) {
 	}
 }
 
-func TestSettingsJSON_DenyRuleForMCPPath(t *testing.T) {
-	got, err := settingsJSON("/tmp/asb-mcp-1.json", false)
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
-	if !strings.Contains(got, `"deny"`) || !strings.Contains(got, "Read(//tmp/asb-mcp-1.json)") {
-		t.Errorf("settings missing deny rule for the mcp path; got %q", got)
-	}
-	if strings.Contains(got, "PreToolUse") {
-		t.Errorf("non-hook settings should not contain hooks; got %q", got)
-	}
-}
-
-func TestSettingsJSON_HookAndDenyCombined(t *testing.T) {
-	got, err := settingsJSON("/tmp/asb-mcp-1.json", true)
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
-	if !strings.Contains(got, "PreToolUse") {
-		t.Errorf("hook mode should include PreToolUse; got %q", got)
-	}
-	if !strings.Contains(got, "Read(//tmp/asb-mcp-1.json)") {
-		t.Errorf("should include the deny rule; got %q", got)
-	}
-}
-
 func TestSettingsJSON_EmptyWhenNothing(t *testing.T) {
-	got, err := settingsJSON("", false)
+	got, err := settingsJSON(false)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
 	if got != "" {
 		t.Errorf("expected empty settings, got %q", got)
-	}
-}
-
-func TestDenyReadRule(t *testing.T) {
-	if r := denyReadRule("/tmp/x.json"); r != "Read(//tmp/x.json)" {
-		t.Errorf("denyReadRule = %q, want Read(//tmp/x.json)", r)
-	}
-}
-
-func TestSettingsJSON_BlocksGithubRepoWritesWhenMCPActive(t *testing.T) {
-	got, err := settingsJSON("/tmp/asb-mcp-1.json", false)
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
-	for _, tool := range []string{
-		"mcp__github__create_or_update_file",
-		"mcp__github__delete_file",
-		"mcp__github__push_files",
-		"mcp__github__create_branch",
-		"mcp__github__create_repository",
-		"mcp__github__fork_repository",
-	} {
-		if !strings.Contains(got, tool) {
-			t.Errorf("expected deny rule for %s; got %q", tool, got)
-		}
-	}
-}
-
-func TestSettingsJSON_NoGithubDenyWithoutMCP(t *testing.T) {
-	got, err := settingsJSON("", true)
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
-	if strings.Contains(got, "mcp__github__") {
-		t.Errorf("no github write deny expected when MCP config absent; got %q", got)
 	}
 }

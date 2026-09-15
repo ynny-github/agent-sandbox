@@ -125,26 +125,6 @@ func captureStdout(t *testing.T, fn func()) string {
 	return <-done
 }
 
-func TestFormatGeneratedConfigs_EnabledMCP(t *testing.T) {
-	mcp := []byte(`{"mcpServers":{"github":{"env":{"GITHUB_PERSONAL_ACCESS_TOKEN":"***redacted***"}}}}`)
-	out := formatGeneratedConfigs(true, mcp)
-	for _, want := range []string{
-		"# github mcp config (enabled; token redacted):",
-		"***redacted***",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("output missing %q; got:\n%s", want, out)
-		}
-	}
-}
-
-func TestFormatGeneratedConfigs_MCPDisabledLabel(t *testing.T) {
-	out := formatGeneratedConfigs(false, []byte(`{"b":2}`))
-	if !strings.Contains(out, "# github mcp config (disabled; token redacted):") {
-		t.Errorf("expected disabled label; got:\n%s", out)
-	}
-}
-
 // debug must print the profile path the launcher will actually pass, so the
 // value can be pasted straight into `nono profile show`.
 func TestRunDebug_PrintsTheConfiguredAgentProfilePath(t *testing.T) {

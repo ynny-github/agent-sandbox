@@ -2,8 +2,6 @@
 package cmd
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -52,7 +50,7 @@ func runDebug(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	_, nonoArgs, err := claude.BuildArgs(cfg, opts, "", profilePath, brokerSocket)
+	_, nonoArgs, err := claude.BuildArgs(cfg, opts, profilePath, brokerSocket)
 	if err != nil {
 		return err
 	}
@@ -70,11 +68,6 @@ func runDebug(cmd *cobra.Command, args []string) error {
 	fmt.Fprintln(cmd.OutOrStdout(), "  "+strings.Join(
 		claude.BrokerArgs(cfg, nonoPathForDisplay(), selfPath, brokerSocket, cwd), " "))
 
-	mcpJSON, err := claude.RedactedGithubMCPConfigJSON()
-	if err != nil {
-		return err
-	}
-	fmt.Print(formatGeneratedConfigs(claude.GithubMCPEnabled(), mcpJSON))
 	return nil
 }
 
@@ -87,31 +80,4 @@ func nonoPathForDisplay() string {
 		return path
 	}
 	return "nono"
-}
-
-// formatGeneratedConfigs renders the token-redacted GitHub MCP config — the
-// only file agent-sandbox still generates — for display under the debug
-// command. The token is always redacted; it never reaches the terminal. The
-// nono profiles are not shown here: they are files on disk, named in the
-// invocation above, and `nono profile show <path>` is what resolves one.
-func formatGeneratedConfigs(mcpEnabled bool, mcpJSON []byte) string {
-	var b strings.Builder
-	state := "disabled"
-	if mcpEnabled {
-		state = "enabled"
-	}
-	fmt.Fprintf(&b, "\n# github mcp config (%s; token redacted):\n", state)
-	b.WriteString(indentJSON(mcpJSON))
-	b.WriteString("\n")
-	return b.String()
-}
-
-// indentJSON pretty-prints compact JSON; on any error it returns the input
-// unchanged so display never fails.
-func indentJSON(raw []byte) string {
-	var buf bytes.Buffer
-	if err := json.Indent(&buf, raw, "", "  "); err != nil {
-		return string(raw)
-	}
-	return buf.String()
 }

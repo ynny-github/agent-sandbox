@@ -15,59 +15,43 @@ import (
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 )
 
-// TestMain clears GITHUB_MCP_TOKEN so the package's tests are hermetic: run()
-// gates the github MCP path on GithubMCPEnabled(), which reads this variable,
-// and an ambient token would otherwise drive tests that don't inject a
-// writeMCPConfig dep into that path. Tests exercising the MCP path set the
-// variable explicitly with t.Setenv.
-func TestMain(m *testing.M) {
-	os.Unsetenv("GITHUB_MCP_TOKEN")
-	os.Exit(m.Run())
-}
-
 func TestValidatePassthrough_SettingsBlocked(t *testing.T) {
-	if err := ValidatePassthrough([]string{"--settings", "foo.json"}, false); err == nil {
+	if err := ValidatePassthrough([]string{"--settings", "foo.json"}); err == nil {
 		t.Fatal("expected error for --settings, got nil")
 	}
 }
 
 func TestValidatePassthrough_SettingsEqualBlocked(t *testing.T) {
-	if err := ValidatePassthrough([]string{"--settings=foo.json"}, false); err == nil {
+	if err := ValidatePassthrough([]string{"--settings=foo.json"}); err == nil {
 		t.Fatal("expected error for --settings=..., got nil")
 	}
 }
 
 func TestValidatePassthrough_AllowsOtherArgs(t *testing.T) {
-	if err := ValidatePassthrough([]string{"--print", "--model", "opus"}, false); err != nil {
+	if err := ValidatePassthrough([]string{"--print", "--model", "opus"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func TestValidatePassthrough_Empty(t *testing.T) {
-	if err := ValidatePassthrough(nil, false); err != nil {
+	if err := ValidatePassthrough(nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-func TestValidatePassthrough_MCPConfigBlockedWhenEnabled(t *testing.T) {
-	if err := ValidatePassthrough([]string{"--mcp-config", "x.json"}, true); err == nil {
-		t.Fatal("expected error for --mcp-config when github mcp enabled (GITHUB_MCP_TOKEN set), got nil")
-	}
-	if err := ValidatePassthrough([]string{"--strict-mcp-config"}, true); err == nil {
-		t.Fatal("expected error for --strict-mcp-config when enabled, got nil")
-	}
-}
-
-func TestValidatePassthrough_MCPConfigAllowedWhenDisabled(t *testing.T) {
-	if err := ValidatePassthrough([]string{"--mcp-config", "x.json"}, false); err != nil {
-		t.Fatalf("unexpected error when github mcp disabled (GITHUB_MCP_TOKEN unset): %v", err)
+// TestValidatePassthrough_AllowsMCPConfig guards the passthrough that opened
+// up when agent-sandbox stopped generating an MCP config of its own: these
+// two flags were reserved while it did, and nothing reserves them now.
+func TestValidatePassthrough_AllowsMCPConfig(t *testing.T) {
+	if err := ValidatePassthrough([]string{"--mcp-config", "x.json", "--strict-mcp-config"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func TestBuildArgs_NonoNotInPath(t *testing.T) {
 	t.Setenv("PATH", "")
 	cfg := &config.Config{}
-	if _, _, err := BuildArgs(cfg, Options{}, "", "", ""); err == nil {
+	if _, _, err := BuildArgs(cfg, Options{}, "", ""); err == nil {
 		t.Fatal("expected error when nono not in PATH, got nil")
 	}
 }
@@ -136,7 +120,7 @@ func argsIndex(args []string, target string) int {
 func TestBuildArgs_AlwaysUsesWrap(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{}
-	_, args, err := BuildArgs(cfg, Options{}, "", "", "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -154,7 +138,7 @@ func TestBuildArgs_AlwaysUsesWrap(t *testing.T) {
 func TestBuildArgs_McpMode_DisablesTools(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{}, "", "", "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -166,7 +150,7 @@ func TestBuildArgs_McpMode_DisablesTools(t *testing.T) {
 func TestBuildArgs_HookMode_InjectsSettings(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "hook"}
-	_, args, err := BuildArgs(cfg, Options{}, "", "", "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -203,7 +187,7 @@ func TestBuildArgs_McpMode_NoMCPConfigReadFile(t *testing.T) {
 	makeFakeNono(t)
 	self := pinExecutablePath(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{}, "", "", "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -221,7 +205,7 @@ func TestBuildArgs_McpMode_NoMCPConfigReadFile(t *testing.T) {
 func TestBuildArgs_InjectsProfileBeforeClaude(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{}, "", "/tmp/asb-profile-1.json", "")
+	_, args, err := BuildArgs(cfg, Options{}, "/tmp/asb-profile-1.json", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -238,7 +222,7 @@ func TestBuildArgs_InjectsProfileBeforeClaude(t *testing.T) {
 func TestBuildArgs_ClaudeOptsAfterClaude(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{ClaudeOpts: []string{"--model", "opus"}}, "", "", "")
+	_, args, err := BuildArgs(cfg, Options{ClaudeOpts: []string{"--model", "opus"}}, "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -255,7 +239,7 @@ func TestBuildArgs_ClaudeOptsAfterClaude(t *testing.T) {
 func TestBuildArgs_InjectsSystemPrompt(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{}, "", "", "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -271,62 +255,21 @@ func TestBuildArgs_InjectsSystemPrompt(t *testing.T) {
 	}
 }
 
-func TestBuildArgs_InjectsMCPConfig(t *testing.T) {
+// TestBuildArgs_McpMode_InjectsNoSettingsOrMCPFlags guards what the launcher
+// no longer adds: it generates no MCP config, so neither the mcp flags nor a
+// --settings carrying deny rules for one should appear.
+func TestBuildArgs_McpMode_InjectsNoSettingsOrMCPFlags(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{}, "/tmp/asb-mcp-1.json", "", "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	ci := argsIndex(args, "claude")
-
-	// The launcher's own binary is granted with the same flag, so match on the
-	// value rather than on the first occurrence.
-	if !hasFlagValue(args[:ci], "--read-file", "/tmp/asb-mcp-1.json") {
-		t.Fatalf("expected --read-file <mcp path> before claude; got %v", args)
-	}
-	if !argsContain(args, "--strict-mcp-config") {
-		t.Errorf("missing --strict-mcp-config; got %v", args)
-	}
-	mi := argsIndex(args, "--mcp-config")
-	if mi < 0 || args[mi+1] != "/tmp/asb-mcp-1.json" || mi < ci {
-		t.Errorf("expected --mcp-config <path> after claude; got %v", args)
-	}
-	si := argsIndex(args, "--settings")
-	if si < 0 || !strings.Contains(args[si+1], "Read(//tmp/asb-mcp-1.json)") {
-		t.Errorf("expected --settings with a deny rule for the mcp path; got %v", args)
-	}
-}
-
-func TestBuildArgs_HookMode_MCPConfig_DenyAndHooks(t *testing.T) {
-	makeFakeNono(t)
-	cfg := &config.Config{ToolMode: "hook"}
-	_, args, err := BuildArgs(cfg, Options{}, "/tmp/asb-mcp-1.json", "", "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	si := argsIndex(args, "--settings")
-	if si < 0 {
-		t.Fatal("expected --settings")
-	}
-	val := args[si+1]
-	if !strings.Contains(val, "PreToolUse") || !strings.Contains(val, "Read(//tmp/asb-mcp-1.json)") {
-		t.Errorf("hook+mcp settings should contain both hooks and deny; got %q", val)
-	}
-}
-
-func TestBuildArgs_NoMCPConfig_Unchanged(t *testing.T) {
-	makeFakeNono(t)
-	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{}, "", "", "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if argsContain(args, "--mcp-config") || argsContain(args, "--strict-mcp-config") {
-		t.Errorf("no mcp flags expected when path empty; got %v", args)
+		t.Errorf("no mcp flags expected; got %v", args)
 	}
 	if argsContain(args, "--settings") {
-		t.Errorf("mcp mode with no mcp path should have no --settings; got %v", args)
+		t.Errorf("mcp mode should have no --settings; got %v", args)
 	}
 }
 
@@ -402,7 +345,7 @@ func TestParseArgs_EnvRefs(t *testing.T) {
 func TestBuildArgs_GrantsBrokerSocket(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{ToolMode: "hook"}
-	_, args, err := BuildArgs(cfg, Options{}, "", "", "/tmp/b.sock")
+	_, args, err := BuildArgs(cfg, Options{}, "", "/tmp/b.sock")
 	if err != nil {
 		t.Fatalf("BuildArgs() error = %v", err)
 	}
@@ -532,55 +475,6 @@ func TestRun_SetsBrokerSocketEnvBeforeSupervise(t *testing.T) {
 	if gotEnv != wantSocket {
 		t.Errorf("%s at supervise time = %q, want %q (the broker socket, set before supervise runs)",
 			broker.SocketEnvVar, gotEnv, wantSocket)
-	}
-}
-
-func TestRun_GithubMCPEnabled_WritesAndCleansConfig(t *testing.T) {
-	makeFakeNono(t)
-	t.Setenv("GITHUB_MCP_TOKEN", "ghp_x")
-	wrote, cleaned := 0, 0
-	cfg := &config.Config{ToolMode: "mcp"}
-	err := run(cfg, Options{}, runDeps{
-		writeMCPConfig: func(*config.Config) (string, func(), error) {
-			wrote++
-			return "/tmp/asb-mcp-1.json", func() { cleaned++ }, nil
-		},
-		agentProfile: func(*config.Config) (string, error) {
-			return "/tmp/asb-profile-1.json", nil
-		},
-		startBroker: testBrokerStart("/tmp/test.sock", nil),
-		supervise:   func(string, []string) int { return 0 },
-		exit:        func(int) {},
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if wrote != 1 {
-		t.Errorf("writeMCPConfig called %d times, want 1", wrote)
-	}
-	if cleaned != 1 {
-		t.Errorf("mcp config cleanup called %d times, want 1", cleaned)
-	}
-}
-
-func TestRun_GithubMCPDisabled_SkipsConfig(t *testing.T) {
-	makeFakeNono(t)
-	t.Setenv("GITHUB_MCP_TOKEN", "")
-	wrote := 0
-	err := run(&config.Config{ToolMode: "mcp"}, Options{}, runDeps{
-		writeMCPConfig: func(*config.Config) (string, func(), error) { wrote++; return "", func() {}, nil },
-		agentProfile: func(*config.Config) (string, error) {
-			return "/tmp/asb-profile-1.json", nil
-		},
-		startBroker: testBrokerStart("/tmp/test.sock", nil),
-		supervise:   func(string, []string) int { return 0 },
-		exit:        func(int) {},
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if wrote != 0 {
-		t.Errorf("writeMCPConfig called %d times, want 0 when disabled", wrote)
 	}
 }
 
@@ -945,7 +839,7 @@ func TestBuildArgs_GrantsTheLauncherBinaryToTheAgent(t *testing.T) {
 	self := pinExecutablePath(t)
 
 	cfg := &config.Config{ToolMode: "hook"}
-	_, args, err := BuildArgs(cfg, Options{}, "", "/tmp/p.json", "")
+	_, args, err := BuildArgs(cfg, Options{}, "/tmp/p.json", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -968,7 +862,7 @@ func TestBuildArgs_FailsWhenItsOwnPathIsUnknown(t *testing.T) {
 	t.Cleanup(func() { executablePath = prev })
 
 	cfg := &config.Config{ToolMode: "hook"}
-	if _, _, err := BuildArgs(cfg, Options{}, "", "/tmp/p.json", ""); err == nil {
+	if _, _, err := BuildArgs(cfg, Options{}, "/tmp/p.json", ""); err == nil {
 		t.Fatal("expected an error when the launcher cannot locate its own binary, got nil")
 	}
 }

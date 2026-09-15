@@ -35,10 +35,15 @@
       "~/.config/mise",
       "~/.local/share/mise",
       "/run/current-system/sw",
-      // GitHub MCP runs `docker run -i --rm ghcr.io/github/github-mcp-server`
-      // as a direct child of the agent, so its config is read here rather than
-      // in the command profile. Drop these two entries and the bypass below
-      // when GITHUB_MCP_TOKEN is not used.
+      // An MCP server the agent spawns runs as a DIRECT child of the agent,
+      // not through the broker, so a server started with `docker run ...`
+      // reads its docker config here rather than in the command profile.
+      // agent-sandbox no longer configures an MCP server of its own; these
+      // are carried for one the operator adds via `claude --mcp-config`.
+      // Nothing in this repository depends on them today, so they are the
+      // first thing to drop if no docker-run MCP server is ever configured.
+      // Not the same grant as the command profile's own `~/.docker`, which
+      // belongs to the brokered `docker` command.
       "~/.docker",
       "~/.orbstack"
     ],

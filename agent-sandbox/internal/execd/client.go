@@ -60,7 +60,12 @@ func (c *Client) RunCommand(ctx context.Context, command string,
 		}
 	}()
 
-	req := Request{Command: command, Cwd: workingDir(), WithStdin: stdin != nil}
+	req := Request{
+		Command:         command,
+		Cwd:             workingDir(),
+		WithStdin:       stdin != nil,
+		ProtocolVersion: ProtocolVersion,
+	}
 	if err := WriteRequest(conn, req); err != nil {
 		return 0, err
 	}

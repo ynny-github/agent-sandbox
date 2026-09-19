@@ -33,6 +33,19 @@ const (
 // allocate without limit. 1 MiB comfortably exceeds any realistic pipe read.
 const maxPayload = 1 << 20
 
+// ProtocolVersion is the wire contract this binary speaks. The server refuses
+// any other value rather than serving it on a best effort, because
+// encoding/json drops unknown fields: without this check an execd that predates
+// a request field would ignore it silently — a command asking for a timeout
+// would simply run without one. Client and server are the same binary, but the
+// launcher starts execd from its own path while the sandboxed client resolves
+// agent-sandbox through PATH, so a mismatched pair is reachable.
+//
+// It does not protect against an execd built before this constant existed:
+// that server has no check to run. What it does is make every later mismatch
+// loud.
+const ProtocolVersion = 1
+
 // Request is the first message on a connection: what to run and where.
 //
 // It carries a command *line*, not an argv. execd interprets the shell
@@ -53,8 +66,9 @@ type Request struct {
 	// commands the interpreter execs, but nothing in this package bounds it to
 	// any particular root — see ShellExecutor.Execute for where that bound
 	// actually lives.
-	Cwd       string `json:"cwd"`
-	WithStdin bool   `json:"with_stdin"`
+	Cwd             string `json:"cwd"`
+	WithStdin       bool   `json:"with_stdin"`
+	ProtocolVersion int    `json:"protocol_version"`
 }
 
 // Frame is one decoded frame.

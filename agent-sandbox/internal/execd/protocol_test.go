@@ -100,3 +100,21 @@ func TestReadFrameTruncatedPayload(t *testing.T) {
 		t.Errorf("ReadFrame() clean EOF error = %v, want errors.Is(err, io.EOF)", err)
 	}
 }
+
+func TestClientSetsProtocolVersion(t *testing.T) {
+	var buf bytes.Buffer
+	if err := execd.WriteRequest(&buf, execd.Request{
+		Command:         "true",
+		Cwd:             "/tmp",
+		ProtocolVersion: execd.ProtocolVersion,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := execd.ReadRequest(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ProtocolVersion != execd.ProtocolVersion {
+		t.Errorf("ProtocolVersion = %d, want %d", got.ProtocolVersion, execd.ProtocolVersion)
+	}
+}

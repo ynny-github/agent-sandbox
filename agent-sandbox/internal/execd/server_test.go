@@ -120,7 +120,11 @@ func TestServerCancelsCommandOnClientDisconnect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dial() error = %v", err)
 	}
-	if err := execd.WriteRequest(conn, execd.Request{Command: "sleep", Cwd: "/"}); err != nil {
+	if err := execd.WriteRequest(conn, execd.Request{
+		Command:         "sleep",
+		Cwd:             "/",
+		ProtocolVersion: execd.ProtocolVersion,
+	}); err != nil {
 		t.Fatalf("WriteRequest() error = %v", err)
 	}
 	conn.Close()
@@ -219,3 +223,29 @@ func (b *testBuffer) String() string {
 func stringsReader(s string) io.Reader { return strings.NewReader(s) }
 
 func containsStr(haystack, needle string) bool { return strings.Contains(haystack, needle) }
+
+func TestServerRejectsUnknownProtocolVersion(t *testing.T) {
+	sock := startTestServer(t, &echoExecutor{})
+	conn, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := execd.WriteRequest(conn, execd.Request{
+		Command:         "true",
+		Cwd:             "/tmp",
+		ProtocolVersion: execd.ProtocolVersion + 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f, err := execd.ReadFrame(conn)
+	if err != nil {
+		t.Fatalf("read frame: %v", err)
+	}
+	if f.Channel != execd.ChanError {
+		t.Fatalf("channel = %d, want ChanError", f.Channel)
+	}
+	if !strings.Contains(string(f.Payload), "protocol version") {
+		t.Errorf("payload = %q, want it to name the protocol version", f.Payload)
+	}
+}

@@ -89,6 +89,14 @@ func (s *Server) handle(conn net.Conn) {
 		return
 	}
 
+	if req.ProtocolVersion != ProtocolVersion {
+		WriteError(conn, fmt.Sprintf(
+			"execd: unsupported protocol version %d (this execd speaks %d); "+
+				"the agent-sandbox binary sending this request is not the one that started execd",
+			req.ProtocolVersion, ProtocolVersion))
+		return
+	}
+
 	// The child must die when the client goes away. Closing the connection is
 	// the client's cancellation signal, so a reader runs for every request —
 	// not only those with stdin — and cancels this context on EOF.

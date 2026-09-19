@@ -331,7 +331,11 @@ func TestExecuteAcceptsAnAbsoluteCwd(t *testing.T) {
 	e := execd.NewShellExecutor()
 	var out, errb bytes.Buffer
 	code, err := e.Execute(context.Background(),
-		execd.Request{Command: "echo hi", Cwd: t.TempDir()}, nil, &out, &errb)
+		execd.Request{
+			Command:         "echo hi",
+			Cwd:             t.TempDir(),
+			ProtocolVersion: execd.ProtocolVersion,
+		}, nil, &out, &errb)
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
@@ -353,7 +357,11 @@ func TestExecuteRejectsANonAbsoluteCwd(t *testing.T) {
 	for _, cwd := range []string{"", "relative/path", "./here"} {
 		var out, errb bytes.Buffer
 		_, err := e.Execute(context.Background(),
-			execd.Request{Command: "echo hi", Cwd: cwd}, nil, &out, &errb)
+			execd.Request{
+				Command:         "echo hi",
+				Cwd:             cwd,
+				ProtocolVersion: execd.ProtocolVersion,
+			}, nil, &out, &errb)
 		if err == nil {
 			t.Errorf("Execute() with Cwd=%q: error = nil, want a rejection", cwd)
 			continue

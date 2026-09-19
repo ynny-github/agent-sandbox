@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/claude"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -149,7 +150,7 @@ func TestRunDoctor_AllOK(t *testing.T) {
 	restoreSelf := stubSelfPath(filepath.Join(t.TempDir(), "agent-sandbox"))
 	defer restoreSelf()
 	restoreEnv := stubRunCommandEnv(func(context.Context, []string, string, ...string) ([]byte, error) {
-		return []byte(brokerSocketProbeValue), nil
+		return []byte(envProbeValue), nil
 	})
 	defer restoreEnv()
 
@@ -180,7 +181,7 @@ func TestRunDoctor_NonoNG(t *testing.T) {
 	restoreSelf := stubSelfPath(filepath.Join(t.TempDir(), "agent-sandbox"))
 	defer restoreSelf()
 	restoreEnv := stubRunCommandEnv(func(context.Context, []string, string, ...string) ([]byte, error) {
-		return []byte(brokerSocketProbeValue), nil
+		return []byte(envProbeValue), nil
 	})
 	defer restoreEnv()
 
@@ -212,7 +213,7 @@ func TestRunDoctor_RunsAllChecksEvenOnEarlyFailure(t *testing.T) {
 	restoreSelf := stubSelfPath(filepath.Join(t.TempDir(), "agent-sandbox"))
 	defer restoreSelf()
 	restoreEnv := stubRunCommandEnv(func(context.Context, []string, string, ...string) ([]byte, error) {
-		return []byte(brokerSocketProbeValue), nil
+		return []byte(envProbeValue), nil
 	})
 	defer restoreEnv()
 
@@ -430,7 +431,7 @@ func TestCheckProfiles_ValidatesTheAgentProfile(t *testing.T) {
 	})
 	defer restoreRun()
 	restoreEnv := stubRunCommandEnv(func(context.Context, []string, string, ...string) ([]byte, error) {
-		return []byte(brokerSocketProbeValue), nil
+		return []byte(envProbeValue), nil
 	})
 	defer restoreEnv()
 	defer stubSelfPath("/usr/local/bin/agent-sandbox")()
@@ -510,7 +511,7 @@ func TestCheckProfiles_FailsWhenValidateRejects(t *testing.T) {
 	})
 	defer restore()
 	restoreEnv := stubRunCommandEnv(func(context.Context, []string, string, ...string) ([]byte, error) {
-		return []byte(brokerSocketProbeValue), nil
+		return []byte(envProbeValue), nil
 	})
 	defer restoreEnv()
 
@@ -594,7 +595,7 @@ func TestCheckProfiles_FailsWhenSelfPathErrors(t *testing.T) {
 	})
 	defer restoreRun()
 	restoreEnv := stubRunCommandEnv(func(context.Context, []string, string, ...string) ([]byte, error) {
-		return []byte(brokerSocketProbeValue), nil
+		return []byte(envProbeValue), nil
 	})
 	defer restoreEnv()
 	prevSelf := selfPath
@@ -626,7 +627,7 @@ func TestCheckProfiles_FailsWhenTheWriteQueryErrors(t *testing.T) {
 	})
 	defer restoreRun()
 	restoreEnv := stubRunCommandEnv(func(context.Context, []string, string, ...string) ([]byte, error) {
-		return []byte(brokerSocketProbeValue), nil
+		return []byte(envProbeValue), nil
 	})
 	defer restoreEnv()
 	restoreSelf := stubSelfPath(filepath.Join(t.TempDir(), "agent-sandbox"))
@@ -708,7 +709,7 @@ func TestCheckProfiles_FailsWhenTheAgentProfileIsRejected(t *testing.T) {
 	})
 	defer restore()
 	restoreEnv := stubRunCommandEnv(func(context.Context, []string, string, ...string) ([]byte, error) {
-		return []byte(brokerSocketProbeValue), nil
+		return []byte(envProbeValue), nil
 	})
 	defer restoreEnv()
 	restoreSelf := stubSelfPath(filepath.Join(t.TempDir(), "agent-sandbox"))
@@ -733,7 +734,7 @@ func TestCheckProfiles_FailsWhenNonoSaysTheBinaryIsWritable(t *testing.T) {
 	restore := stubRunCommand(nonoAnswers(nil, "allowed"))
 	defer restore()
 	restoreEnv := stubRunCommandEnv(func(context.Context, []string, string, ...string) ([]byte, error) {
-		return []byte(brokerSocketProbeValue), nil
+		return []byte(envProbeValue), nil
 	})
 	defer restoreEnv()
 	restoreSelf := stubSelfPath(filepath.Join(dir, "agent-sandbox"))
@@ -1064,5 +1065,42 @@ func TestCheckProfilePaths_ExpandsTilde(t *testing.T) {
 	cfg := configWithBothProfiles(t, dir)
 	if r := checkProfilePaths(context.Background(), cfg); !r.ok {
 		t.Errorf("checkProfilePaths not ok with a \"~\"-prefixed path that exists: %+v", r)
+	}
+}
+
+// The agent's shell is a wrapper the launcher generates and names in
+// CLAUDE_CODE_SHELL. A profile that strips the variable leaves Claude on the
+// host's bash, which sources a ~/.bashrc the profile no longer grants and
+// prefixes every tool result with a permission error. Nothing on screen says
+// the profile is the cause, so doctor measures it the same way it measures the
+// broker socket variable.
+func TestCheckProfiles_FailsWhenTheShellVarIsNotForwarded(t *testing.T) {
+	dir := t.TempDir()
+	cfg := configWithBothProfiles(t, dir)
+	restoreRun := stubRunCommand(func(context.Context, string, ...string) ([]byte, error) {
+		return []byte(`{"status":"denied"}`), nil
+	})
+	defer restoreRun()
+	restoreEnv := stubRunCommandEnv(func(_ context.Context, env []string, _ string, _ ...string) ([]byte, error) {
+		for _, kv := range env {
+			if strings.HasPrefix(kv, claude.ShellEnvVar+"=") {
+				return []byte("\n"), nil // stripped by the profile
+			}
+		}
+		return []byte(envProbeValue), nil
+	})
+	defer restoreEnv()
+	defer stubSelfPath("/usr/local/bin/agent-sandbox")()
+
+	got := checkProfiles(context.Background(), cfg)
+
+	if got.ok {
+		t.Error("checkProfiles ok = true, want false when the shell variable is stripped")
+	}
+	if !strings.Contains(strings.Join(got.details, "\n"), claude.ShellEnvVar) {
+		t.Errorf("details must name the variable: %v", got.details)
+	}
+	if got.hint == "" {
+		t.Error("a stripped shell variable must come with a hint")
 	}
 }

@@ -159,7 +159,7 @@ func probeHook(profilePath, self string) error {
 // disables the Bash and Monitor tools. The injected settings carry the hook
 // only; the profile contributes nothing to them.
 func BuildArgs(cfg *config.Config, opts Options,
-	profilePath string, brokerSocket string) (string, []string, error) {
+	profilePath, brokerSocket, shellWrapper string) (string, []string, error) {
 	nonoPath, err := exec.LookPath("nono")
 	if err != nil {
 		return "", nil, fmt.Errorf("nono not found in PATH: %w", err)
@@ -181,6 +181,15 @@ func BuildArgs(cfg *config.Config, opts Options,
 		return "", nil, selfErr
 	}
 	args = append(args, "--read-file", self)
+
+	// The agent's shell is a generated wrapper (see shellwrapper.go), reached
+	// the same way and for the same reason as the launcher's own binary: only
+	// the launcher knows where it wrote it, and without the read grant nono
+	// refuses the execve, Claude falls back to the host's bash, and every tool
+	// result is prefixed with a line about an unreadable ~/.bashrc.
+	if shellWrapper != "" {
+		args = append(args, "--read-file", shellWrapper)
+	}
 
 	cwd, cwdErr := os.Getwd()
 	if cwdErr == nil {
@@ -225,8 +234,11 @@ type runDeps struct {
 	// profile. Hook mode only; mcp mode injects no hook.
 	verifyHook  func(profilePath, selfPath string) error
 	startBroker func(*config.Config) (socket string, cleanup func(), err error)
-	supervise   func(path string, args []string) int
-	exit        func(code int)
+	// startShellWrapper writes the shell Claude runs tool commands with. It
+	// returns the wrapper's path and a cleanup that removes it.
+	startShellWrapper func() (path string, cleanup func(), err error)
+	supervise         func(path string, args []string) int
+	exit              func(code int)
 }
 
 // defaultAgentProfile resolves the launched agent's profile path from cfg and
@@ -254,11 +266,12 @@ func Run(cfg *config.Config, opts Options) error {
 // the mode it applies to, and only Run builds this set.
 func defaultDeps() runDeps {
 	return runDeps{
-		agentProfile: defaultAgentProfile,
-		verifyHook:   probeHook,
-		startBroker:  startCommandBroker,
-		supervise:    superviseProcess,
-		exit:         os.Exit,
+		agentProfile:      defaultAgentProfile,
+		verifyHook:        probeHook,
+		startBroker:       startCommandBroker,
+		startShellWrapper: defaultShellWrapper,
+		supervise:         superviseProcess,
+		exit:              os.Exit,
 	}
 }
 
@@ -278,6 +291,23 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 		}
 	}
 
+	// A wrapper that cannot be written costs noise, not safety: Claude falls
+	// back to the host's bash, which sources ~/.bashrc — a file the agent
+	// profile no longer grants — and prefixes every tool result with a line
+	// saying so. Report it and launch anyway.
+	shellWrapper, cleanupWrapper, werr := d.startShellWrapper()
+	if werr != nil {
+		fmt.Fprintf(os.Stderr, "agent-sandbox: %v\n"+
+			"agent-sandbox: Claude will use the host's shell; expect a ~/.bashrc line "+
+			"on every tool result\n", werr)
+		shellWrapper = ""
+	}
+	defer func() {
+		if cleanupWrapper != nil {
+			cleanupWrapper()
+		}
+	}()
+
 	brokerSocket, cleanupBroker, err := d.startBroker(cfg)
 	if err != nil {
 		return fmt.Errorf("command broker: %w", err)
@@ -288,7 +318,7 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 		}
 	}()
 
-	nonoPath, nonoArgs, err := BuildArgs(cfg, opts, profilePath, brokerSocket)
+	nonoPath, nonoArgs, err := BuildArgs(cfg, opts, profilePath, brokerSocket, shellWrapper)
 	if err != nil {
 		return err
 	}
@@ -296,12 +326,19 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 	// superviseProcess inherits the launcher's environment, so setting it here
 	// is the simplest correct way to hand the broker socket path to the child.
 	os.Setenv(broker.SocketEnvVar, brokerSocket)
+	if shellWrapper != "" {
+		os.Setenv(ShellEnvVar, shellWrapper)
+	}
 
 	code := d.supervise(nonoPath, nonoArgs)
 
 	if cleanupBroker != nil {
 		cleanupBroker()
 		cleanupBroker = nil
+	}
+	if cleanupWrapper != nil {
+		cleanupWrapper()
+		cleanupWrapper = nil
 	}
 	d.exit(code)
 	return nil

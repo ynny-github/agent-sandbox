@@ -149,6 +149,17 @@ profile = "claude-profile.json"          # 既定の名前: "<agent>-profile.jso
 両プロファイルはセッション開始時に一度だけ読まれます。編集が効くのは次の
 `agent-sandbox claude` からで、セッションの途中では効きません。
 
+エージェントのシェルは、ホストの bash ではなくランチャーが生成する wrapper です。
+Claude Code はツールのコマンドを stdin がソケットの状態で起動し、非対話の bash は
+stdin のソケットを rshd/sshd 経由の起動と解釈して `~/.bashrc` を読みます — どちらの
+プロファイルも許可していないファイルなので、wrapper がないとツールの結果すべてに
+権限エラーの行が付きます。ランチャーはブローカーソケットの隣に `norc-bash-<pid>`
+(中身は `bash --norc --noprofile` だけ) を書き、`--read-file` で許可し、
+`CLAUDE_CODE_SHELL` で名指しし、セッション終了時に削除します。エージェント
+プロファイルの `environment.allow_vars` にこの変数を書かないと nono が剥がし、
+Claude はホストの bash に戻ります。セッション自体は動きますが騒がしくなるので、
+`agent-sandbox doctor` が実測します。
+
 `--env <ref>` (現状 `file:` のみ) は dotenv サブセットのファイルをランチャー自身の
 プロセスに読み込みます。**これは何も許可しません。** 転送されるのはプロファイルの
 `environment.allow_vars` に並んでいるものだけなので、変数がエージェントに届くのは

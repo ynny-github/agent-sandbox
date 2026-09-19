@@ -50,7 +50,15 @@ func runDebug(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	_, nonoArgs, err := claude.BuildArgs(cfg, opts, profilePath, brokerSocket)
+	// Same reason as the broker socket: the generated shell wrapper is granted
+	// on the command line, so a debug invocation that omitted it would print an
+	// argv the launcher never builds.
+	shellWrapper, err := claude.ShellWrapperPath()
+	if err != nil {
+		return err
+	}
+
+	_, nonoArgs, err := claude.BuildArgs(cfg, opts, profilePath, brokerSocket, shellWrapper)
 	if err != nil {
 		return err
 	}

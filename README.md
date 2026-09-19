@@ -152,6 +152,17 @@ a `claude-profile.json` beside its config" can be declared once, user-wide.
 Both profiles are read once, at session start. Editing one takes effect at the
 next `agent-sandbox claude`, never mid-session.
 
+The agent's shell is a wrapper the launcher generates, not the host's bash.
+Claude Code spawns tool commands with a socket on stdin, and non-interactive
+bash reads a socket on stdin as an rshd/sshd session and sources `~/.bashrc` —
+a file no profile here grants, so without the wrapper every tool result is
+prefixed with a permission error. The launcher writes `norc-bash-<pid>` beside
+the broker socket (`bash --norc --noprofile`, nothing else), grants it with
+`--read-file`, names it in `CLAUDE_CODE_SHELL`, and removes it when the session
+ends. The agent profile's `environment.allow_vars` must list that variable or
+nono strips it and Claude falls back to the host's bash; the session still
+works, it just gets noisy, so `agent-sandbox doctor` measures it.
+
 `--env <ref>` (only `file:` exists today) loads a dotenv-subset file into the
 launcher's own process. **It grants nothing.** Only what a profile's
 `environment.allow_vars` lists is forwarded, so a variable reaches the agent

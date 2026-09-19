@@ -28,12 +28,6 @@
 
     "read": [
       "/nix/store",
-      // ~/.bashrc ends in `eval "$(mise activate bash --shims)"`, so granting
-      // the rc is not enough: mise reads its own config on every startup and
-      // exits noisily without these. Not nono-protected, so a plain read does
-      // it — no bypass_protection entry needed.
-      "~/.config/mise",
-      "~/.local/share/mise",
       "/run/current-system/sw",
       // An MCP server the agent spawns runs as a DIRECT child of the agent,
       // not through the broker, so a server started with `docker run ...`
@@ -48,16 +42,29 @@
       "~/.orbstack"
     ],
 
-    // Claude Code's Bash tool spawns a non-login bash, which sources this
-    // file. Without the grant every tool call is prefixed with a
-    // "Permission denied" line from bash. It is a file, so it goes in
-    // read_file, not read; and nono denies the shell rc files by default, so
-    // the grant is dropped unless bypass_protection names it too. Read-only:
-    // the rc still executes, so anything it sources must be reachable here.
-    "read_file": ["~/.bashrc"],
+    // There is deliberately no ~/.bashrc grant, and no read_file key at all.
+    //
+    // It used to be here, with a bypass_protection entry beside it, because
+    // every tool result was prefixed with bash complaining it could not read
+    // the file. The cause was not that Claude asks bash to read it: Claude
+    // spawns the shell with a SOCKET on stdin, and non-interactive bash treats
+    // a socket on stdin as "I was started by rshd/sshd" and sources ~/.bashrc.
+    // Measured on bash 5.3.9 by varying only stdin: socket -> sourced, pipe ->
+    // not sourced. BASH_ENV, ENV, SHELLOPTS=posix and POSIXLY_CORRECT do not
+    // suppress it; only the --norc startup flag does.
+    //
+    // agent-sandbox therefore generates a shell wrapper at launch that is bash
+    // with --norc --noprofile bolted on, grants it with --read-file, and names
+    // it in CLAUDE_CODE_SHELL (see internal/claude/shellwrapper.go and the
+    // allow_vars entry below). Nothing in the sandbox reads the rc any more, so
+    // the grant is gone — and with it the mise read grants, which existed only
+    // because ~/.bashrc ends in `eval "$(mise activate bash --shims)"`.
+    //
+    // If that wrapper ever stops reaching Claude, the symptom is the old noise
+    // returning, not a broken session. `agent-sandbox doctor` measures it.
 
     "allow_file": ["/dev/null"],
-    "bypass_protection": ["~/.docker", "~/.bashrc"]
+    "bypass_protection": ["~/.docker"]
   },
 
   "environment": {
@@ -67,11 +74,20 @@
     // because nono cannot report env grants: `nono profile show` does not
     // print allow_vars and `nono why` has no env query.
     //
+    // CLAUDE_CODE_SHELL names the wrapper the launcher generates for this
+    // session (see the filesystem comment above). nono strips it otherwise —
+    // measured: `printenv CLAUDE_CODE_SHELL` inside the sandbox prints nothing
+    // without this entry — and Claude then falls back to the login shell from
+    // /etc/passwd, which brings the ~/.bashrc noise back. What this opens: an
+    // operator-set variable now chooses the binary the agent runs tool commands
+    // with. PATH, already forwarded, decides the same class of thing, so this
+    // is not a new kind of inlet — but it is one more.
+    //
     // --env no longer grants anything. A variable passed that way reaches the
     // agent only if it is listed here (globs like MISE* work).
     "allow_vars": [
       "PATH", "HOME", "TERM", "LANG", "LC_ALL", "USER",
-      "AGENT_SANDBOX_BROKER_SOCKET"
+      "AGENT_SANDBOX_BROKER_SOCKET", "CLAUDE_CODE_SHELL"
     ]
   }
 }

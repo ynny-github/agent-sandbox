@@ -18,6 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/broker"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/claude"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/policysnapshot"
 )
@@ -103,9 +104,9 @@ func defaultRunCommandEnv(ctx context.Context, env []string, name string, args .
 	return cmd.CombinedOutput()
 }
 
-// brokerSocketProbeValue is the sentinel checkBrokerSocketVar looks for. Any
+// envProbeValue is the sentinel the env-forwarding probes look for. Any
 // value would do; an obviously synthetic one keeps a failure legible.
-const brokerSocketProbeValue = "agent-sandbox-doctor-probe"
+const envProbeValue = "agent-sandbox-doctor-probe"
 
 // checkBrokerSocketVar measures whether the agent profile forwards
 // AGENT_SANDBOX_BROKER_SOCKET into the sandbox. nono cannot be asked: `nono
@@ -118,14 +119,36 @@ const brokerSocketProbeValue = "agent-sandbox-doctor-probe"
 // non-interactive mode, which is how doctor runs.
 func checkBrokerSocketVar(ctx context.Context, profilePath string) error {
 	out, err := runCommandEnv(ctx,
-		[]string{broker.SocketEnvVar + "=" + brokerSocketProbeValue},
+		[]string{broker.SocketEnvVar + "=" + envProbeValue},
 		"nono", "wrap", "--silent", "--allow-cwd", "--profile", profilePath,
 		"--", "sh", "-c", "echo $"+broker.SocketEnvVar)
 	if err != nil {
 		return fmt.Errorf("could not run the probe: %v: %s", err, strings.TrimSpace(string(out)))
 	}
-	if !strings.Contains(string(out), brokerSocketProbeValue) {
+	if !strings.Contains(string(out), envProbeValue) {
 		return fmt.Errorf("the profile does not forward %s into the sandbox", broker.SocketEnvVar)
+	}
+	return nil
+}
+
+// checkShellVar measures whether the agent profile forwards CLAUDE_CODE_SHELL
+// into the sandbox. It is measured for the same reason as the broker socket
+// variable: nono reports nothing about env grants, and the failure is silent.
+//
+// What it costs when it is stripped is noise, not access — Claude falls back to
+// the host's bash, which sources ~/.bashrc, which the agent profile no longer
+// grants — but the noise lands on every tool result the agent reads, and
+// nothing in the session points at the profile as the cause.
+func checkShellVar(ctx context.Context, profilePath string) error {
+	out, err := runCommandEnv(ctx,
+		[]string{claude.ShellEnvVar + "=" + envProbeValue},
+		"nono", "wrap", "--silent", "--allow-cwd", "--profile", profilePath,
+		"--", "sh", "-c", "echo $"+claude.ShellEnvVar)
+	if err != nil {
+		return fmt.Errorf("could not run the probe: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	if !strings.Contains(string(out), envProbeValue) {
+		return fmt.Errorf("the profile does not forward %s into the sandbox", claude.ShellEnvVar)
 	}
 	return nil
 }
@@ -388,7 +411,8 @@ func checkProfiles(ctx context.Context, cfg *config.Config) checkResult {
 		// Running inside a session: the probe would nest one nono sandbox in
 		// another. Say so rather than report a failure nobody can act on.
 		r.details = append(r.details,
-			"broker socket variable: skipped (running inside a session; run doctor on the host)")
+			"broker socket variable: skipped (running inside a session; run doctor on the host)",
+			"agent shell variable: skipped (running inside a session; run doctor on the host)")
 	default:
 		if err := checkBrokerSocketVar(ctx, agentPath); err != nil {
 			r.details = append(r.details, "broker socket variable: "+err.Error())
@@ -398,6 +422,16 @@ func checkProfiles(ctx context.Context, cfg *config.Config) checkResult {
 			return r
 		}
 		r.details = append(r.details, "broker socket variable: forwarded")
+
+		if err := checkShellVar(ctx, agentPath); err != nil {
+			r.details = append(r.details, "agent shell variable: "+err.Error())
+			r.hint = "add " + claude.ShellEnvVar + " to the agent profile's " +
+				"environment.allow_vars; without it Claude runs tool commands with the host's " +
+				"bash, which sources a ~/.bashrc the profile does not grant, and every tool " +
+				"result carries the permission error"
+			return r
+		}
+		r.details = append(r.details, "agent shell variable: forwarded")
 	}
 
 	self, err := selfPath()

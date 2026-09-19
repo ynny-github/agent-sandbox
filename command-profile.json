@@ -620,18 +620,11 @@
       // real binary lives under needs to be exec-reachable here.
       //
       // No argv-level policy either: this entry execs the real docker
-      // binary directly, the same shape as git's own entry above. A
-      // separate wrapper exists (`internal/safe/dockercompose`,
-      // `cmd/safe_docker.go`) that checks `run`/`exec`/`compose` invocations
-      // for `--privileged`, host-path or docker-socket bind mounts, and
-      // similar — but it is not wired in here, so it buys back nothing for
-      // this profile. Its two known gaps are unaffected by that either way,
-      // for an operator who does wire it in later: `docker create` followed
-      // by `docker start` reaches the same running state as `docker run`
-      // with no dangerous flag present on either individual call, and
-      // `--mount type=volume,volume-opt=device=...,volume-opt=o=bind` is a
-      // bind mount in substance that the wrapper's check does not catch (it
-      // keys on `type=bind` specifically, not this spec's `type=volume`).
+      // binary directly, the same shape as git's own entry above. Nothing
+      // inspects what is asked of docker — `--privileged`, a host-path or
+      // docker-socket bind mount, and the rest are refused only insofar as
+      // the child sandbox's own fs grants above refuse them. The narrowness
+      // of that sandbox is the whole boundary here.
       "docker": {
         "from": { "session": { "sandbox": {
           "fs_read":    ["$WORKDIR", "/nix/store", "/run/current-system/sw", "~/.docker"],

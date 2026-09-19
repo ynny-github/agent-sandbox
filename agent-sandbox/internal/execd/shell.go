@@ -9,7 +9,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
+	"time"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
@@ -273,8 +275,37 @@ func (e *ShellExecutor) Execute(ctx context.Context, req Request,
 	if !filepath.IsAbs(req.Cwd) {
 		return 0, fmt.Errorf("execd: cwd %q is not an absolute path", req.Cwd)
 	}
-	return e.Run(ctx, req.Command, req.Cwd, stdin, stdout, stderr)
+
+	// req.TimeoutMs == 0 means no bound: leave ctx exactly as the caller gave
+	// it, so a request with no timeout behaves exactly as it did before this
+	// existed. The timer's write to timedOut and Run's read of it are
+	// ordered by the cancellation the timer causes, but that happens-before
+	// argument can't be checked here — the race detector needs cgo, which
+	// this environment doesn't have — so timedOut is an atomic.Bool rather
+	// than a plain bool.
+	var timedOut atomic.Bool
+	if req.TimeoutMs > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		defer cancel()
+		timer := time.AfterFunc(time.Duration(req.TimeoutMs)*time.Millisecond, func() {
+			timedOut.Store(true)
+			cancel()
+		})
+		defer timer.Stop()
+	}
+
+	code, err := e.Run(ctx, req.Command, req.Cwd, stdin, stdout, stderr)
+	if timedOut.Load() {
+		fmt.Fprintf(stderr, "agent-sandbox: command timed out after %dms\n", req.TimeoutMs)
+		return ExitTimeout, nil
+	}
+	return code, err
 }
+
+// ExitTimeout is the status a timed-out request reports. It follows GNU
+// timeout(1), so a caller that already knows that convention reads it right.
+const ExitTimeout = 124
 
 // exitStatusOf maps a finished process to the status a shell user expects.
 // ExitCode() is -1 for a signal death, which would surface as 255; report the

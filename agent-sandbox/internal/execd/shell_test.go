@@ -372,6 +372,34 @@ func TestExecuteRejectsANonAbsoluteCwd(t *testing.T) {
 	}
 }
 
+// TestExecuteTimesOut checks that a request whose TimeoutMs elapses is
+// bounded by it rather than by the command's own duration, and that it
+// reports ExitTimeout rather than whatever status the killed command would
+// have produced.
+func TestExecuteTimesOut(t *testing.T) {
+	e := execd.NewShellExecutor()
+	var errb strings.Builder
+	start := time.Now()
+	code, err := e.Execute(context.Background(), execd.Request{
+		Command:         "sleep 30",
+		Cwd:             t.TempDir(),
+		TimeoutMs:       400,
+		ProtocolVersion: execd.ProtocolVersion,
+	}, nil, io.Discard, &errb)
+	if err != nil {
+		t.Fatalf("Execute = %v", err)
+	}
+	if code != 124 {
+		t.Errorf("exit = %d, want 124", code)
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Errorf("took %v; want it bounded by the timeout", d)
+	}
+	if !strings.Contains(errb.String(), "timed out") {
+		t.Errorf("stderr = %q, want it to say the command timed out", errb.String())
+	}
+}
+
 // fakePolicyShim creates a real, executable file at
 // <dir>/nono-tool-sandbox-<id>/shims/<name>, a script that execs "cat" by
 // name. This is the directory shape isPolicyControlledPath matches, which

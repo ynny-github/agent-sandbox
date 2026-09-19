@@ -54,6 +54,12 @@ func jobFrom(ctx context.Context) *Job {
 // alive to spend it on.
 const TerminateGrace = 200 * time.Millisecond
 
+// DrainGrace bounds how long a finished command's output is waited for once
+// its process tree is gone. Exceeding it means a process outside the group
+// holds a write end; the request ends with a truncation note rather than
+// hanging, which is what the old wiring did.
+const DrainGrace = 2 * time.Second
+
 // Start puts cmd in a process group of its own and starts it.
 func (j *Job) Start(cmd *exec.Cmd) error {
 	if cmd.SysProcAttr == nil {

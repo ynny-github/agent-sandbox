@@ -18,7 +18,7 @@ import (
 
 // syncBuffer is a mutex-protected bytes.Buffer. A pipeline stage can run more
 // than one command concurrently (mvdan.cc/sh's own Pipe case does exactly
-// this), and each command's own stdout/stderr drain (interposeOutputs) writes
+// this), and each command's own stdout/stderr drain (see wiring) writes
 // into whatever the caller supplied independently of the others — a plain
 // bytes.Buffer's internal bookkeeping is not safe for that, and a race there
 // can silently truncate or lose one side's output (measured while chasing
@@ -259,7 +259,7 @@ func (w *recordingWriteCloser) wasClosed() bool {
 
 // TestShellExecutorDoesNotCloseTheCallersStdout runs two external commands in
 // sequence — sh, not a shell builtin like echo, so each one actually reaches
-// execHandler and interposeOutputs — against a stdout that implements
+// execHandler and wireOutputs — against a stdout that implements
 // io.Closer, which is exactly what Task 3 hands the executor for its response
 // stream. Only the interpreter — which alone knows when the whole request is
 // done with the writer — may end its lifetime; if Run closed it after the

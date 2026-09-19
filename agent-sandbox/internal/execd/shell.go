@@ -140,65 +140,52 @@ func (e *ShellExecutor) execHandler(ctx context.Context, args []string) error {
 	// it is given and keeps the copy: pass the interpreter's pipe writer
 	// straight through and it stays open after the command exits, so the next
 	// stage of the pipeline never sees EOF and the pipeline hangs after
-	// producing its complete output. Interposing an os/exec pipe avoids this
-	// because the shim only ever duplicates that pipe's fd; the interpreter's
-	// own writer is never touched by the child (or the shim) at all, so it
-	// stays exactly as open or closed as the interpreter itself left it. What
-	// ends a pipeline stage is the child closing its copy of the os/exec pipe
-	// on exit — nothing here closes the interpreter's writer.
-	drains, err := interposeOutputs(cmd, hc)
+	// producing its complete output. Interposing a pipe this side owns avoids
+	// this because the shim only ever duplicates that pipe's fd; the
+	// interpreter's own writer is never touched by the child (or the shim) at
+	// all, so it stays exactly as open or closed as the interpreter itself left
+	// it. What ends a pipeline stage is every copy of the interposed pipe's
+	// write end being closed — the child's on exit, this side's in
+	// closeJobEnds. A real file needs none of that and goes straight to the
+	// child: see wiring.
+	w, err := wireOutputs(cmd, hc)
 	if err != nil {
 		fmt.Fprintf(hc.Stderr, "agent-sandbox: %s: %v\n", args[0], err)
 		return interp.NewExitStatus(126)
 	}
 
-	// stdin is pumped through StdinPipe rather than assigned to cmd.Stdin: with
-	// cmd.Stdin set, Wait blocks until os/exec's own copier finishes, and that
-	// copier sits in Read(), which nothing interrupts while the upstream end of
-	// the pipeline is still open.
-	if hc.Stdin != nil {
-		w, perr := cmd.StdinPipe()
-		if perr != nil {
-			for _, d := range drains {
-				d.abort()
-			}
-			fmt.Fprintf(hc.Stderr, "agent-sandbox: %s: %v\n", args[0], perr)
-			return interp.NewExitStatus(126)
-		}
-		go func() {
-			io.Copy(w, hc.Stdin)
-			w.Close()
-		}()
+	// stdin is an *os.File either way — the redirect's own file, or the read
+	// end of a pipe this side owns and pumps hc.Stdin into. That is what keeps
+	// Wait from blocking: with an io.Reader in cmd.Stdin, os/exec runs its own
+	// copier and Wait waits for it, and that copier sits in Read(), which
+	// nothing interrupts while the upstream end of the pipeline is still open.
+	if err := w.wireStdin(cmd, hc); err != nil {
+		w.abort()
+		fmt.Fprintf(hc.Stderr, "agent-sandbox: %s: %v\n", args[0], err)
+		return interp.NewExitStatus(126)
 	}
 
-	// Start, drain, then Wait — never cmd.Run, and never in any other order.
-	// Wait closes the parent's read end of every StdoutPipe/StderrPipe pipe as
-	// soon as the process exits ("it is incorrect to call Wait before all reads
-	// from the pipe have completed"); calling it before every drain has
-	// finished risks truncating output that was still in flight. A prior
-	// version of this function tried waiting for process exit concurrently
-	// with draining, to unblock a drain left waiting on a leaked fd it has no
-	// other way to detect (see ShellExecutor.Run's pipe pre-check for the
-	// hazard this refers to). Measured against a real nono session, that did
-	// not reliably work: racing cmd.Wait() itself against an in-flight drain
-	// truncates output that had not been read yet (Go's own Cmd.Wait
-	// unconditionally closes every tracked pipe the instant it reaps the
-	// process), and reading process state from /proc instead to avoid that
-	// still left the hang reproducing in most runs, for reasons inside nono's
-	// own process-spawning machinery that a read ordering fix on this side of
-	// the boundary cannot address. See task-8-report.md's Finding B fix
-	// report for what was tried and measured.
+	// Start, then close this side's copies of the fds the child was given, then
+	// Wait, then drain. No ordering rule is being obeyed here: every fd belongs
+	// to this side rather than to os/exec, so Wait has nothing to close and
+	// cannot truncate output still in flight — the hazard the old
+	// "Start, then drain, then Wait, never any other order" rule existed to
+	// avoid is unreachable rather than avoided. The one thing that does matter
+	// is closeJobEnds: while this side still holds a write end, the drain's EOF
+	// can never arrive.
 	job := jobFrom(ctx)
 	if job == nil {
 		job = NewJob() // a bare interpreter, in a test: the command still gets its own group
 	}
 	if err := job.Start(cmd); err != nil {
-		for _, d := range drains {
-			d.abort()
-		}
+		w.abort()
 		fmt.Fprintf(hc.Stderr, "agent-sandbox: %s: %v\n", args[0], err)
 		return interp.NewExitStatus(126)
 	}
+	// Right after Start, and before anything that waits: exec.Cmd has now
+	// duplicated these into the child, and while this side still holds a write
+	// end the drain below can never see EOF.
+	w.closeJobEnds()
 
 	// Tear the whole group down the instant the context is cancelled, not
 	// just when the interpreter next checks it between statements — this is
@@ -222,11 +209,15 @@ func (e *ShellExecutor) execHandler(ctx context.Context, args []string) error {
 		}
 	}()
 
-	for _, d := range drains {
-		d.wait()
+	err = cmd.Wait()
+
+	if truncated := w.waitDrains(DrainGrace); truncated {
+		// Not an exit code: inventing one would hide the command's real result.
+		fmt.Fprintf(hc.Stderr,
+			"agent-sandbox: output truncated: %s left a process holding its output after %s\n",
+			args[0], DrainGrace)
 	}
 
-	err = cmd.Wait()
 	if err == nil {
 		return nil
 	}

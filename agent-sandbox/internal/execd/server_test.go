@@ -37,7 +37,7 @@ func (e *echoExecutor) Execute(ctx context.Context, req execd.Request,
 	return 7, nil
 }
 
-func startTestServer(t *testing.T, exec execd.Executor) string {
+func startTestServer(t *testing.T, ex execd.Executor) string {
 	t.Helper()
 	// t.TempDir() embeds the (potentially long) test name in the path, which
 	// on macOS can push a unix socket path past the ~104-byte sun_path limit
@@ -49,7 +49,7 @@ func startTestServer(t *testing.T, exec execd.Executor) string {
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	sock := filepath.Join(dir, "b.sock")
-	srv, err := execd.NewServer(sock, exec)
+	srv, err := execd.NewServer(sock, ex)
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}

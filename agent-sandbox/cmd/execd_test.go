@@ -41,7 +41,7 @@ func TestExecdServesOnTheGivenSocket(t *testing.T) {
 
 	var out, errb bytes.Buffer
 	code, err := execd.NewClient(sock).RunCommand(
-		context.Background(), "echo served", nil, &out, &errb)
+		context.Background(), "echo served", nil, &out, &errb, execd.RunOptions{})
 	if err != nil {
 		t.Fatalf("RunCommand: %v", err)
 	}

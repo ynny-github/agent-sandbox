@@ -205,7 +205,7 @@ func runExecded(t *testing.T, allowDomains []string, command string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	var out, errb strings.Builder
-	code, rcErr := execd.NewClient(sock).RunCommand(ctx, command, nil, &out, &errb)
+	code, rcErr := execd.NewClient(sock).RunCommand(ctx, command, nil, &out, &errb, execd.RunOptions{})
 	if rcErr != nil {
 		t.Fatalf("RunCommand: %v (stderr=%s)", rcErr, errb.String())
 	}

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/execd"
 )
@@ -73,6 +74,26 @@ func TestRunExecCore_NonZeroExit(t *testing.T) {
 	code := runExecCore(context.Background(), "exit 3", &out, &errBuf)
 	if code != 3 {
 		t.Errorf("exit code = %d, want 3", code)
+	}
+}
+
+func TestRunExecCore_Timeout(t *testing.T) {
+	startFakeExecd(t)
+	execTimeout = 400 * time.Millisecond
+	t.Cleanup(func() { execTimeout = 0 })
+
+	var out, errBuf bytes.Buffer
+	start := time.Now()
+	code := runExecCore(context.Background(), "sleep 30", &out, &errBuf)
+
+	if code != 124 {
+		t.Errorf("exit code = %d, want 124 (stderr=%q)", code, errBuf.String())
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Errorf("took %v; want it bounded by --timeout", d)
+	}
+	if !strings.Contains(errBuf.String(), "timed out") {
+		t.Errorf("stderr = %q, want it to say the command timed out", errBuf.String())
 	}
 }
 

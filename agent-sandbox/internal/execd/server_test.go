@@ -64,7 +64,7 @@ func TestClientSendsTheCommandLine(t *testing.T) {
 
 	var out, errb bytes.Buffer
 	code, err := execd.NewClient(sock).RunCommand(
-		context.Background(), "echo hi | cat", nil, &out, &errb)
+		context.Background(), "echo hi | cat", nil, &out, &errb, execd.RunOptions{})
 	if err != nil {
 		t.Fatalf("RunCommand: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestServerRunsCommandAndReturnsExitCode(t *testing.T) {
 	c := execd.NewClient(sock)
 	var out, errb testBuffer
 	code, err := c.RunCommand(context.Background(),
-		"go test", nil, &out, &errb)
+		"go test", nil, &out, &errb, execd.RunOptions{})
 	if err != nil {
 		t.Fatalf("RunCommand() error = %v", err)
 	}
@@ -144,7 +144,7 @@ func TestServerForwardsStdin(t *testing.T) {
 	c := execd.NewClient(sock)
 	var out, errb testBuffer
 	_, err := c.RunCommand(context.Background(),
-		"cat", stringsReader("piped"), &out, &errb)
+		"cat", stringsReader("piped"), &out, &errb, execd.RunOptions{})
 	if err != nil {
 		t.Fatalf("RunCommand() error = %v", err)
 	}
@@ -187,7 +187,7 @@ func TestServerReportsExitWhenStdinNeverCloses(t *testing.T) {
 	go func() {
 		var out, errb testBuffer
 		code, rerr := execd.NewClient(sock).RunCommand(
-			context.Background(), "exit 5", stdin, &out, &errb)
+			context.Background(), "exit 5", stdin, &out, &errb, execd.RunOptions{})
 		done <- result{code, rerr}
 	}()
 

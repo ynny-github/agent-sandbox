@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/execd"
@@ -19,7 +22,11 @@ var execCmd = &cobra.Command{
 	RunE:  runExec,
 }
 
+var execTimeout time.Duration
+
 func init() {
+	execCmd.Flags().DurationVar(&execTimeout, "timeout", 0,
+		"kill the command if it has not finished within this duration (0 = no limit)")
 	rootCmd.AddCommand(execCmd)
 }
 
@@ -57,7 +64,44 @@ func runExecCore(ctx context.Context, command string, stdout, stderr io.Writer) 
 		}
 		return 1
 	}
-	code, runErr := client.RunCommand(ctx, command, nil, stdout, stderr)
+	// os.Stdin is wired unconditionally rather than behind a flag. The hook
+	// rewrites every Bash tool call to `agent-sandbox exec -- <command>`, so a
+	// flag the hook did not pass would leave the agent unable to send input at
+	// all, and a flag the hook always passed would not be a flag. The harness
+	// gives this process /dev/null on fd 0, so an ordinary command sees an
+	// immediate EOF, exactly as it does today.
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigs)
+	// relayDone stops the translator goroutine below when this call returns.
+	// signal.Stop only unregisters delivery to sigs; it does not close the
+	// channel, so a goroutine ranging over sigs would never see it end. In
+	// production that goroutine outlives the call harmlessly because os.Exit
+	// follows immediately, but runExecCore is also called directly by tests,
+	// where nothing else would ever unblock it.
+	relayDone := make(chan struct{})
+	defer close(relayDone)
+	relay := make(chan syscall.Signal, 1)
+	go func() {
+		for {
+			select {
+			case s := <-sigs:
+				if us, ok := s.(syscall.Signal); ok {
+					select {
+					case relay <- us:
+					default:
+					}
+				}
+			case <-relayDone:
+				return
+			}
+		}
+	}()
+
+	code, runErr := client.RunCommand(ctx, command, os.Stdin, stdout, stderr, execd.RunOptions{
+		TimeoutMs: int(execTimeout.Milliseconds()),
+		Signals:   relay,
+	})
 	if runErr != nil {
 		if errors.Is(runErr, execd.ErrExecdUnavailable) {
 			fmt.Fprintln(stderr, execd.SandboxNotRunningHint)

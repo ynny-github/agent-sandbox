@@ -7,6 +7,8 @@ import (
 	"io"
 	"net"
 	"os"
+	"sync"
+	"syscall"
 )
 
 // ErrExecdUnavailable signals that the execd socket could not be reached.
@@ -38,9 +40,18 @@ func NewClientFromEnv() (*Client, error) {
 	return NewClient(path), nil
 }
 
+// RunOptions carries the per-request knobs that are not the command itself.
+type RunOptions struct {
+	// TimeoutMs bounds the request; zero means no bound.
+	TimeoutMs int
+	// Signals, when non-nil, is drained for the life of the request and each
+	// signal is forwarded to the command.
+	Signals <-chan syscall.Signal
+}
+
 // RunCommand sends one command line to execd and streams its output back.
 func (c *Client) RunCommand(ctx context.Context, command string,
-	stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	stdin io.Reader, stdout, stderr io.Writer, opts RunOptions) (int, error) {
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", c.sockPath)
 	if err != nil {
@@ -65,13 +76,51 @@ func (c *Client) RunCommand(ctx context.Context, command string,
 		Cwd:             workingDir(),
 		WithStdin:       stdin != nil,
 		ProtocolVersion: ProtocolVersion,
+		TimeoutMs:       opts.TimeoutMs,
 	}
 	if err := WriteRequest(conn, req); err != nil {
 		return 0, err
 	}
 
+	// cw serializes every frame this client writes to conn. WriteFrame issues
+	// a header Write followed by a payload Write for a non-empty payload; it
+	// is not atomic. The stdin pump and the signal forwarder below both write
+	// frames from their own goroutines, so without a shared lock a signal
+	// frame could land between a stdin frame's header and payload writes.
+	// The server trusts the declared length and would read the signal
+	// frame's bytes as stdin payload, desyncing the whole stream for the
+	// rest of the request — exactly the case where someone interrupts a
+	// command that is still streaming input. cw is the client-side
+	// counterpart of the server's frameWriter, which serializes its own
+	// concurrent frame writes the same way.
+	cw := &connWriter{c: conn}
+
 	if stdin != nil {
-		go pumpStdinTo(conn, stdin)
+		go pumpStdinTo(cw, stdin)
+	}
+
+	// The forwarder is scoped to this request: it exits via done (closed by
+	// the deferred close above) as soon as RunCommand returns, and it never
+	// blocks the caller because opts.Signals is only read here, never
+	// written to — a caller that never signals leaves this select parked on
+	// two channels neither of which it owns the pace of.
+	if opts.Signals != nil {
+		go func() {
+			for {
+				select {
+				case sig := <-opts.Signals:
+					// A write failure here means the connection is already
+					// gone — the peer closed it, or the ctx.Done() goroutine
+					// above closed it first. The read loop below observes
+					// the same failure via ReadFrame and turns it into
+					// RunCommand's returned error, so there is nothing
+					// further to report from this side.
+					cw.writeSignal(sig)
+				case <-done:
+					return
+				}
+			}
+		}()
 	}
 
 	for {
@@ -99,20 +148,43 @@ func (c *Client) RunCommand(ctx context.Context, command string,
 	}
 }
 
-func pumpStdinTo(conn net.Conn, stdin io.Reader) {
+func pumpStdinTo(cw *connWriter, stdin io.Reader) {
 	buf := make([]byte, 32*1024)
 	for {
 		n, err := stdin.Read(buf)
 		if n > 0 {
-			if werr := WriteFrame(conn, ChanStdin, buf[:n]); werr != nil {
+			if werr := cw.writeFrame(ChanStdin, buf[:n]); werr != nil {
 				return
 			}
 		}
 		if err != nil {
-			WriteFrame(conn, ChanStdinClose, nil)
+			cw.writeFrame(ChanStdinClose, nil)
 			return
 		}
 	}
+}
+
+// connWriter serializes concurrent frame writes onto the one connection a
+// request uses. It is the client-side counterpart of the server's
+// frameWriter (server.go), which exists for the same reason: two goroutines
+// — here, the stdin pump and the signal forwarder — must not interleave
+// their writes to the same net.Conn, since a partially written frame would
+// desync the peer's read of the whole stream.
+type connWriter struct {
+	mu sync.Mutex
+	c  net.Conn
+}
+
+func (cw *connWriter) writeFrame(ch Channel, payload []byte) error {
+	cw.mu.Lock()
+	defer cw.mu.Unlock()
+	return WriteFrame(cw.c, ch, payload)
+}
+
+func (cw *connWriter) writeSignal(sig syscall.Signal) error {
+	cw.mu.Lock()
+	defer cw.mu.Unlock()
+	return WriteSignal(cw.c, sig)
 }
 
 func workingDir() string {
@@ -127,7 +199,7 @@ func workingDir() string {
 // is the production implementation; tests substitute their own.
 type CommandRunner interface {
 	RunCommand(ctx context.Context, command string, stdin io.Reader,
-		stdout, stderr io.Writer) (int, error)
+		stdout, stderr io.Writer, opts RunOptions) (int, error)
 }
 
 // SandboxNotRunningHint is the actionable message shown when execd is not

@@ -64,8 +64,8 @@ func TestRunHookCore_EscapesEmbeddedQuotes(t *testing.T) {
 }
 
 // A Bash or Monitor call this hook cannot rewrite must not proceed: the hook
-// exists to route every command into the broker, and letting an unrewritten one
-// through runs it in the agent's own sandbox, unbrokered.
+// exists to route every command through execd, and letting an unrewritten one
+// through runs it in the agent's own sandbox instead.
 func TestRunHookCore_NoCommand_IsAnError(t *testing.T) {
 	for _, payload := range []string{
 		`{"tool_name":"Bash","tool_input":{"command":""}}`,

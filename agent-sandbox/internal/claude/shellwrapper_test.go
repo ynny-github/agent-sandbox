@@ -131,7 +131,7 @@ func TestBuildArgs_OmitsTheShellWrapperGrantWhenThereIsNoWrapper(t *testing.T) {
 	}
 }
 
-// testWrapperStart is the shell-wrapper counterpart of testBrokerStart.
+// testWrapperStart is the shell-wrapper counterpart of testExecdStart.
 func testWrapperStart(path string, cleaned *int) func() (string, func(), error) {
 	return func() (string, func(), error) {
 		return path, func() {
@@ -151,7 +151,7 @@ func TestRun_ExportsTheShellWrapperBeforeSupervise(t *testing.T) {
 	err := run(&config.Config{}, Options{}, runDeps{
 		agentProfile:      func(*config.Config) (string, error) { return "/tmp/asb-profile-1.json", nil },
 		verifyHook:        func(string, string) error { return nil },
-		startBroker:       testBrokerStart("/tmp/test.sock", nil),
+		startExecd:        testExecdStart("/tmp/test.sock", nil),
 		startShellWrapper: testWrapperStart(wantWrapper, nil),
 		supervise: func(_ string, args []string) int {
 			gotEnv = os.Getenv(ShellEnvVar)
@@ -178,7 +178,7 @@ func TestRun_CleansUpTheShellWrapperBeforeExit(t *testing.T) {
 	err := run(&config.Config{}, Options{}, runDeps{
 		agentProfile:      func(*config.Config) (string, error) { return "/tmp/asb-profile-1.json", nil },
 		verifyHook:        func(string, string) error { return nil },
-		startBroker:       testBrokerStart("/tmp/test.sock", nil),
+		startExecd:        testExecdStart("/tmp/test.sock", nil),
 		startShellWrapper: testWrapperStart("/tmp/test-norc-bash-1", &cleaned),
 		supervise:         func(string, []string) int { return 0 },
 		exit:              func(int) { cleanedBeforeExit = cleaned == 1 },
@@ -201,7 +201,7 @@ func TestRun_LaunchesWithoutTheWrapperWhenItCannotBeWritten(t *testing.T) {
 	err := run(&config.Config{}, Options{}, runDeps{
 		agentProfile:      func(*config.Config) (string, error) { return "/tmp/asb-profile-1.json", nil },
 		verifyHook:        func(string, string) error { return nil },
-		startBroker:       testBrokerStart("/tmp/test.sock", nil),
+		startExecd:        testExecdStart("/tmp/test.sock", nil),
 		startShellWrapper: func() (string, func(), error) { return "", nil, errors.New("no state dir") },
 		supervise:         func(string, []string) int { superviseCalls++; return 0 },
 		exit:              func(int) {},

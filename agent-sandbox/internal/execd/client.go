@@ -1,4 +1,4 @@
-package broker
+package execd
 
 import (
 	"context"
@@ -9,15 +9,15 @@ import (
 	"os"
 )
 
-// ErrBrokerUnavailable signals that the broker socket could not be reached.
+// ErrExecdUnavailable signals that the execd socket could not be reached.
 // Callers translate it into an actionable message instead of a raw dial error.
-var ErrBrokerUnavailable = errors.New("command broker is not available")
+var ErrExecdUnavailable = errors.New("exec daemon is not available")
 
-// SocketEnvVar names the environment variable that carries the broker socket
+// SocketEnvVar names the environment variable that carries the execd socket
 // path into the sandbox.
-const SocketEnvVar = "AGENT_SANDBOX_BROKER_SOCKET"
+const SocketEnvVar = "AGENT_SANDBOX_EXECD_SOCKET"
 
-// Client dials the broker socket. It is safe for concurrent use: every call
+// Client dials the execd socket. It is safe for concurrent use: every call
 // opens its own connection, which is what lets a mixed pipeline run several
 // sandboxed segments at once.
 type Client struct {
@@ -28,23 +28,23 @@ type Client struct {
 func NewClient(sockPath string) *Client { return &Client{sockPath: sockPath} }
 
 // NewClientFromEnv builds a client from SocketEnvVar. It returns
-// ErrBrokerUnavailable when the variable is unset, which happens whenever a
+// ErrExecdUnavailable when the variable is unset, which happens whenever a
 // command is routed to the sandbox outside an `agent-sandbox claude` session.
 func NewClientFromEnv() (*Client, error) {
 	path := os.Getenv(SocketEnvVar)
 	if path == "" {
-		return nil, fmt.Errorf("%w: %s is not set", ErrBrokerUnavailable, SocketEnvVar)
+		return nil, fmt.Errorf("%w: %s is not set", ErrExecdUnavailable, SocketEnvVar)
 	}
 	return NewClient(path), nil
 }
 
-// RunCommand sends one command line to the broker and streams its output back.
+// RunCommand sends one command line to execd and streams its output back.
 func (c *Client) RunCommand(ctx context.Context, command string,
 	stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", c.sockPath)
 	if err != nil {
-		return 0, fmt.Errorf("%w: %v", ErrBrokerUnavailable, err)
+		return 0, fmt.Errorf("%w: %v", ErrExecdUnavailable, err)
 	}
 	defer conn.Close()
 
@@ -73,23 +73,23 @@ func (c *Client) RunCommand(ctx context.Context, command string,
 		f, err := ReadFrame(conn)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return 0, fmt.Errorf("broker: connection closed before exit status")
+				return 0, fmt.Errorf("execd: connection closed before exit status")
 			}
 			return 0, err
 		}
 		switch f.Channel {
 		case ChanStdout:
 			if _, werr := stdout.Write(f.Payload); werr != nil {
-				return 0, fmt.Errorf("broker: write stdout: %w", werr)
+				return 0, fmt.Errorf("execd: write stdout: %w", werr)
 			}
 		case ChanStderr:
 			if _, werr := stderr.Write(f.Payload); werr != nil {
-				return 0, fmt.Errorf("broker: write stderr: %w", werr)
+				return 0, fmt.Errorf("execd: write stderr: %w", werr)
 			}
 		case ChanExit:
 			return f.ExitCode(), nil
 		case ChanError:
-			return 0, fmt.Errorf("broker: %s", f.Payload)
+			return 0, fmt.Errorf("execd: %s", f.Payload)
 		}
 	}
 }
@@ -118,16 +118,16 @@ func workingDir() string {
 	return wd
 }
 
-// CommandRunner executes one command line inside the sandbox. The broker client
+// CommandRunner executes one command line inside the sandbox. The execd client
 // is the production implementation; tests substitute their own.
 type CommandRunner interface {
 	RunCommand(ctx context.Context, command string, stdin io.Reader,
 		stdout, stderr io.Writer) (int, error)
 }
 
-// SandboxNotRunningHint is the actionable message shown when the broker is not
+// SandboxNotRunningHint is the actionable message shown when execd is not
 // reachable. It is exported because the situation is detected before any
 // command runs: `agent-sandbox exec` and the MCP server both fail to build a
-// client when AGENT_SANDBOX_BROKER_SOCKET is unset, and must print this rather
+// client when AGENT_SANDBOX_EXECD_SOCKET is unset, and must print this rather
 // than a raw dial error.
-const SandboxNotRunningHint = "command broker is not available; run Claude via `agent-sandbox claude`, which starts it automatically"
+const SandboxNotRunningHint = "exec daemon is not available; run Claude via `agent-sandbox claude`, which starts it automatically"

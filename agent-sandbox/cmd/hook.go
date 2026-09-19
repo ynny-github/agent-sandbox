@@ -55,7 +55,7 @@ func runHook(in io.Reader, out, errOut io.Writer) int {
 // hook is registered for Bash and Monitor only, both of which exist to run a
 // command, so a payload with none is either a shape this code does not know or
 // a call that must not proceed. Letting it through would run the command in the
-// agent's own sandbox instead of the broker's.
+// agent's own sandbox instead of execd's.
 func runHookCore(in io.Reader, out io.Writer) error {
 	data, err := io.ReadAll(in)
 	if err != nil {
@@ -71,7 +71,7 @@ func runHookCore(in io.Reader, out io.Writer) error {
 			name = "(unnamed tool)"
 		}
 		return fmt.Errorf("no command found in the %s payload, so it cannot be routed "+
-			"through the broker; refusing rather than letting it run unbrokered", name)
+			"through execd; refusing rather than letting it run outside execd", name)
 	}
 
 	wrapped := "agent-sandbox exec -- " + shellquote.Quote(input.ToolInput.Command)

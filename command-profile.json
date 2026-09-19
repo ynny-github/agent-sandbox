@@ -1,7 +1,7 @@
 {
   // Written by hand, in nono's own schema: agent-sandbox does not generate,
-  // read, or validate this file. What a brokered command may access is
-  // decided by this file alone, together with nono's own base profiles.
+  // read, or validate this file. What a command run through execd may access
+  // is decided by this file alone, together with nono's own base profiles.
   //
   // The section headings below group the grants the same way the deleted
   // capability catalog used to (go, python, node, rust, dart, flutter,
@@ -56,9 +56,9 @@
       "~/.cargo/registry",
       "~/.cargo/git",
       // NOTE: rust_runtime grants all of ~/.cargo, publish token included, so
-      // a brokered command can read it. There is no deny layer on this side
-      // (or the agent's) that would hide it — this file is the only thing
-      // that decides what a brokered command may read.
+      // a command run through execd can read it. There is no deny layer on this
+      // side (or the agent's) that would hide it — this file is the only thing
+      // that decides what a command run through execd may read.
 
       // -- capability: dart
       "~/.pub-cache",
@@ -72,7 +72,7 @@
       "~/.config/flutter",
       "~/.local/share/mise/http-tarballs"
       // NOTE: this is a WRITE grant over every mise-installed binary, including
-      // agent-sandbox itself. doctor's "broker binary is not writable" check will
+      // agent-sandbox itself. doctor's "execd binary is not writable" check will
       // fail while this line is present. Drop the flutter capability unless a
       // project actually needs it.
     ],
@@ -110,16 +110,16 @@
 
     // Carried alongside "linux": { "af_unix_mediation": "pathname" } below,
     // but this grant's own reason for existing is independent of that key,
-    // not gated by it. On nono 0.74.0, a broker started WITHOUT the
+    // not gated by it. On nono 0.74.0, an execd started WITHOUT the
     // launcher's own "--allow-unix-socket-bind" flag has its bind refused
     // unless this grant is present — measured true with af_unix_mediation
     // present, and equally true with it absent entirely. It is NOT
     // load-bearing for the one production launch path this repository
-    // actually uses: BrokerArgs (agent-sandbox/internal/claude/launch.go,
+    // actually uses: ExecdArgs (agent-sandbox/internal/claude/launch.go,
     // around line 511) always passes "--allow-unix-socket-bind" itself, and
     // through that flag the bind already succeeds with this entry absent —
     // measured, round trip clean either way. This entry exists so the
-    // profile stands on its own for a broker started some other way — by
+    // profile stands on its own for an execd started some other way — by
     // hand, or by something other than `agent-sandbox claude` — where no
     // launcher flag is there to cover it. Not redundant with the plain
     // "~/.local/state/agent-sandbox" entry under "allow" above: that one is
@@ -144,9 +144,9 @@
       // -- not from the catalog: proxy variables this profile carries itself
       "http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "no_proxy", "NO_PROXY"
 
-      // DO NOT add AGENT_SANDBOX_BROKER_SOCKET, and do not add a wildcard that
-      // would match it. It is agentOnlyEnv: a command that can reach the broker
-      // socket can recurse into broker.Server.Serve, which spawns handlers with
+      // DO NOT add AGENT_SANDBOX_EXECD_SOCKET, and do not add a wildcard that
+      // would match it. It is agentOnlyEnv: a command that can reach the execd
+      // socket can recurse into execd.Server.Serve, which spawns handlers with
       // no concurrency cap — a host-side fork bomb. ResolveShell used to be the
       // code that kept it out of this profile; that code is gone, so this list
       // being explicit is the only thing left enforcing it.
@@ -352,7 +352,7 @@
         "from": {
           "session": "deny",
           "git": { "sandbox": {
-            // The official git-ssh example brokers $SSH_AUTH_SOCK as a
+            // The official git-ssh example forwards $SSH_AUTH_SOCK as a
             // local-socket credential and prefers that to a raw key grant. Not
             // usable here: SSH_AUTH_SOCK is set on this host but points at a
             // socket that no longer exists, and a profile declaring the

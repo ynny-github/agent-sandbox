@@ -4,24 +4,24 @@
 
 Run an AI coding agent (Claude Code) inside a
 [nono](https://github.com/tkancf/nono) sandbox, and mediate every shell
-command it issues through a host-side command broker that runs in its own
+command it issues through execd, a host-side exec daemon that runs in its own
 sibling nono session. What each command may touch is decided by a nono
 command profile the operator writes — not by `agent-sandbox.toml`.
 
 The point is not to lock the agent out of your machine. It is to make the
 boundary *explicit and inspectable*: `agent-sandbox ai explain` tells the
-agent which commands run in their own sandbox, which run at the broker's own
+agent which commands run in their own sandbox, which run at execd's own
 grants, and why any refusal fired, so a policy denial reads as a policy
 denial rather than an unexplained failure worth retrying.
 
 ```
 launcher
 ├── nono wrap  --profile <agent profile>    -- claude …         no command control here
-└── nono run   --profile <command profile>  -- agent-sandbox broker
+└── nono run   --profile <command profile>  -- agent-sandbox execd
                                                │
                                                ├─ exec git → shim → git, its own child sandbox
                                                │                     └─ exec ssh → shim → ssh, its own
-                                               └─ exec rg  → runs directly in the broker's own sandbox
+                                               └─ exec rg  → runs directly in execd's own sandbox
 ```
 
 ## Requirements
@@ -61,30 +61,30 @@ profile = "claude-profile.json"
 
 Then write both profiles yourself, directly in nono's own schema:
 `claude-profile.json` for the agent process's own sandbox, and
-`command-profile.json` for every brokered command's sandbox. There is no
+`command-profile.json` for the sandbox every command execd runs gets. There is no
 default for either — a missing file is a launch error. This repository's own
 two files are worked examples, and each entry carries its reasoning in a
 comment.
 
 ```bash
-agent-sandbox doctor            # nono, the broker socket, and both profiles all usable?
+agent-sandbox doctor            # nono, the execd socket, and both profiles all usable?
 agent-sandbox ai config-check   # does agent-sandbox.toml resolve, and do both profiles validate?
 agent-sandbox claude -- --model opus
 ```
 
-There is no `sandbox up` step. `agent-sandbox claude` starts the broker in
+There is no `sandbox up` step. `agent-sandbox claude` starts execd in
 its own nono session, launches Claude under a second, sibling session, and
-tears the broker down when Claude exits.
+tears execd down when Claude exits.
 
 ## How it works
 
 **Two sibling sessions, never nested.** One wraps Claude Code under the agent
-profile; the other runs `agent-sandbox broker` under the command profile.
-Sandboxes cannot nest, which is why the broker does not run inside the
+profile; the other runs `agent-sandbox execd` under the command profile.
+Sandboxes cannot nest, which is why execd does not run inside the
 agent's session.
 
-**There is no shell in the loop.** Every command the agent issues reaches the
-broker over a unix socket, and the broker parses the line itself with an
+**There is no shell in the loop.** Every command the agent issues reaches
+execd over a unix socket, and execd parses the line itself with an
 embedded interpreter — pipelines, `&&`/`||`/`;`, redirections, globbing,
 `$(…)`, `for`/`if`, `cd` and the other builtins all work — then calls
 `execve` directly for each simple command. Handing the line to `bash -c`
@@ -93,11 +93,11 @@ defeated by invoking git through its store path instead of by name.
 
 **Two tiers.** Commands declared in the command profile get their own child
 sandbox, reached only through the generated shim; everything else runs
-directly at the broker's own grants. A refusal from the first tier explains
+directly at execd's own grants. A refusal from the first tier explains
 itself — the denial carries the `reason` its profile entry wrote. A failure
-at the second is plain `execve` permission, with no reason to give. The
-broker's own builtins are a third case: they run inside the broker process,
-so a redirect or a glob you write is bounded by the broker's grants, not by
+at the second is plain `execve` permission, with no reason to give.
+execd's own builtins are a third case: they run inside the execd process,
+so a redirect or a glob you write is bounded by execd's grants, not by
 the command it is attached to.
 
 **Neither profile is agent-sandbox's.** It generates no profile at all. Both
@@ -110,9 +110,9 @@ for `nono profile show` / `nono why`.
 
 | Command | What it does |
 |---|---|
-| `agent-sandbox claude -- [claude args...]` | Launch Claude under nono, with the command broker running as a sibling session |
-| `agent-sandbox exec -- <command>` | Send one command to the broker and stream its output |
-| `agent-sandbox doctor` | Check everything a launch depends on: the sandbox engine, the broker socket, both profiles and the paths they pin, and that the command profile does not leave the broker's own binary writable. Exit 0 / 1 |
+| `agent-sandbox claude -- [claude args...]` | Launch Claude under nono, with execd running as a sibling session |
+| `agent-sandbox exec -- <command>` | Send one command to execd and stream its output |
+| `agent-sandbox doctor` | Check everything a launch depends on: the sandbox engine, the execd socket, both profiles and the paths they pin, and that the command profile does not leave execd's own binary writable. Exit 0 / 1 |
 | `agent-sandbox debug -- [claude args...]` | Print the `nono` invocations for both sessions — without running anything |
 | `agent-sandbox ai explain` | Agent-facing description of the sandbox: how commands run, both tiers, and every denial's reason |
 | `agent-sandbox ai config-check` | Validate `agent-sandbox.toml` and both nono profiles the way launch reads them |
@@ -153,7 +153,7 @@ Claude Code spawns tool commands with a socket on stdin, and non-interactive
 bash reads a socket on stdin as an rshd/sshd session and sources `~/.bashrc` —
 a file no profile here grants, so without the wrapper every tool result is
 prefixed with a permission error. The launcher writes `norc-bash-<pid>` beside
-the broker socket (`bash --norc --noprofile`, nothing else), grants it with
+the execd socket (`bash --norc --noprofile`, nothing else), grants it with
 `--read-file`, names it in `CLAUDE_CODE_SHELL`, and removes it when the session
 ends. The agent profile's `environment.allow_vars` must list that variable or
 nono strips it and Claude falls back to the host's bash; the session still
@@ -162,11 +162,11 @@ works, it just gets noisy, so `agent-sandbox doctor` measures it.
 `--env <ref>` (only `file:` exists today) loads a dotenv-subset file into the
 launcher's own process. **It grants nothing.** Only what a profile's
 `environment.allow_vars` lists is forwarded, so a variable reaches the agent
-only if the agent profile names it. Exposing one to a brokered command is a
+only if the agent profile names it. Exposing one to a command execd runs is a
 separate edit to the command profile — with one exception:
-`AGENT_SANDBOX_BROKER_SOCKET` must never appear there, under any name or
-wildcard. A command that can reach the broker socket can recurse into the
-broker, which spawns handlers with no concurrency cap.
+`AGENT_SANDBOX_EXECD_SOCKET` must never appear there, under any name or
+wildcard. A command that can reach the execd socket can recurse into
+execd, which spawns handlers with no concurrency cap.
 
 ## Development
 

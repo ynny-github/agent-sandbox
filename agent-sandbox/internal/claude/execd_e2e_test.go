@@ -1,8 +1,8 @@
 //go:build e2e
 
-// Package claude_test's broker_e2e_test.go proves, with a real nono
-// installation, that a command run through the broker actually inherits the
-// command profile's network policy — the property internal/broker's
+// Package claude_test's execd_e2e_test.go proves, with a real nono
+// installation, that a command run through execd actually inherits the
+// command profile's network policy — the property internal/execd's
 // now-deleted network_e2e_test.go used to establish under the old
 // per-command NonoExecutor design (see git history around the change that
 // deleted the router). It is gated behind the "e2e" build tag rather than
@@ -10,7 +10,7 @@
 // actual agent-sandbox CLI, and reaches out over the network, none of which
 // belong in the default, hermetic test run. Run it explicitly with:
 //
-//	go test -tags e2e ./agent-sandbox/internal/claude/... -run BrokeredCommand -v
+//	go test -tags e2e ./agent-sandbox/internal/claude/... -run ExecdCommand -v
 package claude_test
 
 import (
@@ -24,20 +24,20 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/broker"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/claude"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/execd"
 )
 
 // buildAgentSandbox compiles the real CLI binary into dir and returns its
 // path. A test's own os.Executable() resolves to the compiled test binary,
-// not a cobra-driven CLI that understands `broker --socket`, so
-// startCommandBroker itself cannot be exercised here (see its own doc
-// comment); this suite drives claude.BrokerArgs — the pure function
-// startCommandBroker calls — against a binary that can actually serve the
-// `broker` subcommand instead.
+// not a cobra-driven CLI that understands `execd --socket`, so
+// startExecd itself cannot be exercised here (see its own doc
+// comment); this suite drives claude.ExecdArgs — the pure function
+// startExecd calls — against a binary that can actually serve the
+// `execd` subcommand instead.
 //
-// dir must be a path the broker session's own profile grants: nono refuses to
+// dir must be a path the execd session's own profile grants: nono refuses to
 // exec a binary out of a directory it has not been told to trust, and unlike
 // a real install (under e.g. /usr/local/bin or ~/.local/bin, which nono's own
 // baseline already trusts) a throwaway test binary has no such standing grant
@@ -59,10 +59,10 @@ func buildAgentSandbox(t *testing.T, dir string) string {
 	return out
 }
 
-// startBrokerSession starts a real broker inside a real nono run session,
-// built exactly as claude.BrokerArgs describes it, and returns the socket
+// startExecdSession starts a real execd inside a real nono run session,
+// built exactly as claude.ExecdArgs describes it, and returns the socket
 // path. Teardown (SIGTERM, Wait, socket removal) is registered via t.Cleanup.
-func startBrokerSession(t *testing.T, nonoPath, selfPath string, cfg *config.Config, workdir string) string {
+func startExecdSession(t *testing.T, nonoPath, selfPath string, cfg *config.Config, workdir string) string {
 	t.Helper()
 	// A short, unrelated temp dir for the socket: t.TempDir() embeds the
 	// (potentially long) test name in the path, which can push a unix socket
@@ -74,7 +74,7 @@ func startBrokerSession(t *testing.T, nonoPath, selfPath string, cfg *config.Con
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	sock := filepath.Join(dir, "e.sock")
 
-	args := claude.BrokerArgs(cfg, nonoPath, selfPath, sock, workdir)
+	args := claude.ExecdArgs(cfg, nonoPath, selfPath, sock, workdir)
 	// Captured rather than sent straight to the test binary's own stdout/stderr
 	// so a failure to start reports nono's own diagnostic (e.g. "directory is
 	// not readable inside the sandbox" for a binary outside every grant)
@@ -83,7 +83,7 @@ func startBrokerSession(t *testing.T, nonoPath, selfPath string, cfg *config.Con
 	cmd := exec.Command(nonoPath, args[1:]...)
 	cmd.Stdout, cmd.Stderr = &outBuf, &errBuf
 	if err := cmd.Start(); err != nil {
-		t.Fatalf("start broker session: %v", err)
+		t.Fatalf("start execd session: %v", err)
 	}
 	t.Cleanup(func() {
 		cmd.Process.Signal(syscall.SIGTERM)
@@ -97,7 +97,7 @@ func startBrokerSession(t *testing.T, nonoPath, selfPath string, cfg *config.Con
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
-	t.Fatalf("broker socket %s did not appear within 15s\nargs: %v\nstdout: %s\nstderr: %s",
+	t.Fatalf("execd socket %s did not appear within 15s\nargs: %v\nstdout: %s\nstderr: %s",
 		sock, args, outBuf.String(), errBuf.String())
 	return ""
 }
@@ -105,7 +105,7 @@ func startBrokerSession(t *testing.T, nonoPath, selfPath string, cfg *config.Con
 // fixtureProfile is the subset of nono's own profile schema this suite needs:
 // a filesystem grant for the working directory, an env baseline, and a
 // network section. agent-sandbox generates no profile at all any more — the
-// operator writes both the agent's and the command broker's in nono's own
+// operator writes both the agent's and execd's in nono's own
 // schema, and agent-sandbox only names them. This suite hand-writes its
 // fixture command profile the same way a real operator would.
 type fixtureProfile struct {
@@ -138,7 +138,7 @@ type fixtureNetwork struct {
 	AllowDomain    []string `json:"allow_domain,omitempty"`
 }
 
-// writeFixtureProfile writes the nono profile this suite's broker session
+// writeFixtureProfile writes the nono profile this suite's execd session
 // runs under to a temp file and returns its path (removed via t.Cleanup):
 // workdir read+write, "/dev/null" allow-listed, nix_runtime/git_config
 // (harmless where their paths do not exist, required where they do), and the
@@ -146,7 +146,7 @@ type fixtureNetwork struct {
 func writeFixtureProfile(t *testing.T, workdir string, allowDomains []string) string {
 	t.Helper()
 	p := fixtureProfile{
-		Meta:       fixtureMeta{Name: "broker e2e"},
+		Meta:       fixtureMeta{Name: "execd e2e"},
 		Groups:     &fixtureGroups{Include: []string{"git_config", "nix_runtime"}},
 		Filesystem: fixtureFilesystem{Allow: []string{workdir}, AllowFile: []string{"/dev/null"}},
 		Environment: fixtureEnvironment{
@@ -158,7 +158,7 @@ func writeFixtureProfile(t *testing.T, workdir string, allowDomains []string) st
 	if err != nil {
 		t.Fatalf("marshal fixture profile: %v", err)
 	}
-	f, err := os.CreateTemp("", "broker-e2e-profile-*.json")
+	f, err := os.CreateTemp("", "execd-e2e-profile-*.json")
 	if err != nil {
 		t.Fatalf("create profile temp file: %v", err)
 	}
@@ -174,9 +174,9 @@ func writeFixtureProfile(t *testing.T, workdir string, allowDomains []string) st
 	return path
 }
 
-// runBrokered starts a broker session whose command profile grants
+// runExecded starts an execd session whose command profile grants
 // allowDomains, sends command to it, and returns the exit code.
-func runBrokered(t *testing.T, allowDomains []string, command string) int {
+func runExecded(t *testing.T, allowDomains []string, command string) int {
 	t.Helper()
 	nonoPath, err := exec.LookPath("nono")
 	if err != nil {
@@ -187,10 +187,10 @@ func runBrokered(t *testing.T, allowDomains []string, command string) int {
 	selfPath := buildAgentSandbox(t, workdir)
 	cfg := &config.Config{CommandProfile: writeFixtureProfile(t, workdir, allowDomains)}
 
-	sock := startBrokerSession(t, nonoPath, selfPath, cfg, workdir)
+	sock := startExecdSession(t, nonoPath, selfPath, cfg, workdir)
 
 	// The client sends its own working directory as the request's Cwd (see
-	// broker.Client.RunCommand's workingDir helper), so this test's cwd must
+	// execd.Client.RunCommand's workingDir helper), so this test's cwd must
 	// be the directory the profile actually grants. Chdir affects the whole
 	// process, so it is undone once this case finishes.
 	prevWd, err := os.Getwd()
@@ -205,7 +205,7 @@ func runBrokered(t *testing.T, allowDomains []string, command string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	var out, errb strings.Builder
-	code, rcErr := broker.NewClient(sock).RunCommand(ctx, command, nil, &out, &errb)
+	code, rcErr := execd.NewClient(sock).RunCommand(ctx, command, nil, &out, &errb)
 	if rcErr != nil {
 		t.Fatalf("RunCommand: %v (stderr=%s)", rcErr, errb.String())
 	}
@@ -216,22 +216,22 @@ func curlCmd(url string) string {
 	return "curl -sS -o /dev/null --max-time 15 " + url
 }
 
-func TestBrokeredCommand_DeveloperPresetDomainAllowed(t *testing.T) {
+func TestExecdCommand_DeveloperPresetDomainAllowed(t *testing.T) {
 	// registry.npmjs.org is in the developer network profile's default allow
 	// list (nono's own built-in preset, not one agent-sandbox defines).
-	if code := runBrokered(t, nil, curlCmd("https://registry.npmjs.org/")); code != 0 {
+	if code := runExecded(t, nil, curlCmd("https://registry.npmjs.org/")); code != 0 {
 		t.Errorf("curl to a preset domain exited %d, want 0", code)
 	}
 }
 
-func TestBrokeredCommand_DomainOutsidePresetBlocked(t *testing.T) {
-	if code := runBrokered(t, nil, curlCmd("https://example.org/")); code == 0 {
+func TestExecdCommand_DomainOutsidePresetBlocked(t *testing.T) {
+	if code := runExecded(t, nil, curlCmd("https://example.org/")); code == 0 {
 		t.Error("curl to a domain outside the preset exited 0, want non-zero")
 	}
 }
 
-func TestBrokeredCommand_AllowDomainsGrantsAccess(t *testing.T) {
-	if code := runBrokered(t, []string{"example.org"}, curlCmd("https://example.org/")); code != 0 {
+func TestExecdCommand_AllowDomainsGrantsAccess(t *testing.T) {
+	if code := runExecded(t, []string{"example.org"}, curlCmd("https://example.org/")); code != 0 {
 		t.Errorf("curl to an allow_domains entry exited %d, want 0", code)
 	}
 }

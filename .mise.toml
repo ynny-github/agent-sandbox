@@ -4,9 +4,9 @@ lefthook = "latest"
 
 # agent-sandbox is deliberately not pinned as a tool, and this project no
 # longer puts a working-tree bin/ on PATH either. Both would put the built
-# binary somewhere BrokerArgs' base-name PATH resolution could land on *and*
+# binary somewhere ExecdArgs' base-name PATH resolution could land on *and*
 # the command profile's fs_write also reaches ($WORKDIR) — exactly the
-# writable-and-executable state nono refuses the broker's own entrypoint for
+# writable-and-executable state nono refuses execd's own entrypoint for
 # (see doctor's checkCommandProfile and the README's "installed binary's
 # directory" note). `mise run build` instead runs `go install`, which lands
 # outside $WORKDIR either way: GOBIN if set, GOPATH/bin otherwise. Measured
@@ -20,7 +20,7 @@ lefthook = "latest"
 # first PATH match and runs it at the session's own grants, with
 # `nono profile validate` still passing). A toolchain upgrade or a changed
 # GOBIN can still move where `go install` lands; see the Development section
-# in README.md for what that affects (PATH resolution of the broker
+# in README.md for what that affects (PATH resolution of execd's own
 # entrypoint, not a profile pin).
 [tasks.build]
 description = "Build agent-sandbox and install it outside the working tree (go install)"

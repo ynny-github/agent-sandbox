@@ -1,4 +1,4 @@
-package broker
+package execd
 
 import (
 	"context"
@@ -20,16 +20,16 @@ import (
 
 // ShellExecutor runs one command line. It parses and evaluates the shell
 // language in this process with mvdan.cc/sh and executes every simple command
-// itself, which is what keeps each execution mediated: the broker runs inside a
+// itself, which is what keeps each execution mediated: execd runs inside a
 // nono session whose command policies decide what may be executed at all, and
 // handing the line to a real shell would hand that decision to the shell.
 //
 // Everything the shell language does with the filesystem — globbing, redirects,
-// command substitution — is performed here and is therefore bounded by the
-// broker's own sandbox, not by the agent's.
+// command substitution — is performed here and is therefore bounded by
+// execd's own sandbox, not by the agent's.
 type ShellExecutor struct {
 	// pacer is shared by every request this executor serves, which is what
-	// makes it process-wide: cmd/broker.go builds exactly one ShellExecutor
+	// makes it process-wide: cmd/execd.go builds exactly one ShellExecutor
 	// and hands it to the server, whose Serve spawns a goroutine per
 	// connection. The budget being paced belongs to the one nono session all
 	// of those goroutines launch into, so a per-request limiter would not
@@ -67,7 +67,7 @@ func NewShellExecutor() *ShellExecutor { return &ShellExecutor{pacer: &launchPac
 //	500ms apart   oooooooooooo / oooooooooooo / oooooooooooo   (3 runs)
 //
 // The same 12 commands run as 12 SEPARATE `nono run` sessions are 12/12, so
-// what is exhausted belongs to the session, not to the host — and the broker
+// what is exhausted belongs to the session, not to the host — and execd
 // is one long-lived session by construction (it must be the session
 // entrypoint for the profile to govern everything it executes, and nono
 // refuses to nest), so spacing the launches is the lever this side of the
@@ -79,7 +79,7 @@ func NewShellExecutor() *ShellExecutor { return &ShellExecutor{pacer: &launchPac
 // from nono, which reports nothing about this budget; re-measure before
 // changing them, and re-measure on a nono upgrade.
 //
-// Only the broker's own launches are paced, and only those need to be.
+// Only execd's own launches are paced, and only those need to be.
 // Measured against this profile with a synthetic `bash -> git` edge (the real
 // profile's own nesting edges are `bash`/`sh` -> `go` and `git` -> `ssh`,
 // neither cheap to drive here): a policy command launching 12 more policy
@@ -141,7 +141,7 @@ func (p *launchPacer) wait(ctx context.Context) bool {
 // The error is non-nil only for a failure of Run itself. A syntax error, a
 // command that does not exist, and a command that fails are all reported
 // through the exit status with a message on stderr, because they are outcomes
-// of the agent's line rather than faults of the broker.
+// of the agent's line rather than faults of execd itself.
 func (e *ShellExecutor) Run(ctx context.Context, command, cwd string,
 	stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	file, err := syntax.NewParser().Parse(strings.NewReader(command), "command")
@@ -179,7 +179,7 @@ func (e *ShellExecutor) Run(ctx context.Context, command, cwd string,
 		interp.ExecHandler(e.execHandler),
 	)
 	if err != nil {
-		return 0, fmt.Errorf("broker: build interpreter: %w", err)
+		return 0, fmt.Errorf("execd: build interpreter: %w", err)
 	}
 
 	if err := runner.Run(ctx, file); err != nil {
@@ -317,7 +317,7 @@ func (e *ShellExecutor) execHandler(ctx context.Context, args []string) error {
 	// LookPathDir resolves against hc.Dir and hc.Env rather than this process's
 	// own cwd and PATH: the whole premise of this executor is the caller's
 	// explicitly supplied working directory, and exec.LookPath would silently
-	// resolve "./script.sh" against the broker's cwd instead of the command's.
+	// resolve "./script.sh" against execd's cwd instead of the command's.
 	path, err := interp.LookPathDir(hc.Dir, hc.Env, args[0])
 	if err != nil {
 		fmt.Fprintf(hc.Stderr, "agent-sandbox: %s: command not found\n", args[0])
@@ -508,7 +508,7 @@ func interposeOutputs(cmd *exec.Cmd, hc interp.HandlerContext) ([]outputDrain, e
 // interfaceEqual mirrors the unexported helper os/exec itself uses to detect
 // when Stdout and Stderr are the same writer. Comparing two interface values
 // with == panics only when they share a dynamic type that is not comparable;
-// no writer this broker deals with does, but recovering keeps that fact from
+// no writer execd deals with does, but recovering keeps that fact from
 // ever being load-bearing.
 func interfaceEqual(a, b any) (eq bool) {
 	defer func() {
@@ -519,7 +519,7 @@ func interfaceEqual(a, b any) (eq bool) {
 	return a == b
 }
 
-// execEnv renders the interpreter's environment for the child. The broker's
+// execEnv renders the interpreter's environment for the child. execd's
 // own environment is already filtered by nono before it starts, and each
 // command's is decided by its entry in the command profile, so nothing is
 // filtered here.
@@ -546,8 +546,8 @@ func execEnv(hc interp.HandlerContext) []string {
 // there into every command's own working directory. The old router-based
 // design (NonoExecutor.checkCwd) rejected a relative path or one outside the
 // granted root itself; this executor does not reproduce that check, because
-// the bound it enforced now comes from the broker's own nono session instead:
-// the broker runs under --profile with no --allow-cwd (see BrokerArgs), so
+// the bound it enforced now comes from execd's own nono session instead:
+// execd runs under --profile with no --allow-cwd (see ExecdArgs), so
 // every filesystem access the interpreter or a child process makes — cwd
 // included — is already confined to whatever that profile grants, whatever
 // req.Cwd claims. What is checked here is only the request's shape, not its
@@ -558,10 +558,10 @@ func execEnv(hc interp.HandlerContext) []string {
 func (e *ShellExecutor) Execute(ctx context.Context, req Request,
 	stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	if strings.TrimSpace(req.Command) == "" {
-		return 0, fmt.Errorf("broker: empty command")
+		return 0, fmt.Errorf("execd: empty command")
 	}
 	if !filepath.IsAbs(req.Cwd) {
-		return 0, fmt.Errorf("broker: cwd %q is not an absolute path", req.Cwd)
+		return 0, fmt.Errorf("execd: cwd %q is not an absolute path", req.Cwd)
 	}
 	return e.Run(ctx, req.Command, req.Cwd, stdin, stdout, stderr)
 }

@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/agentconfig"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/broker"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/execd"
 )
 
 func TestValidatePassthrough_SettingsBlocked(t *testing.T) {
@@ -68,9 +68,9 @@ func makeFakeNono(t *testing.T) string {
 }
 
 // makeFakeNonoWedged writes a "nono" that creates the socket named after
-// "--allow-unix-socket-bind" (standing in for a broker session that started
-// fine), then ignores SIGTERM and sleeps, standing in for a broker that never
-// exits on its own. It is what TestStartCommandBroker_CleanupKillsAWedgedBroker
+// "--allow-unix-socket-bind" (standing in for an execd session that started
+// fine), then ignores SIGTERM and sleeps, standing in for an execd that never
+// exits on its own. It is what TestStartExecd_CleanupKillsAWedgedExecd
 // uses to prove teardown escalates to SIGKILL rather than waiting forever.
 func makeFakeNonoWedged(t *testing.T) {
 	t.Helper()
@@ -136,7 +136,7 @@ func TestBuildArgs_AlwaysUsesWrap(t *testing.T) {
 }
 
 // Every session injects the PreToolUse hook: it is the only thing that routes
-// the agent's Bash and Monitor commands to the broker.
+// the agent's Bash and Monitor commands to execd.
 func TestBuildArgs_InjectsHookSettings(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{}
@@ -329,7 +329,7 @@ func TestParseArgs_EnvRefs(t *testing.T) {
 	}
 }
 
-func TestBuildArgs_GrantsBrokerSocket(t *testing.T) {
+func TestBuildArgs_GrantsExecdSocket(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{}
 	_, args, err := BuildArgs(cfg, Options{}, "", "/tmp/b.sock", "")
@@ -359,11 +359,11 @@ func hasFlagValue(args []string, flag, value string) bool {
 //
 // The Docker-lifecycle tests that used to live here (fakeHandle / ensureUp /
 // Started / Down) no longer apply: run() no longer owns a sandbox lifecycle,
-// it starts and tears down the command broker instead. They are replaced by
-// the broker-focused tests below; startBroker replaces the deleted ensureUp
+// it starts and tears down execd instead. They are replaced by
+// the execd-focused tests below; startExecd replaces the deleted ensureUp
 // field everywhere else.
 
-func testBrokerStart(sock string, cleaned *int) func(*config.Config) (string, func(), error) {
+func testExecdStart(sock string, cleaned *int) func(*config.Config) (string, func(), error) {
 	return func(*config.Config) (string, func(), error) {
 		return sock, func() {
 			if cleaned != nil {
@@ -373,7 +373,7 @@ func testBrokerStart(sock string, cleaned *int) func(*config.Config) (string, fu
 	}
 }
 
-func TestRun_StartBrokerFailure_DoesNotLaunch(t *testing.T) {
+func TestRun_StartExecdFailure_DoesNotLaunch(t *testing.T) {
 	makeFakeNono(t)
 	superviseCalls := 0
 	exitCalls := 0
@@ -383,17 +383,17 @@ func TestRun_StartBrokerFailure_DoesNotLaunch(t *testing.T) {
 		},
 		verifyHook:        func(string, string) error { return nil },
 		startShellWrapper: testWrapperStart("/tmp/test-norc-bash-1", nil),
-		startBroker: func(*config.Config) (string, func(), error) {
-			return "", nil, errors.New("broker start error")
+		startExecd: func(*config.Config) (string, func(), error) {
+			return "", nil, errors.New("execd start error")
 		},
 		supervise: func(string, []string) int { superviseCalls++; return 0 },
 		exit:      func(int) { exitCalls++ },
 	})
 	if err == nil {
-		t.Fatal("expected error when startBroker fails, got nil")
+		t.Fatal("expected error when startExecd fails, got nil")
 	}
 	if superviseCalls != 0 {
-		t.Errorf("claude was launched despite broker failure (supervise called %d times)", superviseCalls)
+		t.Errorf("claude was launched despite execd failure (supervise called %d times)", superviseCalls)
 	}
 	if exitCalls != 0 {
 		t.Errorf("exit called %d times, want 0 on hard-fail", exitCalls)
@@ -408,7 +408,7 @@ func TestRun_ExitReceivesSuperviseCode(t *testing.T) {
 			return "/tmp/asb-profile-1.json", nil
 		},
 		verifyHook:        func(string, string) error { return nil },
-		startBroker:       testBrokerStart("/tmp/test.sock", nil),
+		startExecd:        testExecdStart("/tmp/test.sock", nil),
 		startShellWrapper: testWrapperStart("/tmp/test-norc-bash-1", nil),
 		supervise:         func(string, []string) int { return 3 },
 		exit:              func(code int) { gotExit = code },
@@ -421,7 +421,7 @@ func TestRun_ExitReceivesSuperviseCode(t *testing.T) {
 	}
 }
 
-func TestRun_BrokerCleanupBeforeExit(t *testing.T) {
+func TestRun_ExecdCleanupBeforeExit(t *testing.T) {
 	makeFakeNono(t)
 	cleaned := 0
 	cleanedBeforeExit := false
@@ -430,7 +430,7 @@ func TestRun_BrokerCleanupBeforeExit(t *testing.T) {
 			return "/tmp/asb-profile-1.json", nil
 		},
 		verifyHook:        func(string, string) error { return nil },
-		startBroker:       testBrokerStart("/tmp/test.sock", &cleaned),
+		startExecd:        testExecdStart("/tmp/test.sock", &cleaned),
 		startShellWrapper: testWrapperStart("/tmp/test-norc-bash-1", nil),
 		supervise:         func(string, []string) int { return 0 },
 		exit:              func(int) { cleanedBeforeExit = cleaned == 1 },
@@ -439,16 +439,16 @@ func TestRun_BrokerCleanupBeforeExit(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !cleanedBeforeExit {
-		t.Error("broker cleanup must run before exit; os.Exit skips deferred cleanup in production")
+		t.Error("execd cleanup must run before exit; os.Exit skips deferred cleanup in production")
 	}
 }
 
-func TestRun_SetsBrokerSocketEnvBeforeSupervise(t *testing.T) {
+func TestRun_SetsExecdSocketEnvBeforeSupervise(t *testing.T) {
 	makeFakeNono(t)
 	// t.Setenv restores whatever this variable held before the test once the
 	// test finishes, so run()'s own os.Setenv call below doesn't leak into
 	// the rest of the binary.
-	t.Setenv(broker.SocketEnvVar, "")
+	t.Setenv(execd.SocketEnvVar, "")
 	const wantSocket = "/tmp/test-env-handoff.sock"
 	var gotEnv string
 	err := run(&config.Config{}, Options{}, runDeps{
@@ -456,10 +456,10 @@ func TestRun_SetsBrokerSocketEnvBeforeSupervise(t *testing.T) {
 			return "/tmp/asb-profile-1.json", nil
 		},
 		verifyHook:        func(string, string) error { return nil },
-		startBroker:       testBrokerStart(wantSocket, nil),
+		startExecd:        testExecdStart(wantSocket, nil),
 		startShellWrapper: testWrapperStart("/tmp/test-norc-bash-1", nil),
 		supervise: func(string, []string) int {
-			gotEnv = os.Getenv(broker.SocketEnvVar)
+			gotEnv = os.Getenv(execd.SocketEnvVar)
 			return 0
 		},
 		exit: func(int) {},
@@ -468,22 +468,22 @@ func TestRun_SetsBrokerSocketEnvBeforeSupervise(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if gotEnv != wantSocket {
-		t.Errorf("%s at supervise time = %q, want %q (the broker socket, set before supervise runs)",
-			broker.SocketEnvVar, gotEnv, wantSocket)
+		t.Errorf("%s at supervise time = %q, want %q (the execd socket, set before supervise runs)",
+			execd.SocketEnvVar, gotEnv, wantSocket)
 	}
 }
 
-// startCommandBroker now launches a real `nono run` session (see BrokerArgs),
+// startExecd now launches a real `nono run` session (see ExecdArgs),
 // so it can no longer be exercised end-to-end without a real nono binary and
 // a real sandbox — out of scope for this package's tests (see task-4-report.md
 // for why). What stays testable without spawning anything is its plumbing:
 // like BuildArgs, it must fail fast when nono is not on PATH rather than
 // attempting to start a session it cannot run.
-func TestStartCommandBroker_NonoNotInPath(t *testing.T) {
+func TestStartExecd_NonoNotInPath(t *testing.T) {
 	t.Setenv("PATH", "")
-	sock, cleanup, err := startCommandBroker(&config.Config{})
+	sock, cleanup, err := startExecd(&config.Config{})
 	if err == nil {
-		t.Fatal("startCommandBroker() error = nil, want error when nono is not in PATH")
+		t.Fatal("startExecd() error = nil, want error when nono is not in PATH")
 	}
 	if !strings.Contains(err.Error(), "nono not found in PATH") {
 		t.Errorf("error = %q, want it to explain nono is missing", err.Error())
@@ -496,23 +496,23 @@ func TestStartCommandBroker_NonoNotInPath(t *testing.T) {
 	}
 }
 
-// TestStartCommandBroker_ReportsChildExitBeforeBinding is the integration-level
+// TestStartExecd_ReportsChildExitBeforeBinding is the integration-level
 // version of TestWaitForSocketOrExit_ChildExitsFirst: with a fake "nono" that
 // exits 0 without ever binding a socket (standing in for nono rejecting the
-// command profile), startCommandBroker must fail fast with a specific error
-// rather than blocking for the full brokerStartTimeout and reporting a bare
+// command profile), startExecd must fail fast with a specific error
+// rather than blocking for the full execdStartTimeout and reporting a bare
 // "did not start" message.
-func TestStartCommandBroker_ReportsChildExitBeforeBinding(t *testing.T) {
+func TestStartExecd_ReportsChildExitBeforeBinding(t *testing.T) {
 	makeFakeNono(t)
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 
 	start := time.Now()
-	sock, cleanup, err := startCommandBroker(&config.Config{})
+	sock, cleanup, err := startExecd(&config.Config{})
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
-		t.Errorf("startCommandBroker() took %s, want it to fail fast once the child exits", elapsed)
+		t.Errorf("startExecd() took %s, want it to fail fast once the child exits", elapsed)
 	}
 	if err == nil {
-		t.Fatal("startCommandBroker() error = nil, want an error when the child exits before binding")
+		t.Fatal("startExecd() error = nil, want an error when the child exits before binding")
 	}
 	if !strings.Contains(err.Error(), "exited") {
 		t.Errorf("err = %v, want it to mention the child exiting", err)
@@ -525,23 +525,23 @@ func TestStartCommandBroker_ReportsChildExitBeforeBinding(t *testing.T) {
 	}
 }
 
-// TestStartCommandBroker_CleanupKillsAWedgedBroker is the regression test for
-// Important Finding 2: teardown must not trust a signaled broker to exit and
+// TestStartExecd_CleanupKillsAWedgedExecd is the regression test for
+// Important Finding 2: teardown must not trust a signaled execd to exit and
 // wait on it forever. With a fake "nono" that ignores SIGTERM entirely,
-// cleanup must still return — bounded by brokerStopTimeout, shrunk here so the
+// cleanup must still return — bounded by execdStopTimeout, shrunk here so the
 // test does not spend real seconds proving it — rather than hang
 // agent-sandbox claude after the agent has already exited.
-func TestStartCommandBroker_CleanupKillsAWedgedBroker(t *testing.T) {
-	old := brokerStopTimeout
-	brokerStopTimeout = 200 * time.Millisecond
-	t.Cleanup(func() { brokerStopTimeout = old })
+func TestStartExecd_CleanupKillsAWedgedExecd(t *testing.T) {
+	old := execdStopTimeout
+	execdStopTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { execdStopTimeout = old })
 
 	makeFakeNonoWedged(t)
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 
-	sock, cleanup, err := startCommandBroker(&config.Config{})
+	sock, cleanup, err := startExecd(&config.Config{})
 	if err != nil {
-		t.Fatalf("startCommandBroker() error = %v", err)
+		t.Fatalf("startExecd() error = %v", err)
 	}
 	if cleanup == nil {
 		t.Fatal("cleanup = nil, want a cleanup function")
@@ -553,14 +553,14 @@ func TestStartCommandBroker_CleanupKillsAWedgedBroker(t *testing.T) {
 	start := time.Now()
 	cleanup()
 	if elapsed := time.Since(start); elapsed > 3*time.Second {
-		t.Errorf("cleanup() took %s, want it bounded by brokerStopTimeout instead of hanging", elapsed)
+		t.Errorf("cleanup() took %s, want it bounded by execdStopTimeout instead of hanging", elapsed)
 	}
 	if _, statErr := os.Stat(sock); !os.IsNotExist(statErr) {
 		t.Errorf("socket %s still exists after cleanup (stat err = %v), want it removed", sock, statErr)
 	}
 }
 
-func TestBrokerArgsRunsTheBrokerUnderTheCommandProfile(t *testing.T) {
+func TestExecdArgsRunsExecdUnderTheCommandProfile(t *testing.T) {
 	dir := t.TempDir()
 	profile := filepath.Join(dir, "command-profile.json")
 	if err := os.WriteFile(profile, []byte("{}"), 0o600); err != nil {
@@ -568,7 +568,7 @@ func TestBrokerArgsRunsTheBrokerUnderTheCommandProfile(t *testing.T) {
 	}
 	cfg := loadConfigWithCommandProfile(t, dir, profile)
 
-	args := BrokerArgs(cfg, "/usr/bin/nono", "/opt/agent-sandbox/bin/agent-sandbox",
+	args := ExecdArgs(cfg, "/usr/bin/nono", "/opt/agent-sandbox/bin/agent-sandbox",
 		"/run/b.sock", "/work/project")
 
 	joined := strings.Join(args, " ")
@@ -578,19 +578,19 @@ func TestBrokerArgsRunsTheBrokerUnderTheCommandProfile(t *testing.T) {
 		"--workdir /work/project",
 		"--allow-unix-socket-bind /run/b.sock",
 		"--read-file /opt/agent-sandbox/bin/agent-sandbox",
-		"-- /opt/agent-sandbox/bin/agent-sandbox broker --socket /run/b.sock",
+		"-- /opt/agent-sandbox/bin/agent-sandbox execd --socket /run/b.sock",
 	} {
 		if !strings.Contains(joined, want) {
-			t.Errorf("BrokerArgs() = %q\nmissing %q", joined, want)
+			t.Errorf("ExecdArgs() = %q\nmissing %q", joined, want)
 		}
 	}
 	if strings.Contains(joined, "--allow-cwd") {
-		t.Errorf("BrokerArgs() grants --allow-cwd; the working directory comes from the profile's $WORKDIR")
+		t.Errorf("ExecdArgs() grants --allow-cwd; the working directory comes from the profile's $WORKDIR")
 	}
 }
 
-// TestBrokerArgsGrantsItsOwnBinaryAndInvokesItAbsolutely pins the two halves
-// of one ruling: the broker's ability to start is the launcher's to guarantee,
+// TestExecdArgsGrantsItsOwnBinaryAndInvokesItAbsolutely pins the two halves
+// of one ruling: execd's ability to start is the launcher's to guarantee,
 // not the operator profile's to remember.
 //
 // --read-file covers the binary (a read grant carries the execute right).
@@ -601,8 +601,8 @@ func TestBrokerArgsRunsTheBrokerUnderTheCommandProfile(t *testing.T) {
 // base name only because tool-sandbox refuses an absolute-path invocation of a
 // policy-controlled command as a direct exec bypass; with command_policies gone
 // that constraint is gone, and base-name resolution would leave its own hazard —
-// a stale copy earlier on the launcher's PATH silently becoming the broker.
-func TestBrokerArgsGrantsItsOwnBinaryAndInvokesItAbsolutely(t *testing.T) {
+// a stale copy earlier on the launcher's PATH silently becoming execd.
+func TestExecdArgsGrantsItsOwnBinaryAndInvokesItAbsolutely(t *testing.T) {
 	dir := t.TempDir()
 	profile := filepath.Join(dir, "command-profile.json")
 	if err := os.WriteFile(profile, []byte("{}"), 0o600); err != nil {
@@ -611,7 +611,7 @@ func TestBrokerArgsGrantsItsOwnBinaryAndInvokesItAbsolutely(t *testing.T) {
 	cfg := loadConfigWithCommandProfile(t, dir, profile)
 	const self = "/opt/agent-sandbox/bin/agent-sandbox"
 
-	args := BrokerArgs(cfg, "/usr/bin/nono", self, "/run/b.sock", "/work/project")
+	args := ExecdArgs(cfg, "/usr/bin/nono", self, "/run/b.sock", "/work/project")
 
 	readFile := -1
 	dashIdx := -1
@@ -626,25 +626,25 @@ func TestBrokerArgsGrantsItsOwnBinaryAndInvokesItAbsolutely(t *testing.T) {
 		}
 	}
 	if readFile < 0 || readFile+1 >= len(args) || args[readFile+1] != self {
-		t.Errorf("BrokerArgs() = %v, want --read-file %s so the profile need not grant the broker's own binary", args, self)
+		t.Errorf("ExecdArgs() = %v, want --read-file %s so the profile need not grant execd's own binary", args, self)
 	}
 	if readFile > dashIdx {
-		t.Errorf("BrokerArgs() puts --read-file after --, where nono would pass it to the broker instead of reading it")
+		t.Errorf("ExecdArgs() puts --read-file after --, where nono would pass it to execd instead of reading it")
 	}
 	if dashIdx < 0 || dashIdx+1 >= len(args) {
-		t.Fatalf("BrokerArgs() = %v, no entrypoint after --", args)
+		t.Fatalf("ExecdArgs() = %v, no entrypoint after --", args)
 	}
 	if got := args[dashIdx+1]; got != self {
 		t.Errorf("entrypoint = %q, want selfPath's absolute form %q", got, self)
 	}
 }
 
-// TestBrokerArgsUsesTheResolvedNonoPath guards against BrokerArgs silently
+// TestExecdArgsUsesTheResolvedNonoPath guards against ExecdArgs silently
 // discarding nonoPath: `agent-sandbox debug` exists specifically to print the
 // invocation the launcher really builds, and a hardcoded "nono" in argv[0]
 // would defeat that the moment the resolved binary isn't the first "nono" on
 // PATH.
-func TestBrokerArgsUsesTheResolvedNonoPath(t *testing.T) {
+func TestExecdArgsUsesTheResolvedNonoPath(t *testing.T) {
 	dir := t.TempDir()
 	profile := filepath.Join(dir, "command-profile.json")
 	if err := os.WriteFile(profile, []byte("{}"), 0o600); err != nil {
@@ -652,7 +652,7 @@ func TestBrokerArgsUsesTheResolvedNonoPath(t *testing.T) {
 	}
 	cfg := loadConfigWithCommandProfile(t, dir, profile)
 
-	args := BrokerArgs(cfg, "/opt/nono/bin/nono", "/opt/agent-sandbox/bin/agent-sandbox",
+	args := ExecdArgs(cfg, "/opt/nono/bin/nono", "/opt/agent-sandbox/bin/agent-sandbox",
 		"/run/b.sock", "/work/project")
 
 	if len(args) == 0 || args[0] != "/opt/nono/bin/nono" {
@@ -681,7 +681,7 @@ func TestWaitForSocketOrExit_SocketAppears(t *testing.T) {
 }
 
 // TestWaitForSocketOrExit_ChildExitsFirst is the case Important Finding 1
-// exists to fix: a broker nono rejects (a bad profile, say) exits almost
+// exists to fix: an execd nono rejects (a bad profile, say) exits almost
 // immediately, and that must surface as a fast, specific error instead of the
 // launcher blocking for the full startup timeout and then reporting a
 // generic "did not start" message.
@@ -789,7 +789,7 @@ func TestRun_PassesTheConfiguredAgentProfileToNono(t *testing.T) {
 	err := run(cfg, Options{}, runDeps{
 		agentProfile:      defaultAgentProfile,
 		verifyHook:        func(string, string) error { return nil },
-		startBroker:       testBrokerStart("/tmp/test.sock", nil),
+		startExecd:        testExecdStart("/tmp/test.sock", nil),
 		startShellWrapper: testWrapperStart("/tmp/test-norc-bash-1", nil),
 		supervise:         func(_ string, args []string) int { gotArgs = args; return 0 },
 		exit:              func(int) {},
@@ -812,7 +812,7 @@ func TestRun_MissingAgentProfileFailsBeforeLaunch(t *testing.T) {
 	err := run(cfg, Options{}, runDeps{
 		agentProfile:      defaultAgentProfile,
 		verifyHook:        func(string, string) error { return nil },
-		startBroker:       testBrokerStart("/tmp/test.sock", nil),
+		startExecd:        testExecdStart("/tmp/test.sock", nil),
 		startShellWrapper: testWrapperStart("/tmp/test-norc-bash-1", nil),
 		supervise:         func(string, []string) int { supervised++; return 0 },
 		exit:              func(int) {},
@@ -826,8 +826,8 @@ func TestRun_MissingAgentProfileFailsBeforeLaunch(t *testing.T) {
 }
 
 // The PreToolUse hook runs `agent-sandbox hook` as a direct child of the
-// agent, so it runs inside the agent's own sandbox rather than through the
-// broker: without a grant for the binary itself, nono refuses the execve and
+// agent, so it runs inside the agent's own sandbox rather than through
+// execd: without a grant for the binary itself, nono refuses the execve and
 // every command fails with nothing on screen to explain it. The path is the
 // launcher's own, so it is passed as a flag rather than written into the
 // hand-written profile, where a mise toolchain upgrade would silently
@@ -891,7 +891,7 @@ func TestRun_RefusesToLaunchWhenTheHookCannotRun(t *testing.T) {
 	err := run(cfg, Options{}, runDeps{
 		agentProfile:      defaultAgentProfile,
 		verifyHook:        func(string, string) error { return errors.New("execve refused") },
-		startBroker:       testBrokerStart("/tmp/test.sock", nil),
+		startExecd:        testExecdStart("/tmp/test.sock", nil),
 		startShellWrapper: testWrapperStart("/tmp/test-norc-bash-1", nil),
 		supervise:         func(string, []string) int { supervised++; return 0 },
 		exit:              func(int) {},
@@ -904,7 +904,7 @@ func TestRun_RefusesToLaunchWhenTheHookCannotRun(t *testing.T) {
 	}
 }
 
-// The hook is the only route from the agent's tools to the broker, so the
+// The hook is the only route from the agent's tools to execd, so the
 // probe is unconditional: every launch proves it before handing over control.
 func TestRun_AlwaysProbesTheHook(t *testing.T) {
 	makeFakeNono(t)
@@ -915,7 +915,7 @@ func TestRun_AlwaysProbesTheHook(t *testing.T) {
 	err := run(cfg, Options{}, runDeps{
 		agentProfile:      defaultAgentProfile,
 		verifyHook:        func(string, string) error { probed++; return nil },
-		startBroker:       testBrokerStart("/tmp/test.sock", nil),
+		startExecd:        testExecdStart("/tmp/test.sock", nil),
 		startShellWrapper: testWrapperStart("/tmp/test-norc-bash-1", nil),
 		supervise:         func(string, []string) int { return 0 },
 		exit:              func(int) {},

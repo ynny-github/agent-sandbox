@@ -1,6 +1,6 @@
 ---
 name: growing-a-nono-profile
-description: Use when adding or changing a command in a nono profile's command_policies, moving a secret or a path off the shared floor, wiring a new tool so it runs under the broker, or fixing a policy path that a package upgrade broke.
+description: Use when adding or changing a command in a nono profile's command_policies, moving a secret or a path off the shared floor, wiring a new tool so it runs through execd, or fixing a policy path that a package upgrade broke.
 ---
 
 # Growing a nono profile
@@ -32,7 +32,7 @@ this — nono's own checks answer narrower questions than they appear to.
 5. **Prove the close.** The thing you named in step 1 is now refused. Repeat the probe;
    one run is a hypothesis.
 6. **Prove what you opened.** See below. This is the step that gets skipped.
-7. **Prove nothing else broke** — the other declared commands, and the broker itself.
+7. **Prove nothing else broke** — the other declared commands, and execd itself.
 8. **Write the residual down** where the next editor will read it: in the profile,
    next to the entry. Say what the change does *not* bound.
 

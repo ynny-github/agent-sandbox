@@ -1,4 +1,4 @@
-package broker
+package execd
 
 import (
 	"context"
@@ -19,15 +19,15 @@ type Executor interface {
 }
 
 // Server accepts one command per connection on a unix socket. It runs in the
-// dedicated broker process — outside the agent's own sandbox, but inside a
+// dedicated execd process — outside the agent's own sandbox, but inside a
 // nono session of its own — which is the point: a process cannot create a
-// new sandbox boundary around itself, so the broker needs a boundary of its
+// new sandbox boundary around itself, so execd needs a boundary of its
 // own rather than borrowing the agent's, or worse, running with the
 // unsandboxed launcher's own reach.
 //
-// That session is started by internal/claude.startCommandBroker, which runs
-// `nono run --profile <command profile> -- agent-sandbox broker --socket
-// <path>` (see claude.BrokerArgs) as a sibling of the agent's own sandbox, not
+// That session is started by internal/claude.startExecd, which runs
+// `nono run --profile <command profile> -- agent-sandbox execd --socket
+// <path>` (see claude.ExecdArgs) as a sibling of the agent's own sandbox, not
 // a child of it — nono refuses to nest.
 type Server struct {
 	listener net.Listener
@@ -42,15 +42,15 @@ type Server struct {
 // leaves the file behind, and bind would otherwise fail forever.
 func NewServer(sockPath string, exec Executor) (*Server, error) {
 	if err := os.Remove(sockPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("broker: remove stale socket: %w", err)
+		return nil, fmt.Errorf("execd: remove stale socket: %w", err)
 	}
 	l, err := net.Listen("unix", sockPath)
 	if err != nil {
-		return nil, fmt.Errorf("broker: listen on %s: %w", sockPath, err)
+		return nil, fmt.Errorf("execd: listen on %s: %w", sockPath, err)
 	}
 	if err := os.Chmod(sockPath, 0o600); err != nil {
 		l.Close()
-		return nil, fmt.Errorf("broker: chmod socket: %w", err)
+		return nil, fmt.Errorf("execd: chmod socket: %w", err)
 	}
 	return &Server{listener: l, sockPath: sockPath, exec: exec}, nil
 }

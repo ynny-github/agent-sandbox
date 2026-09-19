@@ -2,22 +2,22 @@
 
 ## Running commands
 - Run shell commands with your normal Bash/Monitor tools; a PreToolUse hook
-  transparently routes each one through the command broker.
+  transparently routes each one through execd.
 - Command output is returned inline in the tool result.
 
-There is no shell in the loop. The broker parses your command line itself
+There is no shell in the loop. execd parses your command line itself
 (pipelines, `&&`/`||`/`;`, redirections, globbing, `$(…)`, `for`/`if`, `cd` and
 the other shell builtins all work) and executes each simple command directly —
 never implicitly through `bash` or `sh` (invoking either yourself is a
-different thing — see below). Builtins run inside the broker itself, at the
-broker's own grants, so a redirect or glob you write is bounded by those, not by
+different thing — see below). Builtins run inside execd itself, at
+execd's own grants, so a redirect or glob you write is bounded by those, not by
 whichever command's output it is attached to.
 
 ## Where the boundary is
 Some commands run in their own child sandbox with their own filesystem and
 argv grants, plus a network switch bounded by the session's own domain list
 (a command's own network grant is on/off, not a scoped list of its own); the
-rest run at the broker's own grants. Which is which is
+rest run at execd's own grants. Which is which is
 decided by `{{.ProfilePath}}`, and this document deliberately does not copy that
 file — ask nono, which resolves groups, `~`, `$WORKDIR` and `@git:` tokens that
 reading the JSON cannot:
@@ -26,7 +26,7 @@ reading the JSON cannot:
   policy-controlled, and may I invoke it? Add `--caller <name>` to ask about a
   chained edge rather than your own.
 - `nono why --profile {{.ProfilePath}} --path <p> --op read|write` (`--host`
-  for network) answers for the **broker's own sandbox**, not a policy
+  for network) answers for **execd's own sandbox**, not a policy
   command's. `--command` and `--path` do not combine: pass both and `--path`
   is silently dropped, so this answers the command question instead — it
   cannot tell you what a policy-controlled command's own child sandbox can
@@ -47,7 +47,7 @@ specifics rather than assume it shares the session's own reach.
 Neither command reports environment variables: `nono profile show` does not print
 `environment.allow_vars`. If a variable is not arriving, read that list in the
 file itself. `agent-sandbox doctor` measures the one that matters most,
-`AGENT_SANDBOX_BROKER_SOCKET`, without which nothing reaches the broker at all.
+`AGENT_SANDBOX_EXECD_SOCKET`, without which nothing reaches execd at all.
 
 ## Reading a failure
 - **Exit 126 with a reason naming `command_policies`** — a policy denial. The
@@ -56,12 +56,12 @@ file itself. `agent-sandbox doctor` measures the one that matters most,
 - **Exit 126 saying the shim `failed to connect to … supervisor.sock`** — not a
   policy denial. Policy-controlled commands launched in quick succession inside
   one nono session exhaust a budget the session refills only over time. The
-  broker paces its own launches to stay under it, so this should be rare; when
+  execd paces its own launches to stay under it, so this should be rare; when
   it does appear, re-running the command is worth one attempt.
 - **Exit 127, or `Permission denied` from the program itself** — the path, host
   or binary is outside what the profile grants. Not a rule to phrase around.
 - **`agent-sandbox: refused: this pipeline pipes two or more policy-controlled
-  commands together …`, exit 126** — not a nono denial; the broker refused it
+  commands together …`, exit 126** — not a nono denial; execd refused it
   itself, before running anything, because two policy-controlled commands
   (`git`, `ssh`, `bash`, `sh`) were piped directly together. Run them as
   separate commands instead.
@@ -90,10 +90,10 @@ Editing **does not affect the current session**: both profiles are read once, at
 session start. An edit takes effect the next time the operator runs
 `agent-sandbox claude`. After editing, run `agent-sandbox ai config-check` — it
 hands both profiles to `nono profile validate`. `agent-sandbox doctor` goes
-further: it adds the broker-socket probe, probes whether the nono on this host
+further: it adds the execd-socket probe, probes whether the nono on this host
 can start Tool Sandbox at all (an unpatched nono on NixOS cannot, even though
 `nono --version` still answers fine), asks nono whether the command profile
-leaves the broker's own binary writable, and checks that the paths the profile
+leaves execd's own binary writable, and checks that the paths the profile
 pins still exist on this host.
 
 Schema:

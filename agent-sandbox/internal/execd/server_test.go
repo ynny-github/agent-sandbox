@@ -1,4 +1,4 @@
-package broker_test
+package execd_test
 
 import (
 	"bytes"
@@ -13,16 +13,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/broker"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/execd"
 )
 
 // echoExecutor writes a fixed reply and returns a fixed exit code, so the
 // server can be tested without nono or any real process.
 type echoExecutor struct {
-	gotReq broker.Request
+	gotReq execd.Request
 }
 
-func (e *echoExecutor) Execute(ctx context.Context, req broker.Request,
+func (e *echoExecutor) Execute(ctx context.Context, req execd.Request,
 	stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	e.gotReq = req
 	fmt.Fprintf(stdout, "ran %s in %s", req.Command, req.Cwd)
@@ -35,7 +35,7 @@ func (e *echoExecutor) Execute(ctx context.Context, req broker.Request,
 	return 7, nil
 }
 
-func startTestServer(t *testing.T, exec broker.Executor) string {
+func startTestServer(t *testing.T, exec execd.Executor) string {
 	t.Helper()
 	// t.TempDir() embeds the (potentially long) test name in the path, which
 	// on macOS can push a unix socket path past the ~104-byte sun_path limit
@@ -47,7 +47,7 @@ func startTestServer(t *testing.T, exec broker.Executor) string {
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	sock := filepath.Join(dir, "b.sock")
-	srv, err := broker.NewServer(sock, exec)
+	srv, err := execd.NewServer(sock, exec)
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}
@@ -61,7 +61,7 @@ func TestClientSendsTheCommandLine(t *testing.T) {
 	sock := startTestServer(t, exec)
 
 	var out, errb bytes.Buffer
-	code, err := broker.NewClient(sock).RunCommand(
+	code, err := execd.NewClient(sock).RunCommand(
 		context.Background(), "echo hi | cat", nil, &out, &errb)
 	if err != nil {
 		t.Fatalf("RunCommand: %v", err)
@@ -81,7 +81,7 @@ func TestServerRunsCommandAndReturnsExitCode(t *testing.T) {
 	exec := &echoExecutor{}
 	sock := startTestServer(t, exec)
 
-	c := broker.NewClient(sock)
+	c := execd.NewClient(sock)
 	var out, errb testBuffer
 	code, err := c.RunCommand(context.Background(),
 		"go test", nil, &out, &errb)
@@ -105,7 +105,7 @@ type blockingExecutor struct {
 	cancelled chan struct{}
 }
 
-func (b *blockingExecutor) Execute(ctx context.Context, req broker.Request,
+func (b *blockingExecutor) Execute(ctx context.Context, req execd.Request,
 	stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	<-ctx.Done()
 	close(b.cancelled)
@@ -120,7 +120,7 @@ func TestServerCancelsCommandOnClientDisconnect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dial() error = %v", err)
 	}
-	if err := broker.WriteRequest(conn, broker.Request{Command: "sleep", Cwd: "/"}); err != nil {
+	if err := execd.WriteRequest(conn, execd.Request{Command: "sleep", Cwd: "/"}); err != nil {
 		t.Fatalf("WriteRequest() error = %v", err)
 	}
 	conn.Close()
@@ -135,7 +135,7 @@ func TestServerCancelsCommandOnClientDisconnect(t *testing.T) {
 func TestServerForwardsStdin(t *testing.T) {
 	sock := startTestServer(t, &echoExecutor{})
 
-	c := broker.NewClient(sock)
+	c := execd.NewClient(sock)
 	var out, errb testBuffer
 	_, err := c.RunCommand(context.Background(),
 		"cat", stringsReader("piped"), &out, &errb)
@@ -150,7 +150,7 @@ func TestServerForwardsStdin(t *testing.T) {
 // blockingReader never returns data and never reports EOF until it is
 // released. It models the live upstream of a mixed pipeline such as
 // `tail -f app.log | grep -m1 ERROR`: once grep matches and exits, tail is
-// still running and sends nothing more, so the broker sees neither a stdin
+// still running and sends nothing more, so execd sees neither a stdin
 // frame nor a stdin-close frame.
 type blockingReader struct{ release chan struct{} }
 
@@ -159,7 +159,7 @@ func (b *blockingReader) Read([]byte) (int, error) {
 	return 0, io.EOF
 }
 
-// Regression test for the broker deadlock: a command that exits without
+// Regression test for the execd deadlock: a command that exits without
 // draining stdin must still produce an exit frame. Before the fix, os/exec's
 // own stdin copier kept cmd.Wait blocked forever, so no exit frame was
 // written and every caller — up to Claude's Bash tool — hung. "exit 5" is a
@@ -168,7 +168,7 @@ func (b *blockingReader) Read([]byte) (int, error) {
 //
 // The deadline makes this fail fast instead of hanging the suite.
 func TestServerReportsExitWhenStdinNeverCloses(t *testing.T) {
-	sock := startTestServer(t, broker.NewShellExecutor())
+	sock := startTestServer(t, execd.NewShellExecutor())
 
 	stdin := &blockingReader{release: make(chan struct{})}
 	t.Cleanup(func() { close(stdin.release) })
@@ -180,7 +180,7 @@ func TestServerReportsExitWhenStdinNeverCloses(t *testing.T) {
 	done := make(chan result, 1)
 	go func() {
 		var out, errb testBuffer
-		code, rerr := broker.NewClient(sock).RunCommand(
+		code, rerr := execd.NewClient(sock).RunCommand(
 			context.Background(), "exit 5", stdin, &out, &errb)
 		done <- result{code, rerr}
 	}()
@@ -195,7 +195,7 @@ func TestServerReportsExitWhenStdinNeverCloses(t *testing.T) {
 		}
 	case <-time.After(15 * time.Second):
 		t.Fatal("RunCommand() did not return after the command exited: " +
-			"the broker is waiting on stdin that never ends")
+			"execd is waiting on stdin that never ends")
 	}
 }
 

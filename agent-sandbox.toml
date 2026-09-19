@@ -6,9 +6,9 @@
   # agent-sandbox generates no nono profile. Two files, both written in nono's
   # own schema, decide everything: claude-profile.json is the sandbox the agent
   # process itself runs in (its file tools, and any MCP server it spawns as a
-  # direct child — those are not brokered), and command-profile.json is the
-  # sandbox every brokered shell command runs in. agent-sandbox only names
-  # them; `nono profile show <path>` is what resolves one.
+  # direct child — those do not run through execd), and command-profile.json is
+  # the sandbox every shell command run through execd runs in. agent-sandbox
+  # only names them; `nono profile show <path>` is what resolves one.
 
   # The nono profile the launched agent runs under, resolved beside this file.
   # "claude-profile.json" is the default name for the "claude" agent, so this

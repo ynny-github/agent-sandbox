@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/agentconfig"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/broker"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/execd"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/gitutil"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/policysnapshot"
 )
@@ -80,7 +80,7 @@ func ParseArgs(args []string, defaultConfig string) (string, Options, error) {
 
 // ValidatePassthrough rejects the one claude passthrough option agent-sandbox
 // reserves for itself: --settings, which carries the PreToolUse hook that
-// routes every command through the broker. --mcp-config and
+// routes every command through execd. --mcp-config and
 // --strict-mcp-config used to be reserved too, while agent-sandbox generated
 // an MCP config of its own; it no longer generates one, so they pass through.
 func ValidatePassthrough(claudeOpts []string) error {
@@ -128,7 +128,7 @@ const (
 // agent's own sandbox, under none of the command profile's limits. Nothing in
 // the session says so. The launcher therefore proves the hook runs under this
 // exact profile rather than assuming it, in the same "measure, do not parse"
-// shape doctor uses for the broker socket variable.
+// shape doctor uses for the execd socket variable.
 //
 // --allow-cwd is required because nono refuses working-directory access in
 // non-interactive mode, which is how this runs.
@@ -147,7 +147,7 @@ func probeHook(profilePath, self string) error {
 	}
 	if !strings.Contains(string(out), hookProbeWant) {
 		return fmt.Errorf("the PreToolUse hook ran under %s but did not route the command "+
-			"through the broker: %s", profilePath, strings.TrimSpace(string(out)))
+			"through execd: %s", profilePath, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
@@ -158,7 +158,7 @@ func probeHook(profilePath, self string) error {
 // PreToolUse hook via `claude --settings`. The injected settings carry the
 // hook only; the profile contributes nothing to them.
 func BuildArgs(cfg *config.Config, opts Options,
-	profilePath, brokerSocket, shellWrapper string) (string, []string, error) {
+	profilePath, execdSocket, shellWrapper string) (string, []string, error) {
 	nonoPath, err := exec.LookPath("nono")
 	if err != nil {
 		return "", nil, fmt.Errorf("nono not found in PATH: %w", err)
@@ -166,7 +166,7 @@ func BuildArgs(cfg *config.Config, opts Options,
 	args := []string{"nono", "wrap"}
 
 	// The agent runs `agent-sandbox hook` as its own direct child — inside its
-	// own sandbox, not through the broker — so the launcher's binary has to be
+	// own sandbox, not through execd — so the launcher's binary has to be
 	// reachable from the agent profile. Without it nono refuses the execve and
 	// every command fails with nothing on screen to explain it.
 	//
@@ -196,8 +196,8 @@ func BuildArgs(cfg *config.Config, opts Options,
 		}
 	}
 
-	if brokerSocket != "" {
-		args = append(args, "--allow-unix-socket", brokerSocket)
+	if execdSocket != "" {
+		args = append(args, "--allow-unix-socket", execdSocket)
 	}
 	if profilePath != "" {
 		args = append(args, "--profile", profilePath)
@@ -217,7 +217,7 @@ func BuildArgs(cfg *config.Config, opts Options,
 }
 
 // runDeps holds the launcher's collaborators so run can be tested without
-// touching the command broker, the real process, or os.Exit.
+// touching execd, the real process, or os.Exit.
 type runDeps struct {
 	// agentProfile resolves — and existence-checks — the nono profile the
 	// launched agent runs under. It stays a dependency so tests can drive run
@@ -225,8 +225,8 @@ type runDeps struct {
 	agentProfile func(*config.Config) (string, error)
 	// verifyHook proves the PreToolUse hook can actually run under the agent's
 	// profile. Every session injects that hook, so every launch runs it.
-	verifyHook  func(profilePath, selfPath string) error
-	startBroker func(*config.Config) (socket string, cleanup func(), err error)
+	verifyHook func(profilePath, selfPath string) error
+	startExecd func(*config.Config) (socket string, cleanup func(), err error)
 	// startShellWrapper writes the shell Claude runs tool commands with. It
 	// returns the wrapper's path and a cleanup that removes it.
 	startShellWrapper func() (path string, cleanup func(), err error)
@@ -245,8 +245,8 @@ func defaultAgentProfile(c *config.Config) (string, error) {
 	return path, nil
 }
 
-// Run generates the sandbox profile, starts the command broker, launches
-// Claude under nono, and tears the broker down when Claude exits. It replaces
+// Run generates the sandbox profile, starts execd, launches
+// Claude under nono, and tears execd down when Claude exits. It replaces
 // the old syscall.Exec approach so the launcher can outlive Claude and run
 // teardown.
 func Run(cfg *config.Config, opts Options) error {
@@ -261,7 +261,7 @@ func defaultDeps() runDeps {
 	return runDeps{
 		agentProfile:      defaultAgentProfile,
 		verifyHook:        probeHook,
-		startBroker:       startCommandBroker,
+		startExecd:        startExecd,
 		startShellWrapper: defaultShellWrapper,
 		supervise:         superviseProcess,
 		exit:              os.Exit,
@@ -299,33 +299,33 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 		}
 	}()
 
-	brokerSocket, cleanupBroker, err := d.startBroker(cfg)
+	execdSocket, cleanupExecd, err := d.startExecd(cfg)
 	if err != nil {
-		return fmt.Errorf("command broker: %w", err)
+		return fmt.Errorf("exec daemon: %w", err)
 	}
 	defer func() {
-		if cleanupBroker != nil {
-			cleanupBroker()
+		if cleanupExecd != nil {
+			cleanupExecd()
 		}
 	}()
 
-	nonoPath, nonoArgs, err := BuildArgs(cfg, opts, profilePath, brokerSocket, shellWrapper)
+	nonoPath, nonoArgs, err := BuildArgs(cfg, opts, profilePath, execdSocket, shellWrapper)
 	if err != nil {
 		return err
 	}
 
 	// superviseProcess inherits the launcher's environment, so setting it here
-	// is the simplest correct way to hand the broker socket path to the child.
-	os.Setenv(broker.SocketEnvVar, brokerSocket)
+	// is the simplest correct way to hand the execd socket path to the child.
+	os.Setenv(execd.SocketEnvVar, execdSocket)
 	if shellWrapper != "" {
 		os.Setenv(ShellEnvVar, shellWrapper)
 	}
 
 	code := d.supervise(nonoPath, nonoArgs)
 
-	if cleanupBroker != nil {
-		cleanupBroker()
-		cleanupBroker = nil
+	if cleanupExecd != nil {
+		cleanupExecd()
+		cleanupExecd = nil
 	}
 	if cleanupWrapper != nil {
 		cleanupWrapper()
@@ -335,14 +335,14 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 	return nil
 }
 
-// startCommandBroker launches the broker in its own nono session and returns
+// startExecd launches execd in its own nono session and returns
 // the socket path plus a cleanup that stops it.
 //
-// The broker no longer runs in this process. It runs inside a sandbox whose
+// execd no longer runs in this process. It runs inside a sandbox whose
 // command policies govern everything it executes, which is the whole point: a
-// broker outside the sandbox would execute commands with the launcher's own
+// process outside the sandbox would execute commands with the launcher's own
 // reach.
-func startCommandBroker(cfg *config.Config) (string, func(), error) {
+func startExecd(cfg *config.Config) (string, func(), error) {
 	nonoPath, err := exec.LookPath("nono")
 	if err != nil {
 		return "", nil, fmt.Errorf("nono not found in PATH: %w", err)
@@ -355,20 +355,20 @@ func startCommandBroker(cfg *config.Config) (string, func(), error) {
 	if err != nil {
 		return "", nil, fmt.Errorf("getwd: %w", err)
 	}
-	sockPath, err := BrokerSocketPath()
+	sockPath, err := ExecdSocketPath()
 	if err != nil {
 		return "", nil, err
 	}
-	// A socket left by a killed run would make the broker's bind fail forever.
+	// A socket left by a killed run would make execd's bind fail forever.
 	if rmErr := os.Remove(sockPath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
 		return "", nil, fmt.Errorf("remove stale socket: %w", rmErr)
 	}
 
-	args := BrokerArgs(cfg, nonoPath, selfPath, sockPath, cwd)
+	args := ExecdArgs(cfg, nonoPath, selfPath, sockPath, cwd)
 	cmd := exec.Command(nonoPath, args[1:]...)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	if err := cmd.Start(); err != nil {
-		return "", nil, fmt.Errorf("start command broker: %w", err)
+		return "", nil, fmt.Errorf("start exec daemon: %w", err)
 	}
 
 	// waitExited carries cmd.Wait's result exactly once. Starting it here,
@@ -380,12 +380,12 @@ func startCommandBroker(cfg *config.Config) (string, func(), error) {
 	waitExited := make(chan error, 1)
 	go func() { waitExited <- cmd.Wait() }()
 
-	childExited, err := waitForSocketOrExit(sockPath, brokerStartTimeout, waitExited)
+	childExited, err := waitForSocketOrExit(sockPath, execdStartTimeout, waitExited)
 	if err != nil {
 		if !childExited {
 			// Still running past the deadline, or wedged mid-startup: stop it and
 			// reap it before reporting, so this call never leaves an orphaned
-			// broker process behind.
+			// execd process behind.
 			cmd.Process.Kill()
 			<-waitExited
 		}
@@ -399,25 +399,25 @@ func startCommandBroker(cfg *config.Config) (string, func(), error) {
 			return
 		}
 		if sigErr := cmd.Process.Signal(syscall.SIGTERM); sigErr != nil {
-			fmt.Fprintf(os.Stderr, "agent-sandbox: signal command broker: %v\n", sigErr)
+			fmt.Fprintf(os.Stderr, "agent-sandbox: signal exec daemon: %v\n", sigErr)
 		}
 		// Nothing here can confirm that nono forwards SIGTERM into the session
-		// it supervises, so this cannot simply wait on cmd.Wait() forever: a
-		// broker that never receives (or never acts on) the signal would hang
+		// it supervises, so this cannot simply wait on cmd.Wait() forever: an
+		// execd that never receives (or never acts on) the signal would hang
 		// agent-sandbox claude after the agent has already exited, with nothing
 		// on screen explaining why. Escalate to SIGKILL instead once
-		// brokerStopTimeout passes.
+		// execdStopTimeout passes.
 		select {
 		case waitErr := <-waitExited:
 			if waitErr != nil {
-				fmt.Fprintf(os.Stderr, "agent-sandbox: command broker: %v\n", waitErr)
+				fmt.Fprintf(os.Stderr, "agent-sandbox: exec daemon: %v\n", waitErr)
 			}
-		case <-time.After(brokerStopTimeout):
+		case <-time.After(execdStopTimeout):
 			fmt.Fprintf(os.Stderr,
-				"agent-sandbox: command broker did not exit within %s after SIGTERM; killing it\n",
-				brokerStopTimeout)
+				"agent-sandbox: exec daemon did not exit within %s after SIGTERM; killing it\n",
+				execdStopTimeout)
 			if killErr := cmd.Process.Kill(); killErr != nil {
-				fmt.Fprintf(os.Stderr, "agent-sandbox: kill command broker: %v\n", killErr)
+				fmt.Fprintf(os.Stderr, "agent-sandbox: kill exec daemon: %v\n", killErr)
 			}
 			<-waitExited
 		}
@@ -426,23 +426,23 @@ func startCommandBroker(cfg *config.Config) (string, func(), error) {
 	return sockPath, cleanup, nil
 }
 
-// brokerStartTimeout bounds how long the launcher waits for the broker's socket
+// execdStartTimeout bounds how long the launcher waits for execd's socket
 // to appear. A sandbox that cannot start fails here rather than leaving Claude
-// running against a broker that will never answer.
-const brokerStartTimeout = 15 * time.Second
+// running against an execd that will never answer.
+const execdStartTimeout = 15 * time.Second
 
-// brokerStopTimeout bounds how long teardown waits for the broker to exit
+// execdStopTimeout bounds how long teardown waits for execd to exit
 // after SIGTERM before escalating to SIGKILL. Signal forwarding into a nono
 // session is not this package's to verify, so teardown cannot simply trust it
 // and wait forever.
 //
 // It is a var, not a const, so a test can shrink it rather than spend several
 // real seconds proving the escalation path actually fires.
-var brokerStopTimeout = 5 * time.Second
+var execdStopTimeout = 5 * time.Second
 
-// waitForSocketOrExit waits for the broker's socket to appear, racing that
+// waitForSocketOrExit waits for execd's socket to appear, racing that
 // against the child exiting first via exited. Polling for the socket (rather
-// than a readiness handshake) is necessary because the broker is behind a
+// than a readiness handshake) is necessary because execd is behind a
 // sandbox boundary: there is no shared channel to signal on until the socket
 // itself appears. Racing it against exited is what turns "nono rejected the
 // profile and the child exited within milliseconds" into an immediate,
@@ -465,31 +465,31 @@ func waitForSocketOrExit(path string, timeout time.Duration, exited <-chan error
 				// nono to do without ever binding the socket, but still reported as
 				// a specific, immediate failure rather than folded into the
 				// generic timeout message below.
-				return true, fmt.Errorf("command broker exited (status 0) before binding its socket")
+				return true, fmt.Errorf("exec daemon exited (status 0) before binding its socket")
 			}
-			return true, fmt.Errorf("command broker exited before binding its socket: %w", waitErr)
+			return true, fmt.Errorf("exec daemon exited before binding its socket: %w", waitErr)
 		case <-time.After(25 * time.Millisecond):
 		}
 	}
-	return false, fmt.Errorf("command broker did not start within %s; run `agent-sandbox doctor`", timeout)
+	return false, fmt.Errorf("exec daemon did not start within %s; run `agent-sandbox doctor`", timeout)
 }
 
-// BrokerArgs builds the `nono run` argv for the command broker's session.
+// ExecdArgs builds the `nono run` argv for execd's session.
 //
-// The broker is a sibling of the agent's sandbox, not a child of it: nono
-// refuses to nest, and the broker must be the session entrypoint so the profile
+// execd is a sibling of the agent's sandbox, not a child of it: nono
+// refuses to nest, and execd must be the session entrypoint so the profile
 // applies to everything it executes. It is deliberately not given --allow-cwd;
 // the working directory reaches the profile through --workdir, which is what
 // $WORKDIR expands to inside it.
 //
-// Everything the broker needs in order to *start* is granted here, on the
+// Everything execd needs in order to *start* is granted here, on the
 // command line, rather than being left to the operator's profile. --read-file
 // covers its own binary (a read grant carries the execute right), and
 // --allow-unix-socket-bind covers the socket. Measured: under a profile that
 // grants neither, an absolute-path invocation of this binary exits 127 with no
 // output; adding --read-file alone makes the same invocation run. Keeping these
 // on the launcher's side means an operator narrowing what *commands* may reach
-// cannot accidentally stop the broker from starting, and it removes the
+// cannot accidentally stop execd from starting, and it removes the
 // profile's grants from the set of things that decide whether a session comes
 // up at all.
 //
@@ -499,8 +499,8 @@ func waitForSocketOrExit(path string, timeout time.Duration, exited <-chan error
 // bypass and refuses it. With no command_policies left, that constraint is gone
 // and only base-name resolution's own hazard would remain: nono resolves the
 // bare name through this launcher's PATH, so a different, stale copy earlier on
-// PATH would silently become the broker instead of this one.
-func BrokerArgs(cfg *config.Config, nonoPath, selfPath, sockPath, workdir string) []string {
+// PATH would silently become execd instead of this one.
+func ExecdArgs(cfg *config.Config, nonoPath, selfPath, sockPath, workdir string) []string {
 	return []string{
 		nonoPath, "run", "--silent",
 		"--profile", cfg.CommandProfilePath(),
@@ -508,17 +508,17 @@ func BrokerArgs(cfg *config.Config, nonoPath, selfPath, sockPath, workdir string
 		"--read-file", selfPath,
 		"--allow-unix-socket-bind", sockPath,
 		"--",
-		selfPath, "broker", "--socket", sockPath,
+		selfPath, "execd", "--socket", sockPath,
 	}
 }
 
-// BrokerSocketPath returns a per-process socket path under
+// ExecdSocketPath returns a per-process socket path under
 // policysnapshot.StateDir(). It stays short on purpose: unix socket paths are
 // limited to about 104 bytes on macOS.
 //
 // It is exported so `agent-sandbox debug` can print the same
 // `--allow-unix-socket` grant the launcher builds.
-func BrokerSocketPath() (string, error) {
+func ExecdSocketPath() (string, error) {
 	dir, err := policysnapshot.StateDir()
 	if err != nil {
 		return "", err
@@ -526,5 +526,5 @@ func BrokerSocketPath() (string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create state dir: %w", err)
 	}
-	return filepath.Join(dir, fmt.Sprintf("broker-%d.sock", os.Getpid())), nil
+	return filepath.Join(dir, fmt.Sprintf("execd-%d.sock", os.Getpid())), nil
 }

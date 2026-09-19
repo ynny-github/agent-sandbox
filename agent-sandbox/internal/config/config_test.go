@@ -522,7 +522,7 @@ func TestLoadRejectsTheSandboxSection(t *testing.T) {
 }
 
 // tool_mode and [mcp] are gone: the PreToolUse hook is the only way commands
-// reach the broker. Both must fail by name rather than be ignored — a config
+// reach execd. Both must fail by name rather than be ignored — a config
 // still saying tool_mode = "mcp" would otherwise launch a hook-routed session
 // while its author believes Bash is disabled and every command goes through an
 // MCP tool.

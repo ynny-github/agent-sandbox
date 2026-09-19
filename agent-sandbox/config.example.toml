@@ -1,16 +1,17 @@
-# The nono profile every brokered command runs under. Default name, resolved
+# The nono profile execd runs every command under. Default name, resolved
 # beside this file. agent-sandbox does not generate or read it.
 #
-# NEVER add AGENT_SANDBOX_BROKER_SOCKET to this profile's
+# NEVER add AGENT_SANDBOX_EXECD_SOCKET to this profile's
 # environment.allow_vars (nor a wildcard that would match it). A command that
-# can reach the broker socket can recurse into the broker, which spawns
+# can reach the execd socket can recurse into execd, which spawns
 # handlers with no concurrency cap — a host-side fork bomb.
 command_profile = "command-profile.json"
 
 # The nono profile the launched agent itself runs under — its own file tools,
-# and any MCP server it spawns as a direct child (those are not brokered, so a
-# Python- or Go-based MCP server needs its runtime granted there). Shell
-# commands do not run in it: they go to the broker, under command_profile.
+# and any MCP server it spawns as a direct child (those are not routed
+# through execd, so a Python- or Go-based MCP server needs its runtime
+# granted there). Shell commands do not run in it: they go to execd, under
+# command_profile.
 #
 # The default name is "<agent>-profile.json", so this key may be omitted.
 # A missing file is a launch error; there is no generated default.

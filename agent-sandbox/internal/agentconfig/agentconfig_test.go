@@ -37,7 +37,7 @@ func TestExplain_RoutingSection(t *testing.T) {
 	}
 }
 
-// Explain names the command profile the broker runs under, resolved the same
+// Explain names the command profile execd runs under, resolved the same
 // way config.Config.CommandProfilePath() does, without describing what it
 // allows: agent-sandbox neither generates nor reads its contents.
 func TestExplain_NamesTheCommandProfilePath(t *testing.T) {
@@ -163,7 +163,7 @@ func TestExplain_MakesNoTwoTierOrWrapperClaims(t *testing.T) {
 		"realgit",
 		"wrapper",
 		"This allowlist is absolute",
-		"never dispatched by the broker",
+		"never dispatched by execd",
 	} {
 		if strings.Contains(out, forbidden) {
 			t.Errorf("explain output still claims %q:\n%s", forbidden, out)
@@ -173,14 +173,14 @@ func TestExplain_MakesNoTwoTierOrWrapperClaims(t *testing.T) {
 
 // TestExplain_ReadsNoProfile proves the delegation rule mechanically: the
 // command profile named by the config does not exist, and Explain must still
-// produce its full document rather than degrade or report a broker issue.
+// produce its full document rather than degrade or report an execd issue.
 func TestExplain_ReadsNoProfile(t *testing.T) {
 	dir := t.TempDir()
 	cfg := &config.Config{CommandProfile: "does-not-exist.json"}
 	out := agentconfig.Explain(cfg, filepath.Join(dir, "agent-sandbox.toml"))
 
-	if strings.Contains(out, "could not identify the broker entry") {
-		t.Errorf("explain still reports a broker issue from reading the profile:\n%s", out)
+	if strings.Contains(out, "could not identify the execd entry") {
+		t.Errorf("explain still reports an execd issue from reading the profile:\n%s", out)
 	}
 	if !strings.Contains(out, "Changing the config") {
 		t.Errorf("explain did not render its full document:\n%s", out)

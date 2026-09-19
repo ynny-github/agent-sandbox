@@ -10,7 +10,7 @@ import (
 )
 
 type Config struct {
-	// CommandProfile names the nono profile the command broker runs under. It
+	// CommandProfile names the nono profile execd runs under. It
 	// is written by the operator in nono's own schema, not generated: every
 	// decision about commands — which may run, what each may touch, which
 	// invocations are refused — lives there. An empty value means the default
@@ -26,12 +26,12 @@ type Config struct {
 	dir string
 }
 
-// defaultCommandProfileName is the file the broker's profile is read from when
+// defaultCommandProfileName is the file execd's profile is read from when
 // command_profile is not set.
 const defaultCommandProfileName = "command-profile.json"
 
-// CommandProfilePath is the absolute path of the nono profile the command
-// broker runs under.
+// CommandProfilePath is the absolute path of the nono profile execd runs
+// under.
 func (c *Config) CommandProfilePath() string {
 	name := strings.TrimSpace(c.CommandProfile)
 	if name == "" {

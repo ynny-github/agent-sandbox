@@ -9,12 +9,12 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/broker"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/execd"
 )
 
 var execCmd = &cobra.Command{
 	Use:   "exec -- <command>",
-	Short: "Send a command to the broker and stream its output",
+	Short: "Send a command to execd and stream its output",
 	Args:  cobra.ArbitraryArgs,
 	RunE:  runExec,
 }
@@ -41,26 +41,26 @@ func commandFromArgs(cmd *cobra.Command, args []string) string {
 	return strings.Join(args, " ")
 }
 
-// runExecCore sends command to the broker and streams its output, returning the
+// runExecCore sends command to execd and streams its output, returning the
 // exit code. There is no routing left to do: the command profile decides what
-// may run, and the broker's interpreter decides how the line is executed.
+// may run, and execd's interpreter decides how the line is executed.
 func runExecCore(ctx context.Context, command string, stdout, stderr io.Writer) int {
-	client, err := broker.NewClientFromEnv()
+	client, err := execd.NewClientFromEnv()
 	if err != nil {
 		// The overwhelmingly common cause is running `agent-sandbox exec`
 		// outside a `claude` session, so the socket variable is unset. Print the
 		// actionable hint instead of the raw dial/lookup error.
-		if errors.Is(err, broker.ErrBrokerUnavailable) {
-			fmt.Fprintln(stderr, broker.SandboxNotRunningHint)
+		if errors.Is(err, execd.ErrExecdUnavailable) {
+			fmt.Fprintln(stderr, execd.SandboxNotRunningHint)
 		} else {
-			fmt.Fprintf(stderr, "command broker: %v\n", err)
+			fmt.Fprintf(stderr, "exec daemon: %v\n", err)
 		}
 		return 1
 	}
 	code, runErr := client.RunCommand(ctx, command, nil, stdout, stderr)
 	if runErr != nil {
-		if errors.Is(runErr, broker.ErrBrokerUnavailable) {
-			fmt.Fprintln(stderr, broker.SandboxNotRunningHint)
+		if errors.Is(runErr, execd.ErrExecdUnavailable) {
+			fmt.Fprintln(stderr, execd.SandboxNotRunningHint)
 		} else {
 			fmt.Fprintf(stderr, "%v\n", runErr)
 		}

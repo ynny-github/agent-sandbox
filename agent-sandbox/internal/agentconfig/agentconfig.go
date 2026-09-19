@@ -15,7 +15,7 @@ import (
 // the system prompt small.
 func Pointer() string {
 	return "## agent-sandbox environment\n\n" +
-		"This project routes your shell commands through a command broker. " +
+		"This project routes your shell commands through an exec daemon. " +
 		"Run `agent-sandbox ai explain` to learn how commands run and where " +
 		"the sandbox is configured.\n"
 }
@@ -32,7 +32,7 @@ type explainView struct {
 	// ConfigPath is the config file actually loaded, not the default name: the
 	// agent is being told which file to edit, and --config can move it.
 	ConfigPath string
-	// ProfilePath is the command profile the broker runs commands under
+	// ProfilePath is the command profile execd runs commands under
 	// (cfg.CommandProfilePath()). agent-sandbox neither generates nor reads its
 	// contents; this is a pointer, not a description.
 	ProfilePath string

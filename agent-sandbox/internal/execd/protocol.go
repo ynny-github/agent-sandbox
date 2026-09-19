@@ -1,4 +1,4 @@
-// Package broker carries command execution across the sandbox boundary. The
+// Package execd carries command execution across the sandbox boundary. The
 // in-sandbox client sends a command line over a unix socket; the server, which
 // runs outside the agent's own sandbox, interprets the shell language itself
 // and streams the output back.
@@ -6,7 +6,7 @@
 // The wire format is one request per connection, followed by length-prefixed
 // frames in both directions. Frames keep stdout and stderr separate so a
 // caller can route them independently.
-package broker
+package execd
 
 import (
 	"encoding/binary"
@@ -35,12 +35,12 @@ const maxPayload = 1 << 20
 
 // Request is the first message on a connection: what to run and where.
 //
-// It carries a command *line*, not an argv. The broker interprets the shell
+// It carries a command *line*, not an argv. execd interprets the shell
 // language itself and executes each simple command, so splitting it here would
 // duplicate that work in the one place that cannot see the result.
 //
 // There is deliberately no environment field. The command's environment is a
-// policy decision owned by the command profile: the broker's own environment is
+// policy decision owned by the command profile: execd's own environment is
 // filtered by nono before it starts, and each command's is decided by its entry.
 // A request-supplied environment could not work — the agent's nono profile
 // strips those variables long before they could be reported — and must not
@@ -75,18 +75,18 @@ func (f Frame) ExitCode() int {
 func WriteRequest(w io.Writer, req Request) error {
 	data, err := json.Marshal(req)
 	if err != nil {
-		return fmt.Errorf("broker: encode request: %w", err)
+		return fmt.Errorf("execd: encode request: %w", err)
 	}
 	if len(data) > maxPayload {
-		return fmt.Errorf("broker: request too large (%d bytes)", len(data))
+		return fmt.Errorf("execd: request too large (%d bytes)", len(data))
 	}
 	var hdr [4]byte
 	binary.BigEndian.PutUint32(hdr[:], uint32(len(data)))
 	if _, err := w.Write(hdr[:]); err != nil {
-		return fmt.Errorf("broker: write request header: %w", err)
+		return fmt.Errorf("execd: write request header: %w", err)
 	}
 	if _, err := w.Write(data); err != nil {
-		return fmt.Errorf("broker: write request body: %w", err)
+		return fmt.Errorf("execd: write request body: %w", err)
 	}
 	return nil
 }
@@ -95,19 +95,19 @@ func WriteRequest(w io.Writer, req Request) error {
 func ReadRequest(r io.Reader) (Request, error) {
 	var hdr [4]byte
 	if _, err := io.ReadFull(r, hdr[:]); err != nil {
-		return Request{}, fmt.Errorf("broker: read request header: %w", err)
+		return Request{}, fmt.Errorf("execd: read request header: %w", err)
 	}
 	n := binary.BigEndian.Uint32(hdr[:])
 	if n > maxPayload {
-		return Request{}, fmt.Errorf("broker: request too large (%d bytes)", n)
+		return Request{}, fmt.Errorf("execd: request too large (%d bytes)", n)
 	}
 	body := make([]byte, n)
 	if _, err := io.ReadFull(r, body); err != nil {
-		return Request{}, fmt.Errorf("broker: read request body: %w", err)
+		return Request{}, fmt.Errorf("execd: read request body: %w", err)
 	}
 	var req Request
 	if err := json.Unmarshal(body, &req); err != nil {
-		return Request{}, fmt.Errorf("broker: decode request: %w", err)
+		return Request{}, fmt.Errorf("execd: decode request: %w", err)
 	}
 	return req, nil
 }
@@ -115,19 +115,19 @@ func ReadRequest(r io.Reader) (Request, error) {
 // WriteFrame writes one frame: 1 byte channel, 4 bytes big-endian length, payload.
 func WriteFrame(w io.Writer, ch Channel, payload []byte) error {
 	if len(payload) > maxPayload {
-		return fmt.Errorf("broker: payload too large (%d bytes)", len(payload))
+		return fmt.Errorf("execd: payload too large (%d bytes)", len(payload))
 	}
 	var hdr [5]byte
 	hdr[0] = byte(ch)
 	binary.BigEndian.PutUint32(hdr[1:], uint32(len(payload)))
 	if _, err := w.Write(hdr[:]); err != nil {
-		return fmt.Errorf("broker: write frame header: %w", err)
+		return fmt.Errorf("execd: write frame header: %w", err)
 	}
 	if len(payload) == 0 {
 		return nil
 	}
 	if _, err := w.Write(payload); err != nil {
-		return fmt.Errorf("broker: write frame payload: %w", err)
+		return fmt.Errorf("execd: write frame payload: %w", err)
 	}
 	return nil
 }
@@ -153,7 +153,7 @@ func ReadFrame(r io.Reader) (Frame, error) {
 	}
 	n := binary.BigEndian.Uint32(hdr[1:])
 	if n > maxPayload {
-		return Frame{}, fmt.Errorf("broker: frame payload too large (%d bytes)", n)
+		return Frame{}, fmt.Errorf("execd: frame payload too large (%d bytes)", n)
 	}
 	f := Frame{Channel: Channel(hdr[0])}
 	if n == 0 {
@@ -167,7 +167,7 @@ func ReadFrame(r io.Reader) (Frame, error) {
 		if err == io.EOF {
 			err = io.ErrUnexpectedEOF
 		}
-		return Frame{}, fmt.Errorf("broker: read frame payload: %w", err)
+		return Frame{}, fmt.Errorf("execd: read frame payload: %w", err)
 	}
 	return f, nil
 }

@@ -43,14 +43,14 @@ func runDebug(cmd *cobra.Command, args []string) error {
 	profilePath := cfg.AgentProfilePath("claude")
 
 	// debug exists to show the exact invocation the launcher builds, so it must
-	// include the broker socket grant; passing "" here would hide the only thing
-	// the command broker adds to the wrap invocation.
-	brokerSocket, err := claude.BrokerSocketPath()
+	// include the execd socket grant; passing "" here would hide the only thing
+	// execd adds to the wrap invocation.
+	execdSocket, err := claude.ExecdSocketPath()
 	if err != nil {
 		return err
 	}
 
-	// Same reason as the broker socket: the generated shell wrapper is granted
+	// Same reason as the execd socket: the generated shell wrapper is granted
 	// on the command line, so a debug invocation that omitted it would print an
 	// argv the launcher never builds.
 	shellWrapper, err := claude.ShellWrapperPath()
@@ -58,7 +58,7 @@ func runDebug(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	_, nonoArgs, err := claude.BuildArgs(cfg, opts, profilePath, brokerSocket, shellWrapper)
+	_, nonoArgs, err := claude.BuildArgs(cfg, opts, profilePath, execdSocket, shellWrapper)
 	if err != nil {
 		return err
 	}
@@ -72,9 +72,9 @@ func runDebug(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("getwd: %w", err)
 	}
-	fmt.Fprintln(cmd.OutOrStdout(), "command broker:")
+	fmt.Fprintln(cmd.OutOrStdout(), "exec daemon:")
 	fmt.Fprintln(cmd.OutOrStdout(), "  "+strings.Join(
-		claude.BrokerArgs(cfg, nonoPathForDisplay(), selfPath, brokerSocket, cwd), " "))
+		claude.ExecdArgs(cfg, nonoPathForDisplay(), selfPath, execdSocket, cwd), " "))
 
 	return nil
 }

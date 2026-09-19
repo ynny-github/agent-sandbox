@@ -1,4 +1,4 @@
-package broker_test
+package execd_test
 
 import (
 	"bytes"
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/broker"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/execd"
 )
 
 // syncBuffer is a mutex-protected bytes.Buffer. A pipeline stage can run more
@@ -24,9 +24,9 @@ import (
 // can silently truncate or lose one side's output (measured while chasing
 // Finding B, task-8-report.md: a message written by one command's own exec
 // handler vanished under a bare bytes.Buffer, racing against a different
-// concurrent command's own, empty stderr drain). The real broker never has
+// concurrent command's own, empty stderr drain). execd never has
 // this problem:
-// internal/broker/server.go's frameWriter already serializes every write
+// internal/execd/server.go's frameWriter already serializes every write
 // with its own mutex, for the same reason.
 type syncBuffer struct {
 	mu  sync.Mutex
@@ -63,7 +63,7 @@ func runShell(t *testing.T, dir, command string, stdin string) (int, string, str
 	if stdin != "" {
 		in = strings.NewReader(stdin)
 	}
-	e := broker.NewShellExecutor()
+	e := execd.NewShellExecutor()
 	code, err := e.Run(ctx, command, dir, in, &out, &errb)
 	if err != nil {
 		t.Fatalf("Run(%q): %v", command, err)
@@ -180,7 +180,7 @@ func TestShellExecutorFeedsStdinToTheFirstCommand(t *testing.T) {
 }
 
 func TestShellExecutorReportsAParseError(t *testing.T) {
-	e := broker.NewShellExecutor()
+	e := execd.NewShellExecutor()
 	var out, errb bytes.Buffer
 	code, err := e.Run(context.Background(), "echo 'unterminated", t.TempDir(), nil, &out, &errb)
 	if err != nil {
@@ -270,7 +270,7 @@ func TestShellExecutorDoesNotCloseTheCallersStdout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	e := broker.NewShellExecutor()
+	e := execd.NewShellExecutor()
 	code, err := e.Run(ctx, "sh -c 'echo one'; sh -c 'echo two'", t.TempDir(), nil, out, &errb)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -307,7 +307,7 @@ func TestShellExecutorRedirectsBothStreamsOfAnAliasedWriterWithoutLoss(t *testin
 }
 
 // TestShellExecutorLooksUpCommandsRelativeToCwd guards the LookPathDir fix:
-// exec.LookPath resolves "./script.sh" against the broker process's own
+// exec.LookPath resolves "./script.sh" against execd's own
 // working directory, not the cwd this executor was given, so a script that
 // exists only in the command's cwd would wrongly report "command not found".
 func TestShellExecutorLooksUpCommandsRelativeToCwd(t *testing.T) {
@@ -328,10 +328,10 @@ func TestShellExecutorLooksUpCommandsRelativeToCwd(t *testing.T) {
 // TestExecuteAcceptsAnAbsoluteCwd is the positive case for the Execute-level
 // cwd check: a well-formed request from a real client runs normally.
 func TestExecuteAcceptsAnAbsoluteCwd(t *testing.T) {
-	e := broker.NewShellExecutor()
+	e := execd.NewShellExecutor()
 	var out, errb bytes.Buffer
 	code, err := e.Execute(context.Background(),
-		broker.Request{Command: "echo hi", Cwd: t.TempDir()}, nil, &out, &errb)
+		execd.Request{Command: "echo hi", Cwd: t.TempDir()}, nil, &out, &errb)
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
@@ -349,11 +349,11 @@ func TestExecuteAcceptsAnAbsoluteCwd(t *testing.T) {
 // in that case would run it somewhere the agent never asked for. A relative
 // path is refused for the same reason.
 func TestExecuteRejectsANonAbsoluteCwd(t *testing.T) {
-	e := broker.NewShellExecutor()
+	e := execd.NewShellExecutor()
 	for _, cwd := range []string{"", "relative/path", "./here"} {
 		var out, errb bytes.Buffer
 		_, err := e.Execute(context.Background(),
-			broker.Request{Command: "echo hi", Cwd: cwd}, nil, &out, &errb)
+			execd.Request{Command: "echo hi", Cwd: cwd}, nil, &out, &errb)
 		if err == nil {
 			t.Errorf("Execute() with Cwd=%q: error = nil, want a rejection", cwd)
 			continue
@@ -500,7 +500,7 @@ func TestShellExecutorPacesConsecutivePolicyCommands(t *testing.T) {
 	shimsDir := fakePolicyShim(t, dir, "pacing-test", "fakepolicy")
 	t.Setenv("PATH", shimsDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	line := strings.TrimSuffix(strings.Repeat("fakepolicy; ", broker.PolicyLaunchBurst+2), "; ")
+	line := strings.TrimSuffix(strings.Repeat("fakepolicy; ", execd.PolicyLaunchBurst+2), "; ")
 	start := time.Now()
 	code, _, errOut := runShell(t, dir, line, "")
 	elapsed := time.Since(start)
@@ -508,7 +508,7 @@ func TestShellExecutorPacesConsecutivePolicyCommands(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0 (stderr: %q)", code, errOut)
 	}
-	if want := 2 * broker.PolicyLaunchInterval; elapsed < want {
+	if want := 2 * execd.PolicyLaunchInterval; elapsed < want {
 		t.Errorf("elapsed = %v, want at least %v: the two launches past the burst should each wait for the bucket to refill", elapsed, want)
 	}
 }
@@ -516,13 +516,13 @@ func TestShellExecutorPacesConsecutivePolicyCommands(t *testing.T) {
 // TestShellExecutorDoesNotPaceFloorCommands guards the other side of the
 // pacing rule: only policy-controlled commands spend the session budget
 // launchPacer rations, so a line made of floor commands must run at full
-// speed. A regression here would slow every command the broker serves.
+// speed. A regression here would slow every command execd serves.
 func TestShellExecutorDoesNotPaceFloorCommands(t *testing.T) {
 	dir := t.TempDir()
 
 	// cat, not the `true` builtin: a builtin never reaches the exec handler
 	// at all, so it could not show a pacing regression even if one existed.
-	line := strings.TrimSuffix(strings.Repeat("cat /dev/null; ", broker.PolicyLaunchBurst+2), "; ")
+	line := strings.TrimSuffix(strings.Repeat("cat /dev/null; ", execd.PolicyLaunchBurst+2), "; ")
 	start := time.Now()
 	code, _, errOut := runShell(t, dir, line, "")
 	elapsed := time.Since(start)
@@ -530,12 +530,12 @@ func TestShellExecutorDoesNotPaceFloorCommands(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0 (stderr: %q)", code, errOut)
 	}
-	if elapsed >= broker.PolicyLaunchInterval {
-		t.Errorf("elapsed = %v, want well under %v: floor commands must not be paced", elapsed, broker.PolicyLaunchInterval)
+	if elapsed >= execd.PolicyLaunchInterval {
+		t.Errorf("elapsed = %v, want well under %v: floor commands must not be paced", elapsed, execd.PolicyLaunchInterval)
 	}
 }
 
-// TestShellExecutorStopsPacingWhenTheContextIsCancelled covers the broker's
+// TestShellExecutorStopsPacingWhenTheContextIsCancelled covers execd's
 // own cancellation path: Server.handle cancels the request context when the
 // client goes away, and a pacing wait that ignored it would keep a dead
 // request's line crawling through its remaining launches, one per interval.
@@ -546,7 +546,7 @@ func TestShellExecutorStopsPacingWhenTheContextIsCancelled(t *testing.T) {
 
 	// Six launches past the burst: finishing this line unpaced-by-nothing
 	// would take six intervals of waiting.
-	line := strings.TrimSuffix(strings.Repeat("fakepolicy; ", broker.PolicyLaunchBurst+6), "; ")
+	line := strings.TrimSuffix(strings.Repeat("fakepolicy; ", execd.PolicyLaunchBurst+6), "; ")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -558,7 +558,7 @@ func TestShellExecutorStopsPacingWhenTheContextIsCancelled(t *testing.T) {
 	var out, errb syncBuffer
 	var in io.Reader
 	start := time.Now()
-	code, err := broker.NewShellExecutor().Run(ctx, line, dir, in, &out, &errb)
+	code, err := execd.NewShellExecutor().Run(ctx, line, dir, in, &out, &errb)
 	elapsed := time.Since(start)
 
 	if err != nil {
@@ -573,7 +573,7 @@ func TestShellExecutorStopsPacingWhenTheContextIsCancelled(t *testing.T) {
 	// sitting out the full interval it was already waiting. Returning inside
 	// that wait is the behaviour under test, so the bound sits between the
 	// cancellation delay and one interval.
-	if want := broker.PolicyLaunchInterval / 2; elapsed >= want {
+	if want := execd.PolicyLaunchInterval / 2; elapsed >= want {
 		t.Errorf("elapsed = %v, want under %v: the cancellation must interrupt the pacing wait, not merely follow it", elapsed, want)
 	}
 }
@@ -581,4 +581,4 @@ func TestShellExecutorStopsPacingWhenTheContextIsCancelled(t *testing.T) {
 // PolicyLaunchCancelDelay fires the cancellation above early in the first
 // paced launch's wait, leaving room to tell "the wait was interrupted" apart
 // from "the wait finished and then the line stopped".
-const PolicyLaunchCancelDelay = broker.PolicyLaunchInterval / 10
+const PolicyLaunchCancelDelay = execd.PolicyLaunchInterval / 10

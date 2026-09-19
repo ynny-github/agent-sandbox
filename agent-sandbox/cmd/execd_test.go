@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/broker"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/execd"
 )
 
-func TestBrokerServesOnTheGivenSocket(t *testing.T) {
+func TestExecdServesOnTheGivenSocket(t *testing.T) {
 	dir, err := os.MkdirTemp("", "brk")
 	if err != nil {
 		t.Fatalf("temp dir: %v", err)
@@ -19,9 +19,9 @@ func TestBrokerServesOnTheGivenSocket(t *testing.T) {
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	sock := filepath.Join(dir, "b.sock")
 
-	srv, err := startBrokerServer(sock)
+	srv, err := startExecdServer(sock)
 	if err != nil {
-		t.Fatalf("startBrokerServer: %v", err)
+		t.Fatalf("startExecdServer: %v", err)
 	}
 	t.Cleanup(func() { srv.Close() })
 	go srv.Serve()
@@ -40,7 +40,7 @@ func TestBrokerServesOnTheGivenSocket(t *testing.T) {
 	}
 
 	var out, errb bytes.Buffer
-	code, err := broker.NewClient(sock).RunCommand(
+	code, err := execd.NewClient(sock).RunCommand(
 		context.Background(), "echo served", nil, &out, &errb)
 	if err != nil {
 		t.Fatalf("RunCommand: %v", err)

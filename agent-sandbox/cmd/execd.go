@@ -6,41 +6,41 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/broker"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/execd"
 )
 
-var brokerSocket string
+var execdSocket string
 
-// brokerCmd is the process the launcher starts inside `nono run`. It is not
+// execdCmd is the process the launcher starts inside `nono run`. It is not
 // meant to be run by hand: outside that session it has no command policies
 // above it, so it would execute commands with whatever the caller can reach.
-var brokerCmd = &cobra.Command{
-	Use:    "broker",
+var execdCmd = &cobra.Command{
+	Use:    "execd",
 	Short:  "Serve commands for a sandboxed agent (started by `agent-sandbox claude`)",
 	Args:   cobra.NoArgs,
 	Hidden: true,
-	RunE:   runBroker,
+	RunE:   runExecd,
 }
 
 func init() {
-	brokerCmd.Flags().StringVar(&brokerSocket, "socket", "",
+	execdCmd.Flags().StringVar(&execdSocket, "socket", "",
 		"unix socket path to serve on (required)")
-	// Cobra enforces this before RunE runs, so runBroker itself can assume
-	// brokerSocket is set rather than re-checking it by hand.
-	if err := brokerCmd.MarkFlagRequired("socket"); err != nil {
+	// Cobra enforces this before RunE runs, so runExecd itself can assume
+	// execdSocket is set rather than re-checking it by hand.
+	if err := execdCmd.MarkFlagRequired("socket"); err != nil {
 		panic(err)
 	}
-	rootCmd.AddCommand(brokerCmd)
+	rootCmd.AddCommand(execdCmd)
 }
 
-// startBrokerServer opens the socket and returns a server that runs each
+// startExecdServer opens the socket and returns a server that runs each
 // request through the in-process shell interpreter.
-func startBrokerServer(sockPath string) (*broker.Server, error) {
-	return broker.NewServer(sockPath, broker.NewShellExecutor())
+func startExecdServer(sockPath string) (*execd.Server, error) {
+	return execd.NewServer(sockPath, execd.NewShellExecutor())
 }
 
-func runBroker(cmd *cobra.Command, args []string) error {
-	srv, err := startBrokerServer(brokerSocket)
+func runExecd(cmd *cobra.Command, args []string) error {
+	srv, err := startExecdServer(execdSocket)
 	if err != nil {
 		return err
 	}

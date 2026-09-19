@@ -20,7 +20,7 @@ func buildVersion() string {
 
 var rootCmd = &cobra.Command{
 	Use:               "agent-sandbox",
-	Short:             "Run an AI coding agent in a nono sandbox and broker its commands",
+	Short:             "Run an AI coding agent in a nono sandbox and run its commands through execd",
 	SilenceUsage:      true,
 	PersistentPreRunE: applyPersistentEnv,
 }

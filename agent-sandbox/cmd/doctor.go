@@ -17,9 +17,9 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/broker"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/claude"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/execd"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/policysnapshot"
 )
 
@@ -46,7 +46,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	results := []checkResult{
 		checkNono(ctx),
 		checkToolSandbox(ctx),
-		checkBrokerSocketDir(),
+		checkExecdSocketDir(),
 	}
 	switch {
 	case cfgErr == nil, errors.Is(cfgErr, config.ErrCommandProfileMissing) && cfg != nil:
@@ -108,31 +108,31 @@ func defaultRunCommandEnv(ctx context.Context, env []string, name string, args .
 // value would do; an obviously synthetic one keeps a failure legible.
 const envProbeValue = "agent-sandbox-doctor-probe"
 
-// checkBrokerSocketVar measures whether the agent profile forwards
-// AGENT_SANDBOX_BROKER_SOCKET into the sandbox. nono cannot be asked: `nono
+// checkExecdSocketVar measures whether the agent profile forwards
+// AGENT_SANDBOX_EXECD_SOCKET into the sandbox. nono cannot be asked: `nono
 // profile show` does not report environment.allow_vars, and `nono why` has no
-// env query. Without the variable the agent never reaches the broker and every
+// env query. Without the variable the agent never reaches execd and every
 // command fails for a reason nothing on screen explains, so this is measured
 // rather than assumed.
 //
 // --allow-cwd is required because nono refuses working-directory access in
 // non-interactive mode, which is how doctor runs.
-func checkBrokerSocketVar(ctx context.Context, profilePath string) error {
+func checkExecdSocketVar(ctx context.Context, profilePath string) error {
 	out, err := runCommandEnv(ctx,
-		[]string{broker.SocketEnvVar + "=" + envProbeValue},
+		[]string{execd.SocketEnvVar + "=" + envProbeValue},
 		"nono", "wrap", "--silent", "--allow-cwd", "--profile", profilePath,
-		"--", "sh", "-c", "echo $"+broker.SocketEnvVar)
+		"--", "sh", "-c", "echo $"+execd.SocketEnvVar)
 	if err != nil {
 		return fmt.Errorf("could not run the probe: %v: %s", err, strings.TrimSpace(string(out)))
 	}
 	if !strings.Contains(string(out), envProbeValue) {
-		return fmt.Errorf("the profile does not forward %s into the sandbox", broker.SocketEnvVar)
+		return fmt.Errorf("the profile does not forward %s into the sandbox", execd.SocketEnvVar)
 	}
 	return nil
 }
 
 // checkShellVar measures whether the agent profile forwards CLAUDE_CODE_SHELL
-// into the sandbox. It is measured for the same reason as the broker socket
+// into the sandbox. It is measured for the same reason as the execd socket
 // variable: nono reports nothing about env grants, and the failure is silent.
 //
 // What it costs when it is stripped is noise, not access — Claude falls back to
@@ -187,8 +187,8 @@ func checkNono(ctx context.Context) checkResult {
 	}
 }
 
-// checkBrokerSocketDir verifies the launcher can create the broker socket. A
-// failure here means `agent-sandbox claude` cannot start the command broker,
+// checkExecdSocketDir verifies the launcher can create the execd socket. A
+// failure here means `agent-sandbox claude` cannot start execd,
 // so every sandboxed command would fail.
 //
 // os.MkdirAll alone is not sufficient: it returns nil for a directory that
@@ -197,8 +197,8 @@ func checkNono(ctx context.Context) checkResult {
 // even though the launcher cannot actually create a socket file inside it.
 // Binding a throwaway unix socket the same way the launcher does also catches
 // the ~104-byte sun_path limit a plain write wouldn't.
-func checkBrokerSocketDir() checkResult {
-	const name = "command broker"
+func checkExecdSocketDir() checkResult {
+	const name = "exec daemon"
 	dir, err := policysnapshot.StateDir()
 	if err != nil {
 		return checkResult{name: name, ok: false,
@@ -298,7 +298,7 @@ func checkToolSandbox(ctx context.Context) checkResult {
 	if err != nil {
 		r.details = append(r.details, "nono run: "+strings.TrimSpace(string(out)))
 		r.hint = "the nono on PATH cannot start tool-sandbox on this host; " +
-			"every command the broker runs will fail the same way once a session starts " +
+			"every command execd runs will fail the same way once a session starts " +
 			"(a common cause is an unpatched nono on NixOS, which cannot resolve its ELF dependency layout)"
 		return r
 	}
@@ -377,7 +377,7 @@ func writeToolSandboxProbeProfile(dir, probeBin string) (string, error) {
 	return path, nil
 }
 
-// selfPath is os.Executable, indirected so tests can place the broker binary
+// selfPath is os.Executable, indirected so tests can place the execd binary
 // anywhere without moving a real file.
 var selfPath = os.Executable
 
@@ -386,7 +386,7 @@ var selfPath = os.Executable
 // either nono's own answer or a direct measurement.
 //
 // Each failure otherwise produces a session that refuses every command with an
-// error the agent cannot act on: nono's own failure arrives on the broker's
+// error the agent cannot act on: nono's own failure arrives on execd's
 // stderr long after the launcher has returned.
 func checkProfiles(ctx context.Context, cfg *config.Config) checkResult {
 	r := checkResult{name: "profiles"}
@@ -407,21 +407,21 @@ func checkProfiles(ctx context.Context, cfg *config.Config) checkResult {
 	}
 
 	switch {
-	case os.Getenv(broker.SocketEnvVar) != "":
+	case os.Getenv(execd.SocketEnvVar) != "":
 		// Running inside a session: the probe would nest one nono sandbox in
 		// another. Say so rather than report a failure nobody can act on.
 		r.details = append(r.details,
-			"broker socket variable: skipped (running inside a session; run doctor on the host)",
+			"execd socket variable: skipped (running inside a session; run doctor on the host)",
 			"agent shell variable: skipped (running inside a session; run doctor on the host)")
 	default:
-		if err := checkBrokerSocketVar(ctx, agentPath); err != nil {
-			r.details = append(r.details, "broker socket variable: "+err.Error())
-			r.hint = "add " + broker.SocketEnvVar + " to the agent profile's " +
-				"environment.allow_vars; without it the agent cannot reach the broker " +
+		if err := checkExecdSocketVar(ctx, agentPath); err != nil {
+			r.details = append(r.details, "execd socket variable: "+err.Error())
+			r.hint = "add " + execd.SocketEnvVar + " to the agent profile's " +
+				"environment.allow_vars; without it the agent cannot reach execd " +
 				"and every command fails"
 			return r
 		}
-		r.details = append(r.details, "broker socket variable: forwarded")
+		r.details = append(r.details, "execd socket variable: forwarded")
 
 		if err := checkShellVar(ctx, agentPath); err != nil {
 			r.details = append(r.details, "agent shell variable: "+err.Error())
@@ -436,24 +436,24 @@ func checkProfiles(ctx context.Context, cfg *config.Config) checkResult {
 
 	self, err := selfPath()
 	if err != nil {
-		// Fail loudly rather than silently reporting OK: not knowing the
-		// broker's own binary path means the writability check below never
+		// Fail loudly rather than silently reporting OK: not knowing
+		// execd's own binary path means the writability check below never
 		// ran, and that must not look like it passed.
-		r.details = append(r.details, fmt.Sprintf("error: could not determine the broker binary's own path: %v", err))
-		r.hint = "could not verify the broker binary is not writable through the command profile; " +
+		r.details = append(r.details, fmt.Sprintf("error: could not determine execd binary's own path: %v", err))
+		r.hint = "could not verify execd's binary is not writable through the command profile; " +
 			"investigate why os.Executable() failed and re-run doctor"
 		return r
 	}
 	writable, werr := profileAllowsWrite(ctx, cmdPath, self)
 	if werr != nil {
 		r.details = append(r.details, fmt.Sprintf("error: could not ask nono whether %s is writable: %v", self, werr))
-		r.hint = "could not verify the broker binary is not writable through the command profile; " +
+		r.hint = "could not verify execd's binary is not writable through the command profile; " +
 			"fix the error above and re-run doctor"
 		return r
 	}
 	if writable {
-		r.details = append(r.details, "broker binary: "+self)
-		r.hint = "the command profile grants write access to the broker's own binary, so a command could " +
+		r.details = append(r.details, "execd binary: "+self)
+		r.hint = "the command profile grants write access to execd's own binary, so a command could " +
 			"replace what the next launch runs; narrow the grant that covers it (`nono why --profile " +
 			cmdPath + " --path " + self + " --op write` names it)"
 		return r

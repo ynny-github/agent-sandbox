@@ -3,9 +3,9 @@
   // not generate, read, or validate this file — it hands the path to nono.
   //
   // Scope: the agent process and its DIRECT children (an MCP server it spawns
-  // is not brokered). Shell commands do not run here at all: they go through
-  // the broker, under command-profile.json. Nothing needed only to *run a
-  // command* belongs in this file.
+  // is not routed through execd). Shell commands do not run here at all: they
+  // go through execd, under command-profile.json. Nothing needed only to *run
+  // a command* belongs in this file.
   // You do not grant the agent-sandbox binary here. The agent runs
   // `agent-sandbox hook` and `agent-sandbox serve` as its own direct children,
   // so it must be able to exec that binary — but only the launcher knows where
@@ -30,14 +30,14 @@
       "/nix/store",
       "/run/current-system/sw",
       // An MCP server the agent spawns runs as a DIRECT child of the agent,
-      // not through the broker, so a server started with `docker run ...`
+      // not through execd, so a server started with `docker run ...`
       // reads its docker config here rather than in the command profile.
       // agent-sandbox no longer configures an MCP server of its own; these
       // are carried for one the operator adds via `claude --mcp-config`.
       // Nothing in this repository depends on them today, so they are the
       // first thing to drop if no docker-run MCP server is ever configured.
       // Not the same grant as the command profile's own `~/.docker`, which
-      // belongs to the brokered `docker` command.
+      // belongs to the `docker` command execd runs.
       "~/.docker",
       "~/.orbstack"
     ],
@@ -68,8 +68,8 @@
   },
 
   "environment": {
-    // AGENT_SANDBOX_BROKER_SOCKET is load-bearing. Without it nono strips the
-    // variable, the agent never reaches the broker, and EVERY command fails
+    // AGENT_SANDBOX_EXECD_SOCKET is load-bearing. Without it nono strips the
+    // variable, the agent never reaches execd, and EVERY command fails
     // with an error that names nothing. `agent-sandbox doctor` probes for it
     // because nono cannot report env grants: `nono profile show` does not
     // print allow_vars and `nono why` has no env query.
@@ -87,7 +87,7 @@
     // agent only if it is listed here (globs like MISE* work).
     "allow_vars": [
       "PATH", "HOME", "TERM", "LANG", "LC_ALL", "USER",
-      "AGENT_SANDBOX_BROKER_SOCKET", "CLAUDE_CODE_SHELL"
+      "AGENT_SANDBOX_EXECD_SOCKET", "CLAUDE_CODE_SHELL"
     ]
   }
 }

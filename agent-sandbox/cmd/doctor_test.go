@@ -15,8 +15,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/broker"
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/execd"
 )
 
 // shortStateDir returns a fresh, short-named temp directory suitable for
@@ -24,7 +24,7 @@ import (
 // t.TempDir() embeds the (potentially long) test name in the path, which on
 // macOS can push a unix socket path past the ~104-byte sun_path limit and
 // make bind(2) fail with "invalid argument" — see
-// internal/broker/server_test.go's startTestServer for the same workaround.
+// internal/execd/server_test.go's startTestServer for the same workaround.
 func shortStateDir(t *testing.T) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "asdoc")
@@ -145,7 +145,7 @@ func TestRunDoctor_AllOK(t *testing.T) {
 	origConfigPath := configPath
 	configPath = filepath.Join(dir, "agent-sandbox.toml")
 	t.Cleanup(func() { configPath = origConfigPath })
-	// The broker binary in a `go test` run is a temp binary outside dir, so it
+	// The execd binary in a `go test` run is a temp binary outside dir, so it
 	// is never covered by the profile's filesystem.allow above.
 	restoreSelf := stubSelfPath(filepath.Join(t.TempDir(), "agent-sandbox"))
 	defer restoreSelf()
@@ -222,7 +222,7 @@ func TestRunDoctor_RunsAllChecksEvenOnEarlyFailure(t *testing.T) {
 	t.Cleanup(func() { doctorCmd.SetOut(nil) })
 
 	_ = runDoctor(doctorCmd, nil)
-	for _, want := range []string{"nono", "command broker"} {
+	for _, want := range []string{"nono", "exec daemon"} {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("output missing section %q:\n%s", want, buf.String())
 		}
@@ -291,11 +291,11 @@ func TestCheckNono_OK(t *testing.T) {
 	}
 }
 
-func TestCheckBrokerSocketDir_OK(t *testing.T) {
+func TestCheckExecdSocketDir_OK(t *testing.T) {
 	base := shortStateDir(t)
 	t.Setenv("XDG_STATE_HOME", base)
 
-	r := checkBrokerSocketDir()
+	r := checkExecdSocketDir()
 	if !r.ok {
 		t.Fatalf("expected OK, got NG: %v", r.details)
 	}
@@ -306,7 +306,7 @@ func TestCheckBrokerSocketDir_OK(t *testing.T) {
 	}
 }
 
-func TestCheckBrokerSocketDir_UnwritableFails(t *testing.T) {
+func TestCheckExecdSocketDir_UnwritableFails(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root bypasses permission checks")
 	}
@@ -318,7 +318,7 @@ func TestCheckBrokerSocketDir_UnwritableFails(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(base, 0o700) })
 	t.Setenv("XDG_STATE_HOME", filepath.Join(base, "state"))
 
-	r := checkBrokerSocketDir()
+	r := checkExecdSocketDir()
 	if r.ok {
 		t.Fatal("expected NG when the socket dir cannot be created")
 	}
@@ -327,7 +327,7 @@ func TestCheckBrokerSocketDir_UnwritableFails(t *testing.T) {
 	}
 }
 
-func TestCheckBrokerSocketDir_ExistingDirUnwritableFails(t *testing.T) {
+func TestCheckExecdSocketDir_ExistingDirUnwritableFails(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root bypasses permission checks")
 	}
@@ -337,7 +337,7 @@ func TestCheckBrokerSocketDir_ExistingDirUnwritableFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	// os.MkdirAll returns nil for a directory that already exists, whatever
-	// its mode, so this pins that checkBrokerSocketDir does not stop there:
+	// its mode, so this pins that checkExecdSocketDir does not stop there:
 	// it must also fail to bind a socket inside dir and report NG.
 	if err := os.Chmod(dir, 0o500); err != nil {
 		t.Skipf("cannot make dir read-only in this environment: %v", err)
@@ -345,7 +345,7 @@ func TestCheckBrokerSocketDir_ExistingDirUnwritableFails(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
 	t.Setenv("XDG_STATE_HOME", base)
 
-	r := checkBrokerSocketDir()
+	r := checkExecdSocketDir()
 	if r.ok {
 		t.Fatal("expected NG when the existing socket dir cannot bind a socket")
 	}
@@ -445,7 +445,7 @@ func TestCheckProfiles_ValidatesTheAgentProfile(t *testing.T) {
 	}
 }
 
-// A profile that does not forward the broker socket variable produces a
+// A profile that does not forward the execd socket variable produces a
 // session where every command fails for a reason nothing on screen explains.
 // nono cannot report env grants, so doctor measures instead.
 func TestCheckProfiles_FailsWhenTheSocketVarIsNotForwarded(t *testing.T) {
@@ -465,7 +465,7 @@ func TestCheckProfiles_FailsWhenTheSocketVarIsNotForwarded(t *testing.T) {
 	if got.ok {
 		t.Error("checkProfiles ok = true, want false when the socket variable is stripped")
 	}
-	if !strings.Contains(strings.Join(got.details, "\n"), broker.SocketEnvVar) {
+	if !strings.Contains(strings.Join(got.details, "\n"), execd.SocketEnvVar) {
 		t.Errorf("details must name the variable: %v", got.details)
 	}
 	if got.hint == "" {
@@ -476,7 +476,7 @@ func TestCheckProfiles_FailsWhenTheSocketVarIsNotForwarded(t *testing.T) {
 // Inside a session the probe would nest one nono sandbox in another. Skip it
 // and say so, rather than reporting a failure the operator cannot act on.
 func TestCheckProfiles_SkipsTheProbeInsideASession(t *testing.T) {
-	t.Setenv(broker.SocketEnvVar, "/tmp/some-broker.sock")
+	t.Setenv(execd.SocketEnvVar, "/tmp/some-execd.sock")
 	dir := t.TempDir()
 	cfg := configWithBothProfiles(t, dir)
 	restoreRun := stubRunCommand(func(context.Context, string, ...string) ([]byte, error) {
@@ -537,7 +537,7 @@ func TestCheckProfiles_FailsWhenTheFileIsMissing(t *testing.T) {
 	// The agent profile exists and must validate cleanly so the failure this
 	// test pins is unambiguously the command profile's. Stub runCommand so no
 	// real nono process is invoked for that agent-profile validate call: the
-	// checkProfiles path here (broker socket probe, self path, writability
+	// checkProfiles path here (execd socket probe, self path, writability
 	// query) never runs, because command profile validation fails on its
 	// missing-file os.Stat before any of that, but the agent-profile validate
 	// call above it does reach runCommand.
@@ -584,7 +584,7 @@ func TestCheckProfiles_FailsWhenTheFileIsMissing(t *testing.T) {
 }
 
 // TestCheckProfiles_FailsWhenSelfPathErrors pins ruling R20: not knowing
-// the broker's own binary path means the writability check never ran, and
+// execd's own binary path means the writability check never ran, and
 // that must be reported as NG with an explanatory detail, not silently
 // treated as "the binary is not writable".
 func TestCheckProfiles_FailsWhenSelfPathErrors(t *testing.T) {
@@ -609,7 +609,7 @@ func TestCheckProfiles_FailsWhenSelfPathErrors(t *testing.T) {
 	if got.hint == "" {
 		t.Errorf("a failing check must carry a hint")
 	}
-	if !strings.Contains(strings.Join(got.details, "\n"), "could not determine the broker binary's own path") {
+	if !strings.Contains(strings.Join(got.details, "\n"), "could not determine execd binary's own path") {
 		t.Errorf("expected details to name what could not be determined, got %v", got.details)
 	}
 }
@@ -668,7 +668,7 @@ func TestRenderResults_AllNG(t *testing.T) {
 // nonoAnswers builds a runCommand stub covering the nono subcommands
 // checkProfiles and checkProfilePaths drive: `nono profile validate` (both
 // profiles), `nono profile show --json` (the command-policy paths query), and
-// `nono why --json` (the broker binary's writability). validateErr, when
+// `nono why --json` (execd's binary's writability). validateErr, when
 // non-nil, fails every validate; whyStatus is the status field the why answer
 // carries.
 //
@@ -742,7 +742,7 @@ func TestCheckProfiles_FailsWhenNonoSaysTheBinaryIsWritable(t *testing.T) {
 
 	got := checkProfiles(context.Background(), cfg)
 	if got.ok {
-		t.Fatal("checkProfiles ok = true, want false when nono reports the broker binary writable")
+		t.Fatal("checkProfiles ok = true, want false when nono reports execd's binary writable")
 	}
 	if !strings.Contains(got.hint, "nono why") {
 		t.Errorf("hint = %q, want it to name the query that identifies the grant", got.hint)
@@ -932,8 +932,8 @@ func TestCommandPolicyPaths_ReadsAllThreeFromEdgeShapes(t *testing.T) {
 }
 
 // A missing "executable" pin is the severe case nono itself does not soften:
-// mediation for that command is disabled entirely, silently as far as the
-// broker's own behavior goes (it just runs the first PATH match at the
+// mediation for that command is disabled entirely, silently as far as
+// execd's own behavior goes (it just runs the first PATH match at the
 // session's grants), so this must be reported on any single miss.
 func TestCheckProfilePaths_MissingExecutableIsNG(t *testing.T) {
 	defer stubRunCommand(func(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -1073,7 +1073,7 @@ func TestCheckProfilePaths_ExpandsTilde(t *testing.T) {
 // host's bash, which sources a ~/.bashrc the profile no longer grants and
 // prefixes every tool result with a permission error. Nothing on screen says
 // the profile is the cause, so doctor measures it the same way it measures the
-// broker socket variable.
+// execd socket variable.
 func TestCheckProfiles_FailsWhenTheShellVarIsNotForwarded(t *testing.T) {
 	dir := t.TempDir()
 	cfg := configWithBothProfiles(t, dir)

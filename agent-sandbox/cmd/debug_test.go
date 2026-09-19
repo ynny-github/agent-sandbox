@@ -20,9 +20,9 @@ func TestRunDebug_MissingConfig(t *testing.T) {
 }
 
 // debug must print the same invocation the launcher builds, including the
-// broker socket grant — otherwise it misrepresents the wrap command in exactly
-// the place a user looks when brokered commands fail.
-func TestRunDebug_PrintsBrokerSocketGrant(t *testing.T) {
+// execd socket grant — otherwise it misrepresents the wrap command in exactly
+// the place a user looks when a command run through execd fails.
+func TestRunDebug_PrintsExecdSocketGrant(t *testing.T) {
 	dir := t.TempDir()
 	nono := filepath.Join(dir, "nono")
 	if err := os.WriteFile(nono, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
@@ -45,9 +45,9 @@ func TestRunDebug_PrintsBrokerSocketGrant(t *testing.T) {
 	configPath = cfgPath
 	t.Cleanup(func() { configPath = orig })
 
-	wantSocket, err := claude.BrokerSocketPath()
+	wantSocket, err := claude.ExecdSocketPath()
 	if err != nil {
-		t.Fatalf("BrokerSocketPath() error = %v", err)
+		t.Fatalf("ExecdSocketPath() error = %v", err)
 	}
 
 	out := captureStdout(t, func() {
@@ -61,9 +61,9 @@ func TestRunDebug_PrintsBrokerSocketGrant(t *testing.T) {
 	}
 }
 
-// The command broker line must print the resolved nono binary, not a literal
+// The exec daemon line must print the resolved nono binary, not a literal
 // "nono": debug exists to show the exact invocation the launcher builds, and
-// BrokerArgs now honours whatever path it is given.
+// ExecdArgs now honours whatever path it is given.
 func TestRunDebug_PrintsResolvedNonoPath(t *testing.T) {
 	dir := t.TempDir()
 	nono := filepath.Join(dir, "nono")
@@ -90,8 +90,8 @@ func TestRunDebug_PrintsResolvedNonoPath(t *testing.T) {
 			t.Fatalf("runDebug() error = %v", err)
 		}
 	})
-	if !strings.Contains(out, "command broker:\n  "+nono+" run") {
-		t.Errorf("debug output missing the resolved nono path %q in the broker line; got:\n%s", nono, out)
+	if !strings.Contains(out, "exec daemon:\n  "+nono+" run") {
+		t.Errorf("debug output missing the resolved nono path %q in the exec daemon line; got:\n%s", nono, out)
 	}
 }
 

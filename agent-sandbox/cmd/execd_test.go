@@ -52,3 +52,17 @@ func TestExecdServesOnTheGivenSocket(t *testing.T) {
 		t.Errorf("stdout = %q, want %q", out.String(), "served")
 	}
 }
+
+// TestSessionDeclaresDumbTerm asserts on sessionDeclaresDumbTerm itself,
+// rather than on a child process's inherited environment: a child seeing
+// TERM=dumb after t.Setenv("TERM", "dumb") would only prove the interpreter
+// passes the environment through, which was already true before this task.
+// What this task adds is that execd's own session overrides whatever TERM it
+// was started with, which is what this test drives directly.
+func TestSessionDeclaresDumbTerm(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	sessionDeclaresDumbTerm()
+	if got := os.Getenv("TERM"); got != "dumb" {
+		t.Errorf("TERM = %q, want %q", got, "dumb")
+	}
+}

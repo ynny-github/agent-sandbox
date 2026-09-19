@@ -204,6 +204,31 @@ func TestShellExecutorReportsAMissingCommand(t *testing.T) {
 	}
 }
 
+// TestExitCodesAreNamed checks the reported status against the named
+// constants directly, rather than the bare literal, so a caller that reads
+// execd.ExitNotFound / execd.ExitSyntaxError in their own code sees them tied
+// to the outcome that produces each one.
+func TestExitCodesAreNamed(t *testing.T) {
+	cases := []struct {
+		line string
+		want int
+	}{
+		{"definitely-not-a-command", execd.ExitNotFound},
+		{"if", execd.ExitSyntaxError},
+		{"sh -c 'exit 42'", 42},
+	}
+	e := execd.NewShellExecutor()
+	for _, c := range cases {
+		code, err := e.Run(context.Background(), c.line, t.TempDir(), nil, io.Discard, io.Discard)
+		if err != nil {
+			t.Fatalf("%q: %v", c.line, err)
+		}
+		if code != c.want {
+			t.Errorf("%q exit = %d, want %d", c.line, code, c.want)
+		}
+	}
+}
+
 // TestShellExecutorRunsMultipleExternalCommandsInOnePipelineStage guards
 // against closing the interpreter's own pipe writer once a command finishes:
 // the group runs two external commands into the same downstream reader, so if

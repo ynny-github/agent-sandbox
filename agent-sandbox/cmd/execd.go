@@ -39,7 +39,21 @@ func startExecdServer(sockPath string) (*execd.Server, error) {
 	return execd.NewServer(sockPath, execd.NewShellExecutor())
 }
 
+// sessionDeclaresDumbTerm sets TERM=dumb in execd's own process environment.
+// No command execd runs has a terminal, but the launcher's own
+// TERM=xterm-256color is inherited all the way down unless something
+// overrides it, inviting colour and cursor escapes into output that is read
+// as text. This makes the session's environment state what is true. A
+// command line that sets TERM itself still wins over this default, because
+// that assignment reaches the child through the interpreter's own
+// environment, layered on top of the process environment this sets.
+func sessionDeclaresDumbTerm() {
+	os.Setenv("TERM", "dumb")
+}
+
 func runExecd(cmd *cobra.Command, args []string) error {
+	sessionDeclaresDumbTerm()
+
 	srv, err := startExecdServer(execdSocket)
 	if err != nil {
 		return err

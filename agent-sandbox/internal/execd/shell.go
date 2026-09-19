@@ -18,6 +18,29 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
+// The statuses execd reports for outcomes that are not the command's own.
+// They are collected here because a caller reads them as one vocabulary:
+//
+//	the command's own   the last command's exit status
+//	128 + signum        died from a signal
+//	127                 command not found
+//	126                 could not be started (exec or wiring failure)
+//	124                 timed out
+//	2                   syntax error
+//	1                   the interpreter failed for a reason that is not an exit status
+//
+// An error frame is never used for any of these: it reports a fault of execd
+// itself, and a command that fails is not a fault of execd.
+const (
+	ExitSyntaxError = 2
+	// ExitTimeout is the status a timed-out request reports. It follows GNU
+	// timeout(1), so a caller that already knows that convention reads it
+	// right.
+	ExitTimeout     = 124
+	ExitCannotStart = 126
+	ExitNotFound    = 127
+)
+
 // ShellExecutor runs one command line. It parses and evaluates the shell
 // language in this process with mvdan.cc/sh and executes every simple command
 // itself, which is what keeps each execution mediated: execd runs inside a
@@ -54,7 +77,7 @@ func (e *ShellExecutor) Run(ctx context.Context, command, cwd string,
 	file, err := syntax.NewParser().Parse(strings.NewReader(command), "command")
 	if err != nil {
 		fmt.Fprintf(stderr, "agent-sandbox: %v\n", err)
-		return 2, nil
+		return ExitSyntaxError, nil
 	}
 
 	// See refusePolicyPipeChains: a specific shape of this — a two-stage
@@ -77,7 +100,7 @@ func (e *ShellExecutor) Run(ctx context.Context, command, cwd string,
 		fmt.Fprintf(stderr,
 			"agent-sandbox: refused: this pipeline pipes two or more policy-controlled commands together (%s) — a combination measured to hang and strand a process in at least one shape, and reasoned to be exposed to the same underlying hazard in general. Run them as separate commands instead of piping them directly together.\n",
 			strings.Join(names, ", "))
-		return 126, nil
+		return ExitCannotStart, nil
 	}
 
 	runner, err := interp.New(
@@ -127,14 +150,14 @@ func (e *ShellExecutor) execHandler(ctx context.Context, args []string) error {
 	path, err := interp.LookPathDir(hc.Dir, hc.Env, args[0])
 	if err != nil {
 		fmt.Fprintf(hc.Stderr, "agent-sandbox: %s: command not found\n", args[0])
-		return interp.NewExitStatus(127)
+		return interp.NewExitStatus(ExitNotFound)
 	}
 
 	// Pace only the policy-controlled commands: they are the ones whose
 	// launch spends the session budget launchPacer rations, and delaying a
 	// floor command would buy nothing.
 	if isPolicyControlledPath(path) && !e.pacer.wait(ctx) {
-		return interp.NewExitStatus(126)
+		return interp.NewExitStatus(ExitCannotStart)
 	}
 
 	// exec.Command, not exec.CommandContext: cancellation is the Job's
@@ -161,7 +184,7 @@ func (e *ShellExecutor) execHandler(ctx context.Context, args []string) error {
 	w, err := wireOutputs(cmd, hc)
 	if err != nil {
 		fmt.Fprintf(hc.Stderr, "agent-sandbox: %s: %v\n", args[0], err)
-		return interp.NewExitStatus(126)
+		return interp.NewExitStatus(ExitCannotStart)
 	}
 
 	// stdin is an *os.File either way — the redirect's own file, or the read
@@ -172,7 +195,7 @@ func (e *ShellExecutor) execHandler(ctx context.Context, args []string) error {
 	if err := w.wireStdin(cmd, hc); err != nil {
 		w.abort()
 		fmt.Fprintf(hc.Stderr, "agent-sandbox: %s: %v\n", args[0], err)
-		return interp.NewExitStatus(126)
+		return interp.NewExitStatus(ExitCannotStart)
 	}
 
 	// Start, then close this side's copies of the fds the child was given, then
@@ -190,7 +213,7 @@ func (e *ShellExecutor) execHandler(ctx context.Context, args []string) error {
 	if err := job.Start(cmd); err != nil {
 		w.abort()
 		fmt.Fprintf(hc.Stderr, "agent-sandbox: %s: %v\n", args[0], err)
-		return interp.NewExitStatus(126)
+		return interp.NewExitStatus(ExitCannotStart)
 	}
 	// Right after Start, and before anything that waits: exec.Cmd has now
 	// duplicated these into the child, and while this side still holds a write
@@ -236,7 +259,7 @@ func (e *ShellExecutor) execHandler(ctx context.Context, args []string) error {
 		return interp.NewExitStatus(uint8(exitStatusOf(exitErr.ProcessState)))
 	}
 	fmt.Fprintf(hc.Stderr, "agent-sandbox: %s: %v\n", args[0], err)
-	return interp.NewExitStatus(126)
+	return interp.NewExitStatus(ExitCannotStart)
 }
 
 // execEnv renders the interpreter's environment for the child. execd's
@@ -377,10 +400,6 @@ func (e *ShellExecutor) executeWithJob(ctx context.Context, req Request,
 	}
 	return code, err
 }
-
-// ExitTimeout is the status a timed-out request reports. It follows GNU
-// timeout(1), so a caller that already knows that convention reads it right.
-const ExitTimeout = 124
 
 // exitStatusOf maps a finished process to the status a shell user expects.
 // ExitCode() is -1 for a signal death, which would surface as 255; report the

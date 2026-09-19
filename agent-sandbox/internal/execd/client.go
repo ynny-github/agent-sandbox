@@ -109,12 +109,22 @@ func (c *Client) RunCommand(ctx context.Context, command string,
 			for {
 				select {
 				case sig := <-opts.Signals:
-					// A write failure here means the connection is already
-					// gone — the peer closed it, or the ctx.Done() goroutine
-					// above closed it first. The read loop below observes
-					// the same failure via ReadFrame and turns it into
-					// RunCommand's returned error, so there is nothing
-					// further to report from this side.
+					// A write failure here usually means the connection is
+					// already gone — the peer closed it, or the ctx.Done()
+					// goroutine above closed it first — and the read loop
+					// below observes the same failure via ReadFrame and
+					// turns it into RunCommand's returned error, so there is
+					// nothing further to report from this side. But
+					// writeSignal can also fail before it ever touches the
+					// connection: WriteSignal rejects a signal outside the
+					// deliverable allow-list first (see deliverableSignals
+					// in protocol.go). In that case the connection stays
+					// healthy, the read loop sees nothing wrong, and the
+					// signal vanishes with no diagnostic. No production
+					// caller hits this today — cmd/exec.go relays only
+					// SIGINT and SIGTERM, both deliverable — but a library
+					// caller forwarding an arbitrary signal would lose it
+					// silently.
 					cw.writeSignal(sig)
 				case <-done:
 					return

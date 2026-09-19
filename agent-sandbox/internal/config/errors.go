@@ -2,8 +2,19 @@ package config
 
 import "errors"
 
-var ErrMissingMCPCommandOutputDir = errors.New("missing required field: mcp.command_output_dir")
-var ErrInvalidToolMode = errors.New(`invalid tool_mode (must be "mcp" or "hook")`)
+// ErrRemovedToolMode fires on tool_mode, whatever it is set to. The key used
+// to choose between the PreToolUse hook and an MCP server; the MCP server is
+// gone, so the hook is the only way commands reach the broker and there is
+// nothing left to select. Ignoring the key would be worse than refusing it: a
+// config still saying "mcp" would launch a hook-routed session while its
+// author believes Bash is disabled.
+var ErrRemovedToolMode = errors.New(`tool_mode is no longer supported: the PreToolUse hook is the only mode, so remove the key`)
+
+// ErrRemovedMCPSection fires on [mcp] and everything under it. Its one key,
+// command_output_dir, existed because the MCP tool wrote each command's output
+// to files; the hook returns output inline in the tool result, so there is no
+// directory to name.
+var ErrRemovedMCPSection = errors.New("[mcp] is no longer supported: command output is returned inline by the PreToolUse hook, so remove the section")
 var ErrDeprecatedNetworkKeys = errors.New("sandbox.network.allow_cidrs / allow_hosts are no longer supported; network reach for a command is the command profile's top-level network section")
 var ErrRemovedContainerSection = errors.New("sandbox.container is no longer supported: commands now run under nono, not Docker; remove the section")
 var ErrRemovedAllowExternal = errors.New("sandbox.network.allow_external is no longer supported: network reach for a command is the command profile's top-level network section")

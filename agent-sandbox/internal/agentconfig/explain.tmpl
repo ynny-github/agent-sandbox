@@ -1,12 +1,10 @@
 # agent-sandbox environment
 
 ## Running commands
-{{if .Hook}}- Run shell commands with your normal Bash/Monitor tools; a PreToolUse hook
+- Run shell commands with your normal Bash/Monitor tools; a PreToolUse hook
   transparently routes each one through the command broker.
 - Command output is returned inline in the tool result.
-{{else}}- The Bash and Monitor tools are disabled; use the `run_command` MCP tool.
-- Command output is written to files; read the returned stdout/stderr paths.
-{{end}}
+
 There is no shell in the loop. The broker parses your command line itself
 (pipelines, `&&`/`||`/`;`, redirections, globbing, `$(…)`, `for`/`if`, `cd` and
 the other shell builtins all work) and executes each simple command directly —
@@ -101,11 +99,7 @@ pins still exist on this host.
 Schema:
 
 ```toml
-tool_mode = "hook"                       # "hook" | "mcp"
 command_profile = "command-profile.json" # default name; shared by every agent
-
-[mcp]
-command_output_dir = "..."               # mcp tool_mode only: where command output is written
 
 [agents.claude]
 profile = "claude-profile.json"          # default name: "<agent>-profile.json"

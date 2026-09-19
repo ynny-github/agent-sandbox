@@ -29,7 +29,6 @@ var explainTmpl = template.Must(template.New("explain").Parse(explainTmplText))
 
 // explainView is the data handed to explain.tmpl.
 type explainView struct {
-	Hook bool
 	// ConfigPath is the config file actually loaded, not the default name: the
 	// agent is being told which file to edit, and --config can move it.
 	ConfigPath string
@@ -55,7 +54,6 @@ type explainView struct {
 // lie. See docs/superpowers/specs/2026-09-12-git-goes-to-command-policy.md.
 func Explain(cfg *config.Config, configPath string) string {
 	view := explainView{
-		Hook:             cfg.ToolMode == "hook",
 		ConfigPath:       configPath,
 		ProfilePath:      cfg.CommandProfilePath(),
 		AgentProfilePath: cfg.AgentProfilePath("claude"),

@@ -52,7 +52,7 @@ func writeFile(t *testing.T, path, body string) {
 func TestCommandProfilePathDefaultsBesideConfig(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
-	writeFile(t, cfgPath, "tool_mode = \"hook\"\n")
+	writeFile(t, cfgPath, "")
 	writeFile(t, filepath.Join(dir, "command-profile.json"), "{}")
 
 	cfg, err := config.Load(cfgPath)
@@ -68,7 +68,7 @@ func TestCommandProfilePathDefaultsBesideConfig(t *testing.T) {
 func TestCommandProfilePathHonoursRelativeOverride(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
-	writeFile(t, cfgPath, "tool_mode = \"hook\"\ncommand_profile = \"profiles/cmd.json\"\n")
+	writeFile(t, cfgPath, "command_profile = \"profiles/cmd.json\"\n")
 	writeFile(t, filepath.Join(dir, "profiles", "cmd.json"), "{}")
 
 	cfg, err := config.Load(cfgPath)
@@ -85,7 +85,7 @@ func TestCommandProfilePathKeepsAbsoluteOverride(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
 	abs := filepath.Join(t.TempDir(), "elsewhere.json")
-	writeFile(t, cfgPath, "tool_mode = \"hook\"\ncommand_profile = "+strconv.Quote(abs)+"\n")
+	writeFile(t, cfgPath, "command_profile = "+strconv.Quote(abs)+"\n")
 	writeFile(t, abs, "{}")
 
 	cfg, err := config.Load(cfgPath)
@@ -100,7 +100,7 @@ func TestCommandProfilePathKeepsAbsoluteOverride(t *testing.T) {
 func TestValidateRejectsMissingCommandProfile(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
-	writeFile(t, cfgPath, "tool_mode = \"hook\"\n")
+	writeFile(t, cfgPath, "")
 
 	cfg, err := config.Load(cfgPath)
 	if !errors.Is(err, config.ErrCommandProfileMissing) {
@@ -115,54 +115,18 @@ func TestValidateRejectsMissingCommandProfile(t *testing.T) {
 	}
 }
 
-const validBase = `
-[mcp]
-command_output_dir = "/tmp/out"
-`
-
-func TestLoad_ValidConfig(t *testing.T) {
-	path := writeToml(t, validBase)
+// An empty config is valid: every key has a default, and the only thing
+// validate still insists on — the command profile — is written beside it by
+// writeToml under its default name.
+func TestLoad_EmptyConfigIsValid(t *testing.T) {
+	path := writeToml(t, "")
 	cfg, err := config.Load(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.MCP.CommandOutputDir != "/tmp/out" {
-		t.Errorf("CommandOutputDir = %q, want /tmp/out", cfg.MCP.CommandOutputDir)
-	}
-}
-
-func TestLoad_MissingMCPCommandOutputDir(t *testing.T) {
-	path := writeToml(t, "")
-	_, err := config.Load(path)
-	if !errors.Is(err, config.ErrMissingMCPCommandOutputDir) {
-		t.Errorf("err = %v, want ErrMissingMCPCommandOutputDir", err)
-	}
-}
-
-func TestLoad_BlankRequiredFields(t *testing.T) {
-	tests := []struct {
-		name    string
-		content string
-		want    error
-	}{
-		{
-			name: "command_output_dir whitespace only",
-			content: `
-[mcp]
-command_output_dir = "   "
-`,
-			want: config.ErrMissingMCPCommandOutputDir,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			path := writeToml(t, tt.content)
-			_, err := config.Load(path)
-			if !errors.Is(err, tt.want) {
-				t.Errorf("err = %v, want %v", err, tt.want)
-			}
-		})
+	want := filepath.Join(filepath.Dir(path), "command-profile.json")
+	if got := cfg.CommandProfilePath(); got != want {
+		t.Errorf("CommandProfilePath() = %q, want %q", got, want)
 	}
 }
 
@@ -193,7 +157,7 @@ func TestLoad_FileNotFound(t *testing.T) {
 }
 
 func TestLoad_DeprecatedAllowCIDRs_Rejected(t *testing.T) {
-	path := writeToml(t, validBase+`
+	path := writeToml(t, `
 [sandbox.network]
 allow_cidrs = ["10.0.0.0/8"]
 `)
@@ -204,67 +168,13 @@ allow_cidrs = ["10.0.0.0/8"]
 }
 
 func TestLoad_DeprecatedAllowHosts_Rejected(t *testing.T) {
-	path := writeToml(t, validBase+`
+	path := writeToml(t, `
 [sandbox.network]
 allow_hosts = ["api.github.com"]
 `)
 	_, err := config.Load(path)
 	if !errors.Is(err, config.ErrDeprecatedNetworkKeys) {
 		t.Errorf("err = %v, want ErrDeprecatedNetworkKeys", err)
-	}
-}
-
-func TestLoad_ToolMode_DefaultsToMcp(t *testing.T) {
-	path := writeToml(t, validBase)
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.ToolMode != "mcp" {
-		t.Errorf("ToolMode = %q, want \"mcp\" (default)", cfg.ToolMode)
-	}
-}
-
-func TestLoad_ToolMode_HookAccepted(t *testing.T) {
-	path := writeToml(t, "tool_mode = \"hook\"\n"+validBase)
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.ToolMode != "hook" {
-		t.Errorf("ToolMode = %q, want \"hook\"", cfg.ToolMode)
-	}
-}
-
-func TestLoad_ToolMode_InvalidRejected(t *testing.T) {
-	path := writeToml(t, "tool_mode = \"bogus\"\n"+validBase)
-	_, err := config.Load(path)
-	if !errors.Is(err, config.ErrInvalidToolMode) {
-		t.Errorf("err = %v, want ErrInvalidToolMode", err)
-	}
-}
-
-func TestLoad_HookModeAllowsMissingCommandOutputDir(t *testing.T) {
-	path := writeToml(t, `
-tool_mode = "hook"
-`)
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("Load() error = %v, want nil", err)
-	}
-	if cfg.MCP.CommandOutputDir != "" {
-		t.Errorf("CommandOutputDir = %q, want empty", cfg.MCP.CommandOutputDir)
-	}
-}
-
-func TestLoad_HookModeIgnoresCommandOutputDir(t *testing.T) {
-	path := writeToml(t, "tool_mode = \"hook\"\n"+validBase)
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("Load() error = %v, want nil", err)
-	}
-	if cfg.MCP.CommandOutputDir != "/tmp/out" {
-		t.Errorf("CommandOutputDir = %q, want /tmp/out (kept but unused)", cfg.MCP.CommandOutputDir)
 	}
 }
 
@@ -283,36 +193,56 @@ func writeUserToml(t *testing.T, content string) {
 	}
 }
 
+// command_profile is the only scalar left, so it is what pins the compose
+// rule: the project file wins for a key both declare.
 func TestLoad_Compose_ScalarProjectWins(t *testing.T) {
-	writeUserToml(t, `
-tool_mode = "mcp"
-[mcp]
-command_output_dir = "/u/out"
-`)
-	project := writeToml(t, `
-tool_mode = "hook"
-`)
-	cfg, err := config.Load(project)
+	writeUserToml(t, "command_profile = \"user-cmd.json\"\n")
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
+	writeFile(t, cfgPath, "command_profile = \"project-cmd.json\"\n")
+	writeFile(t, filepath.Join(dir, "project-cmd.json"), "{}")
+
+	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.ToolMode != "hook" {
-		t.Errorf("ToolMode = %q, want \"hook\" (project wins)", cfg.ToolMode)
+	if got, want := cfg.CommandProfilePath(), filepath.Join(dir, "project-cmd.json"); got != want {
+		t.Errorf("CommandProfilePath() = %q, want %q (project wins)", got, want)
 	}
-	if cfg.MCP.CommandOutputDir != "/u/out" {
-		t.Errorf("CommandOutputDir = %q, want \"/u/out\" (user retained, project omitted it)", cfg.MCP.CommandOutputDir)
+}
+
+// The mirror of the above: a key only the user file declares survives into the
+// merged config, and validate runs on that merged result.
+func TestLoad_Compose_UserScalarRetained(t *testing.T) {
+	writeUserToml(t, "command_profile = \"user-cmd.json\"\n")
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
+	writeFile(t, cfgPath, "")
+	// Deliberately not the default name: only the user-scope value can make
+	// this config validate.
+	writeFile(t, filepath.Join(dir, "user-cmd.json"), "{}")
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got, want := cfg.CommandProfilePath(), filepath.Join(dir, "user-cmd.json"); got != want {
+		t.Errorf("CommandProfilePath() = %q, want %q (user value retained)", got, want)
 	}
 }
 
 func TestLoad_Compose_NoHome_ProjectOnly(t *testing.T) {
 	t.Setenv("HOME", "")
-	project := writeToml(t, validBase)
+	project := writeToml(t, "command_profile = \"command-profile.json\"\n")
 	cfg, err := config.Load(project)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.MCP.CommandOutputDir != "/tmp/out" {
-		t.Errorf("CommandOutputDir = %q, want /tmp/out (project-only)", cfg.MCP.CommandOutputDir)
+	want := filepath.Join(filepath.Dir(project), "command-profile.json")
+	if got := cfg.CommandProfilePath(); got != want {
+		t.Errorf("CommandProfilePath() = %q, want %q (project-only)", got, want)
 	}
 }
 
@@ -321,37 +251,9 @@ func TestLoad_Compose_DeprecatedKeyInUserFile(t *testing.T) {
 [sandbox.network]
 allow_cidrs = ["10.0.0.0/8"]
 `)
-	project := writeToml(t, validBase)
+	project := writeToml(t, "")
 	if _, err := config.Load(project); !errors.Is(err, config.ErrDeprecatedNetworkKeys) {
 		t.Errorf("err = %v, want ErrDeprecatedNetworkKeys", err)
-	}
-}
-
-func TestLoad_Compose_ValidationOnMerged_UserSuppliesRequired(t *testing.T) {
-	writeUserToml(t, `
-[mcp]
-command_output_dir = "/u/out"
-`)
-	// Project omits the required field; validate runs on the merged config, so
-	// the user's value must satisfy it.
-	project := writeToml(t, `
-tool_mode = "mcp"
-`)
-	if _, err := config.Load(project); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestLoad_Compose_ValidationOnMerged_MissingEverywhere(t *testing.T) {
-	writeUserToml(t, `
-tool_mode = "mcp"
-`)
-	// command_output_dir is absent from both scopes -> merged config fails validation.
-	project := writeToml(t, `
-tool_mode = "mcp"
-`)
-	if _, err := config.Load(project); !errors.Is(err, config.ErrMissingMCPCommandOutputDir) {
-		t.Errorf("err = %v, want ErrMissingMCPCommandOutputDir", err)
 	}
 }
 
@@ -367,7 +269,6 @@ func TestLoad_RejectsMovedKeys(t *testing.T) {
 		{
 			name: "sandbox.network section",
 			content: `
-tool_mode = "hook"
 
 [sandbox.network]
 allow_domains = ["proxy.golang.org"]
@@ -377,7 +278,6 @@ allow_domains = ["proxy.golang.org"]
 		{
 			name: "command env_passthrough",
 			content: `
-tool_mode = "hook"
 
 [sandbox.command]
 env_passthrough = ["CI"]
@@ -387,7 +287,6 @@ env_passthrough = ["CI"]
 		{
 			name: "shared base under its old name",
 			content: `
-tool_mode = "hook"
 
 [sandbox.host]
 capabilities = ["go"]
@@ -397,7 +296,6 @@ capabilities = ["go"]
 		{
 			name: "agent host sub-table",
 			content: `
-tool_mode = "hook"
 
 [sandbox.agent.host]
 capabilities = ["ssh"]
@@ -407,7 +305,6 @@ capabilities = ["ssh"]
 		{
 			name: "command host sub-table",
 			content: `
-tool_mode = "hook"
 
 [sandbox.command.host]
 capabilities = ["go"]
@@ -417,7 +314,6 @@ capabilities = ["go"]
 		{
 			name: "command network sub-table",
 			content: `
-tool_mode = "hook"
 
 [sandbox.command.network]
 allow_domains = ["proxy.golang.org"]
@@ -427,7 +323,6 @@ allow_domains = ["proxy.golang.org"]
 		{
 			name: "command routing",
 			content: `
-tool_mode = "hook"
 
 [sandbox.command]
 allow = ["go *"]
@@ -447,7 +342,6 @@ allow = ["go *"]
 
 func TestLoad_RejectsRemovedContainerSection(t *testing.T) {
 	path := writeToml(t, `
-tool_mode = "hook"
 
 [sandbox.container]
 image = "sandbox:0.1.0"
@@ -460,7 +354,6 @@ image = "sandbox:0.1.0"
 
 func TestLoad_RejectsRemovedAllowExternal(t *testing.T) {
 	path := writeToml(t, `
-tool_mode = "hook"
 
 [sandbox.network]
 allow_external = true
@@ -480,7 +373,7 @@ func TestLoad_RejectsRemovedContainerSection_UserScope(t *testing.T) {
 [sandbox.container]
 image = "sandbox:0.1.0"
 `)
-	project := writeToml(t, validBase)
+	project := writeToml(t, "")
 	if _, err := config.Load(project); !errors.Is(err, config.ErrRemovedContainerSection) {
 		t.Errorf("err = %v, want ErrRemovedContainerSection", err)
 	}
@@ -490,7 +383,7 @@ func TestLoadRejectsAllowCommands(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "command-profile.json"), "{}")
 	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
-	writeFile(t, cfgPath, "tool_mode = \"hook\"\n[sandbox.agent]\nallow_commands = [\"go *\"]\n")
+	writeFile(t, cfgPath, "[sandbox.agent]\nallow_commands = [\"go *\"]\n")
 
 	_, err := config.Load(cfgPath)
 	if !errors.Is(err, config.ErrMovedCommandTiers) {
@@ -502,7 +395,7 @@ func TestLoadRejectsDropCommands(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "command-profile.json"), "{}")
 	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
-	writeFile(t, cfgPath, "tool_mode = \"hook\"\n[sandbox.agent]\ndrop_commands = [{ pattern = \"git *\" }]\n")
+	writeFile(t, cfgPath, "[sandbox.agent]\ndrop_commands = [{ pattern = \"git *\" }]\n")
 
 	_, err := config.Load(cfgPath)
 	if !errors.Is(err, config.ErrMovedCommandTiers) {
@@ -514,7 +407,7 @@ func TestLoadRejectsSharedSection(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "command-profile.json"), "{}")
 	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
-	writeFile(t, cfgPath, "tool_mode = \"hook\"\n[sandbox.shared]\ncapabilities = [\"go\"]\n")
+	writeFile(t, cfgPath, "[sandbox.shared]\ncapabilities = [\"go\"]\n")
 
 	_, err := config.Load(cfgPath)
 	if !errors.Is(err, config.ErrMovedSharedToAgent) {
@@ -526,7 +419,7 @@ func TestLoadRejectsShellSection(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "command-profile.json"), "{}")
 	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
-	writeFile(t, cfgPath, "tool_mode = \"hook\"\n[sandbox.shell]\nallow_domains = [\"example.com\"]\n")
+	writeFile(t, cfgPath, "[sandbox.shell]\nallow_domains = [\"example.com\"]\n")
 
 	_, err := config.Load(cfgPath)
 	if !errors.Is(err, config.ErrMovedShellToProfile) {
@@ -537,7 +430,7 @@ func TestLoadRejectsShellSection(t *testing.T) {
 func TestAgentProfilePathDefaultsBesideConfig(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
-	writeFile(t, cfgPath, "tool_mode = \"hook\"\n")
+	writeFile(t, cfgPath, "")
 	writeFile(t, filepath.Join(dir, "command-profile.json"), "{}")
 
 	cfg, err := config.Load(cfgPath)
@@ -553,7 +446,7 @@ func TestAgentProfilePathDefaultsBesideConfig(t *testing.T) {
 func TestAgentProfilePathRelativeResolvesAgainstConfigDir(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
-	writeFile(t, cfgPath, "tool_mode = \"hook\"\n\n[agents.claude]\nprofile = \"profiles/claude.json\"\n")
+	writeFile(t, cfgPath, "\n[agents.claude]\nprofile = \"profiles/claude.json\"\n")
 	writeFile(t, filepath.Join(dir, "command-profile.json"), "{}")
 
 	cfg, err := config.Load(cfgPath)
@@ -569,7 +462,7 @@ func TestAgentProfilePathRelativeResolvesAgainstConfigDir(t *testing.T) {
 func TestAgentProfilePathAbsoluteIsUsedAsIs(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
-	writeFile(t, cfgPath, "tool_mode = \"hook\"\n\n[agents.claude]\nprofile = \"/etc/agent-sandbox/claude.json\"\n")
+	writeFile(t, cfgPath, "\n[agents.claude]\nprofile = \"/etc/agent-sandbox/claude.json\"\n")
 	writeFile(t, filepath.Join(dir, "command-profile.json"), "{}")
 
 	cfg, err := config.Load(cfgPath)
@@ -591,7 +484,7 @@ func TestAgentProfileProjectOverridesUserScopeAndKeepsOtherAgents(t *testing.T) 
 
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
-	writeFile(t, cfgPath, "tool_mode = \"hook\"\n\n[agents.claude]\nprofile = \"project-claude.json\"\n")
+	writeFile(t, cfgPath, "\n[agents.claude]\nprofile = \"project-claude.json\"\n")
 	writeFile(t, filepath.Join(dir, "command-profile.json"), "{}")
 
 	cfg, err := config.Load(cfgPath)
@@ -617,7 +510,7 @@ func TestLoadRejectsTheSandboxSection(t *testing.T) {
 		"[sandbox]\n",
 	} {
 		t.Run(body, func(t *testing.T) {
-			_, err := config.Load(writeToml(t, "tool_mode = \"hook\"\n\n"+body))
+			_, err := config.Load(writeToml(t, body))
 			if err == nil {
 				t.Fatal("expected an error for a config still declaring [sandbox], got nil")
 			}
@@ -625,5 +518,47 @@ func TestLoadRejectsTheSandboxSection(t *testing.T) {
 				t.Errorf("the error must name where the grants moved: %v", err)
 			}
 		})
+	}
+}
+
+// tool_mode and [mcp] are gone: the PreToolUse hook is the only way commands
+// reach the broker. Both must fail by name rather than be ignored — a config
+// still saying tool_mode = "mcp" would otherwise launch a hook-routed session
+// while its author believes Bash is disabled and every command goes through an
+// MCP tool.
+func TestLoad_RejectsRemovedToolMode(t *testing.T) {
+	for _, value := range []string{`"mcp"`, `"hook"`, `"bogus"`} {
+		t.Run(value, func(t *testing.T) {
+			path := writeToml(t, "tool_mode = "+value+"\n")
+			if _, err := config.Load(path); !errors.Is(err, config.ErrRemovedToolMode) {
+				t.Errorf("Load() error = %v, want ErrRemovedToolMode", err)
+			}
+		})
+	}
+}
+
+func TestLoad_RejectsRemovedMCPSection(t *testing.T) {
+	path := writeToml(t, "[mcp]\ncommand_output_dir = \"/tmp/out\"\n")
+	if _, err := config.Load(path); !errors.Is(err, config.ErrRemovedMCPSection) {
+		t.Errorf("Load() error = %v, want ErrRemovedMCPSection", err)
+	}
+}
+
+// A bare [mcp] with no key under it must fail too: checkDeprecated works off
+// the decode metadata precisely so a key with no value still fires.
+func TestLoad_RejectsRemovedMCPSection_Bare(t *testing.T) {
+	path := writeToml(t, "[mcp]\n")
+	if _, err := config.Load(path); !errors.Is(err, config.ErrRemovedMCPSection) {
+		t.Errorf("Load() error = %v, want ErrRemovedMCPSection", err)
+	}
+}
+
+// Both removals must fire from the user-scope file as well, not only the
+// project one — Load checks each file as it decodes it.
+func TestLoad_RejectsRemovedKeys_UserScope(t *testing.T) {
+	writeUserToml(t, "tool_mode = \"hook\"\n")
+	project := writeToml(t, "")
+	if _, err := config.Load(project); !errors.Is(err, config.ErrRemovedToolMode) {
+		t.Errorf("Load() error = %v, want ErrRemovedToolMode", err)
 	}
 }

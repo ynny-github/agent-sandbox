@@ -55,8 +55,6 @@ go install github.com/ynny-github/agent-sandbox@latest
 指すだけで、中身を生成することはありません。
 
 ```toml
-tool_mode = "hook"
-
 [agents.claude]
 profile = "claude-profile.json"
 ```
@@ -115,8 +113,7 @@ Claude Code を包み、もう一方はコマンドプロファイルで `agent-
 | `agent-sandbox debug -- [claude の引数...]` | 実行はせずに、両セッション分の `nono` コマンドを表示 |
 | `agent-sandbox ai explain` | エージェント向けのサンドボックス説明: コマンドの実行経路、2 つの層、拒否の理由 |
 | `agent-sandbox ai config-check` | `agent-sandbox.toml` と 2 つの nono プロファイルを、起動時と同じ読み方で検証 |
-| `agent-sandbox command-router` | MCP サーバーを起動 (`tool_mode = "mcp"`) |
-| `agent-sandbox hook` | PreToolUse アダプタ (`tool_mode = "hook"`。Claude が呼ぶもので、手で叩くものではない) |
+| `agent-sandbox hook` | PreToolUse アダプタ (起動時に注入され、Claude が呼ぶもので、手で叩くものではない) |
 
 グローバルフラグは `--config <path>` (既定 `agent-sandbox.toml`) と `--env <ref>`
 (繰り返し可) の 2 つです。`claude` と `debug` では `--` の前に置けるのはこの 2 つだけで、
@@ -126,20 +123,19 @@ Claude Code を包み、もう一方はコマンドプロファイルで `agent-
 ## 設定
 
 ```toml
-tool_mode = "hook"                       # "hook" | "mcp" (既定は "mcp")
 command_profile = "command-profile.json" # 既定の名前。すべてのエージェントで共有
-
-[mcp]
-command_output_dir = "..."               # mcp モードでは必須。hook モードでは無視
 
 [agents.claude]
 profile = "claude-profile.json"          # 既定の名前: "<agent>-profile.json"
 ```
 
-| `tool_mode` | 挙動 |
-|---|---|
-| `hook` | Bash と Monitor は有効なまま。起動時に `claude --settings` で PreToolUse フックを注入し、各コマンドを `agent-sandbox exec -- <command>` に書き換えます。`.claude/settings.json` には何も書きません。`agent-sandbox` が `PATH` に必要です。制御を渡す前に、ランチャーがプローブ用のペイロードでフックを 1 回実行し、コマンドが書き換わって返ってこなければ起動を拒否します。 |
-| `mcp` | Bash と Monitor を無効化。エージェントは `run_command` MCP ツール経由でコマンドを実行し、出力は `mcp.command_output_dir` 配下のファイルに書かれます。 |
+Bash と Monitor は有効なままです。起動時に `claude --settings` で PreToolUse
+フックを注入し、各コマンドを `agent-sandbox exec -- <command>` に書き換えます。
+`.claude/settings.json` には何も書きません。`agent-sandbox` が `PATH` に必要です。
+制御を渡す前に、ランチャーがプローブ用のペイロードでフックを 1 回実行し、コマンドが
+書き換わって返ってこなければ起動を拒否します — Claude Code は起動できないフックを
+非ブロッキングのエラーとして扱い、そのままコマンドを実行してしまうので、それは
+機能低下ではなくバイパスだからです。
 
 プロファイルのパスは、絶対パスで書かない限り `agent-sandbox.toml` の隣で解決されます。
 任意の `~/.config/agent-sandbox/config.toml` はプロジェクト設定と合成され、
@@ -181,8 +177,6 @@ mise run build        # `go install` でワーキングツリーのビルドを�
 **`go build` や `go run .` ではなく `mise run build` を使ってください。**
 バイナリをこのワーキングツリーの外かつ `PATH` の通った場所に置けるのは `go install`
 だけで、起動にはそこに置かれている必要があります。
-
-E2E スイートは `e2e` にあります (Python/pytest、MCP stdio)。
 
 コミットは [Conventional Commits](https://www.conventionalcommits.org/) に従い、
 `lefthook` が `commit-msg` でタイトルを検証します。

@@ -32,7 +32,7 @@ func TestRunDebug_PrintsBrokerSocketGrant(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 
 	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
-	cfgBody := "[mcp]\ncommand_output_dir = " + toTOMLString(filepath.Join(dir, "out")) + "\n"
+	cfgBody := ""
 	if err := os.WriteFile(cfgPath, []byte(cfgBody), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestRunDebug_PrintsResolvedNonoPath(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 
 	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
-	cfgBody := "[mcp]\ncommand_output_dir = " + toTOMLString(filepath.Join(dir, "out")) + "\n"
+	cfgBody := ""
 	if err := os.WriteFile(cfgPath, []byte(cfgBody), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestRunDebug_PrintsTheConfiguredAgentProfilePath(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 
 	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
-	cfgBody := "[mcp]\ncommand_output_dir = " + toTOMLString(filepath.Join(dir, "out")) + "\n"
+	cfgBody := ""
 	if err := os.WriteFile(cfgPath, []byte(cfgBody), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}

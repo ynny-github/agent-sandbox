@@ -135,34 +135,24 @@ func TestBuildArgs_AlwaysUsesWrap(t *testing.T) {
 	}
 }
 
-func TestBuildArgs_McpMode_DisablesTools(t *testing.T) {
+// Every session injects the PreToolUse hook: it is the only thing that routes
+// the agent's Bash and Monitor commands to the broker.
+func TestBuildArgs_InjectsHookSettings(t *testing.T) {
 	makeFakeNono(t)
-	cfg := &config.Config{ToolMode: "mcp"}
-	_, args, err := BuildArgs(cfg, Options{}, "", "", "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !argsContain(args, "--disallowed-tools") || !argsContain(args, "Bash,Monitor") {
-		t.Errorf("mcp mode should disable Bash,Monitor; got %v", args)
-	}
-}
-
-func TestBuildArgs_HookMode_InjectsSettings(t *testing.T) {
-	makeFakeNono(t)
-	cfg := &config.Config{ToolMode: "hook"}
+	cfg := &config.Config{}
 	_, args, err := BuildArgs(cfg, Options{}, "", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if argsContain(args, "--disallowed-tools") {
-		t.Errorf("hook mode should not disable tools; got %v", args)
+		t.Errorf("Bash and Monitor stay enabled; got %v", args)
 	}
 
 	ci := argsIndex(args, "claude")
 
 	si := argsIndex(args, "--settings")
 	if si < 0 || si+1 >= len(args) {
-		t.Fatalf("hook mode should inject --settings with a value; got %v", args)
+		t.Fatalf("--settings must be injected with a value; got %v", args)
 	}
 	val := args[si+1]
 	if !strings.Contains(val, `"PreToolUse"`) ||
@@ -172,21 +162,21 @@ func TestBuildArgs_HookMode_InjectsSettings(t *testing.T) {
 	if si < ci {
 		t.Errorf("--settings must appear after claude; got %v", args)
 	}
-	// With no MCP config path (the "" passed to BuildArgs above), there is no
-	// GitHub-MCP deny rule to add, so the settings JSON must carry the hook
-	// and nothing else — in particular no "permissions" key at all.
+	// The settings JSON carries the hook and nothing else — in particular no
+	// "permissions" key: agent-sandbox decides no permissions itself, the two
+	// nono profiles do.
 	if strings.Contains(val, `"permissions"`) {
 		t.Errorf("--settings value should have no permissions key without an MCP config path; got %q", val)
 	}
 }
 
-// With no MCP config to hand the agent, the only --read-file is the launcher's
-// own binary (which the agent must be able to exec in either mode). Nothing
-// else is granted.
-func TestBuildArgs_McpMode_NoMCPConfigReadFile(t *testing.T) {
+// The only --read-file BuildArgs adds on its own is the launcher's own binary,
+// which the agent must be able to exec to run the hook. Nothing else is
+// granted here; everything else is the profile's.
+func TestBuildArgs_GrantsOnlyTheLauncherBinary(t *testing.T) {
 	makeFakeNono(t)
 	self := pinExecutablePath(t)
-	cfg := &config.Config{ToolMode: "mcp"}
+	cfg := &config.Config{}
 	_, args, err := BuildArgs(cfg, Options{}, "", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -198,13 +188,13 @@ func TestBuildArgs_McpMode_NoMCPConfigReadFile(t *testing.T) {
 		}
 	}
 	if len(granted) != 1 || granted[0] != self {
-		t.Errorf("mcp mode with no MCP config must grant only the launcher binary %q; got %v", self, granted)
+		t.Errorf("BuildArgs must grant only the launcher binary %q; got %v", self, granted)
 	}
 }
 
 func TestBuildArgs_InjectsProfileBeforeClaude(t *testing.T) {
 	makeFakeNono(t)
-	cfg := &config.Config{ToolMode: "mcp"}
+	cfg := &config.Config{}
 	_, args, err := BuildArgs(cfg, Options{}, "/tmp/asb-profile-1.json", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -221,7 +211,7 @@ func TestBuildArgs_InjectsProfileBeforeClaude(t *testing.T) {
 
 func TestBuildArgs_ClaudeOptsAfterClaude(t *testing.T) {
 	makeFakeNono(t)
-	cfg := &config.Config{ToolMode: "mcp"}
+	cfg := &config.Config{}
 	_, args, err := BuildArgs(cfg, Options{ClaudeOpts: []string{"--model", "opus"}}, "", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -238,7 +228,7 @@ func TestBuildArgs_ClaudeOptsAfterClaude(t *testing.T) {
 
 func TestBuildArgs_InjectsSystemPrompt(t *testing.T) {
 	makeFakeNono(t)
-	cfg := &config.Config{ToolMode: "mcp"}
+	cfg := &config.Config{}
 	_, args, err := BuildArgs(cfg, Options{}, "", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -255,21 +245,18 @@ func TestBuildArgs_InjectsSystemPrompt(t *testing.T) {
 	}
 }
 
-// TestBuildArgs_McpMode_InjectsNoSettingsOrMCPFlags guards what the launcher
-// no longer adds: it generates no MCP config, so neither the mcp flags nor a
-// --settings carrying deny rules for one should appear.
-func TestBuildArgs_McpMode_InjectsNoSettingsOrMCPFlags(t *testing.T) {
+// The launcher configures no MCP server of its own — it never generated one,
+// and the run_command tool it used to serve is gone — so no mcp flag should
+// reach claude.
+func TestBuildArgs_InjectsNoMCPFlags(t *testing.T) {
 	makeFakeNono(t)
-	cfg := &config.Config{ToolMode: "mcp"}
+	cfg := &config.Config{}
 	_, args, err := BuildArgs(cfg, Options{}, "", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if argsContain(args, "--mcp-config") || argsContain(args, "--strict-mcp-config") {
 		t.Errorf("no mcp flags expected; got %v", args)
-	}
-	if argsContain(args, "--settings") {
-		t.Errorf("mcp mode should have no --settings; got %v", args)
 	}
 }
 
@@ -344,7 +331,7 @@ func TestParseArgs_EnvRefs(t *testing.T) {
 
 func TestBuildArgs_GrantsBrokerSocket(t *testing.T) {
 	makeFakeNono(t)
-	cfg := &config.Config{ToolMode: "hook"}
+	cfg := &config.Config{}
 	_, args, err := BuildArgs(cfg, Options{}, "", "/tmp/b.sock", "")
 	if err != nil {
 		t.Fatalf("BuildArgs() error = %v", err)
@@ -390,10 +377,11 @@ func TestRun_StartBrokerFailure_DoesNotLaunch(t *testing.T) {
 	makeFakeNono(t)
 	superviseCalls := 0
 	exitCalls := 0
-	err := run(&config.Config{ToolMode: "mcp"}, Options{}, runDeps{
+	err := run(&config.Config{}, Options{}, runDeps{
 		agentProfile: func(*config.Config) (string, error) {
 			return "/tmp/asb-profile-1.json", nil
 		},
+		verifyHook:        func(string, string) error { return nil },
 		startShellWrapper: testWrapperStart("/tmp/test-norc-bash-1", nil),
 		startBroker: func(*config.Config) (string, func(), error) {
 			return "", nil, errors.New("broker start error")
@@ -415,10 +403,11 @@ func TestRun_StartBrokerFailure_DoesNotLaunch(t *testing.T) {
 func TestRun_ExitReceivesSuperviseCode(t *testing.T) {
 	makeFakeNono(t)
 	gotExit := -1
-	err := run(&config.Config{ToolMode: "mcp"}, Options{}, runDeps{
+	err := run(&config.Config{}, Options{}, runDeps{
 		agentProfile: func(*config.Config) (string, error) {
 			return "/tmp/asb-profile-1.json", nil
 		},
+		verifyHook:        func(string, string) error { return nil },
 		startBroker:       testBrokerStart("/tmp/test.sock", nil),
 		startShellWrapper: testWrapperStart("/tmp/test-norc-bash-1", nil),
 		supervise:         func(string, []string) int { return 3 },
@@ -436,10 +425,11 @@ func TestRun_BrokerCleanupBeforeExit(t *testing.T) {
 	makeFakeNono(t)
 	cleaned := 0
 	cleanedBeforeExit := false
-	err := run(&config.Config{ToolMode: "mcp"}, Options{}, runDeps{
+	err := run(&config.Config{}, Options{}, runDeps{
 		agentProfile: func(*config.Config) (string, error) {
 			return "/tmp/asb-profile-1.json", nil
 		},
+		verifyHook:        func(string, string) error { return nil },
 		startBroker:       testBrokerStart("/tmp/test.sock", &cleaned),
 		startShellWrapper: testWrapperStart("/tmp/test-norc-bash-1", nil),
 		supervise:         func(string, []string) int { return 0 },
@@ -461,10 +451,11 @@ func TestRun_SetsBrokerSocketEnvBeforeSupervise(t *testing.T) {
 	t.Setenv(broker.SocketEnvVar, "")
 	const wantSocket = "/tmp/test-env-handoff.sock"
 	var gotEnv string
-	err := run(&config.Config{ToolMode: "mcp"}, Options{}, runDeps{
+	err := run(&config.Config{}, Options{}, runDeps{
 		agentProfile: func(*config.Config) (string, error) {
 			return "/tmp/asb-profile-1.json", nil
 		},
+		verifyHook:        func(string, string) error { return nil },
 		startBroker:       testBrokerStart(wantSocket, nil),
 		startShellWrapper: testWrapperStart("/tmp/test-norc-bash-1", nil),
 		supervise: func(string, []string) int {
@@ -754,7 +745,7 @@ func TestWaitForSocketOrExit_Timeout(t *testing.T) {
 func loadConfigWithCommandProfile(t *testing.T, dir, profile string) *config.Config {
 	t.Helper()
 	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
-	body := "tool_mode = \"hook\"\ncommand_profile = " + strconv.Quote(profile) + "\n"
+	body := "command_profile = " + strconv.Quote(profile) + "\n"
 	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -771,7 +762,7 @@ func writeLaunchFixture(t *testing.T, withAgentProfile bool) (string, *config.Co
 	t.Helper()
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
-	body := "tool_mode = \"mcp\"\n\n[mcp]\ncommand_output_dir = \"/tmp/asb-out\"\n"
+	body := ""
 	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -797,6 +788,7 @@ func TestRun_PassesTheConfiguredAgentProfileToNono(t *testing.T) {
 	var gotArgs []string
 	err := run(cfg, Options{}, runDeps{
 		agentProfile:      defaultAgentProfile,
+		verifyHook:        func(string, string) error { return nil },
 		startBroker:       testBrokerStart("/tmp/test.sock", nil),
 		startShellWrapper: testWrapperStart("/tmp/test-norc-bash-1", nil),
 		supervise:         func(_ string, args []string) int { gotArgs = args; return 0 },
@@ -819,6 +811,7 @@ func TestRun_MissingAgentProfileFailsBeforeLaunch(t *testing.T) {
 	supervised := 0
 	err := run(cfg, Options{}, runDeps{
 		agentProfile:      defaultAgentProfile,
+		verifyHook:        func(string, string) error { return nil },
 		startBroker:       testBrokerStart("/tmp/test.sock", nil),
 		startShellWrapper: testWrapperStart("/tmp/test-norc-bash-1", nil),
 		supervise:         func(string, []string) int { supervised++; return 0 },
@@ -832,9 +825,8 @@ func TestRun_MissingAgentProfileFailsBeforeLaunch(t *testing.T) {
 	}
 }
 
-// The PreToolUse hook runs `agent-sandbox hook`, and in mcp mode Claude spawns
-// `agent-sandbox serve` as an MCP server. Both are direct children of the
-// agent, so they run inside the agent's own sandbox rather than through the
+// The PreToolUse hook runs `agent-sandbox hook` as a direct child of the
+// agent, so it runs inside the agent's own sandbox rather than through the
 // broker: without a grant for the binary itself, nono refuses the execve and
 // every command fails with nothing on screen to explain it. The path is the
 // launcher's own, so it is passed as a flag rather than written into the
@@ -844,7 +836,7 @@ func TestBuildArgs_GrantsTheLauncherBinaryToTheAgent(t *testing.T) {
 	makeFakeNono(t)
 	self := pinExecutablePath(t)
 
-	cfg := &config.Config{ToolMode: "hook"}
+	cfg := &config.Config{}
 	_, args, err := BuildArgs(cfg, Options{}, "/tmp/p.json", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -867,7 +859,7 @@ func TestBuildArgs_FailsWhenItsOwnPathIsUnknown(t *testing.T) {
 	executablePath = func() (string, error) { return "", errors.New("os.Executable: not implemented") }
 	t.Cleanup(func() { executablePath = prev })
 
-	cfg := &config.Config{ToolMode: "hook"}
+	cfg := &config.Config{}
 	if _, _, err := BuildArgs(cfg, Options{}, "/tmp/p.json", "", ""); err == nil {
 		t.Fatal("expected an error when the launcher cannot locate its own binary, got nil")
 	}
@@ -894,7 +886,6 @@ func TestRun_RefusesToLaunchWhenTheHookCannotRun(t *testing.T) {
 	pinExecutablePath(t)
 	dir, cfg := writeLaunchFixture(t, true)
 	_ = dir
-	cfg.ToolMode = "hook"
 
 	supervised := 0
 	err := run(cfg, Options{}, runDeps{
@@ -913,9 +904,9 @@ func TestRun_RefusesToLaunchWhenTheHookCannotRun(t *testing.T) {
 	}
 }
 
-// mcp mode injects no hook — Bash and Monitor are disabled outright — so there
-// is nothing to probe and nothing to bypass.
-func TestRun_SkipsTheHookProbeInMcpMode(t *testing.T) {
+// The hook is the only route from the agent's tools to the broker, so the
+// probe is unconditional: every launch proves it before handing over control.
+func TestRun_AlwaysProbesTheHook(t *testing.T) {
 	makeFakeNono(t)
 	pinExecutablePath(t)
 	_, cfg := writeLaunchFixture(t, true)
@@ -923,7 +914,7 @@ func TestRun_SkipsTheHookProbeInMcpMode(t *testing.T) {
 	probed := 0
 	err := run(cfg, Options{}, runDeps{
 		agentProfile:      defaultAgentProfile,
-		verifyHook:        func(string, string) error { probed++; return errors.New("must not be called") },
+		verifyHook:        func(string, string) error { probed++; return nil },
 		startBroker:       testBrokerStart("/tmp/test.sock", nil),
 		startShellWrapper: testWrapperStart("/tmp/test-norc-bash-1", nil),
 		supervise:         func(string, []string) int { return 0 },
@@ -932,8 +923,8 @@ func TestRun_SkipsTheHookProbeInMcpMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if probed != 0 {
-		t.Errorf("the hook probe ran %d time(s) in mcp mode; want 0", probed)
+	if probed != 1 {
+		t.Errorf("the hook probe ran %d time(s); want exactly 1", probed)
 	}
 }
 

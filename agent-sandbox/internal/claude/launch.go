@@ -1,6 +1,6 @@
 // Package claude builds and runs the sandboxed `claude` command: it parses the
 // launcher's arguments, constructs the `nono wrap … claude …` invocation
-// (including the hook settings injected in hook mode), and executes it.
+// (including the injected PreToolUse hook settings), and executes it.
 package claude
 
 import (
@@ -154,10 +154,9 @@ func probeHook(profilePath, self string) error {
 
 // BuildArgs constructs the nono executable path and the argv used to launch
 // Claude under the sandbox for cfg. It injects the operator's profile at
-// profilePath via `--profile` (no user nono options are forwarded) and, in
-// hook mode, injects the PreToolUse hook via `claude --settings`; otherwise it
-// disables the Bash and Monitor tools. The injected settings carry the hook
-// only; the profile contributes nothing to them.
+// profilePath via `--profile` (no user nono options are forwarded) and the
+// PreToolUse hook via `claude --settings`. The injected settings carry the
+// hook only; the profile contributes nothing to them.
 func BuildArgs(cfg *config.Config, opts Options,
 	profilePath, brokerSocket, shellWrapper string) (string, []string, error) {
 	nonoPath, err := exec.LookPath("nono")
@@ -166,11 +165,10 @@ func BuildArgs(cfg *config.Config, opts Options,
 	}
 	args := []string{"nono", "wrap"}
 
-	// The agent runs `agent-sandbox hook` (hook mode) and `agent-sandbox serve`
-	// (mcp mode) as its own direct children — inside its own sandbox, not
-	// through the broker — so the launcher's binary has to be reachable from
-	// the agent profile. Without it nono refuses the execve and every command
-	// fails with nothing on screen to explain it.
+	// The agent runs `agent-sandbox hook` as its own direct child — inside its
+	// own sandbox, not through the broker — so the launcher's binary has to be
+	// reachable from the agent profile. Without it nono refuses the execve and
+	// every command fails with nothing on screen to explain it.
 	//
 	// It is a flag rather than a line in the hand-written profile because only
 	// the launcher knows where it lives: on a mise-managed toolchain the path
@@ -208,16 +206,11 @@ func BuildArgs(cfg *config.Config, opts Options,
 	args = append(args, "claude")
 	args = append(args, "--append-system-prompt", agentconfig.Pointer())
 
-	settingsStr, err := settingsJSON(cfg.ToolMode == "hook")
+	settingsStr, err := settingsJSON()
 	if err != nil {
 		return "", nil, err
 	}
-	if settingsStr != "" {
-		args = append(args, "--settings", settingsStr)
-	}
-	if cfg.ToolMode != "hook" {
-		args = append(args, "--disallowed-tools", "Bash,Monitor")
-	}
+	args = append(args, "--settings", settingsStr)
 
 	args = append(args, opts.ClaudeOpts...)
 	return nonoPath, args, nil
@@ -231,7 +224,7 @@ type runDeps struct {
 	// without touching the filesystem.
 	agentProfile func(*config.Config) (string, error)
 	// verifyHook proves the PreToolUse hook can actually run under the agent's
-	// profile. Hook mode only; mcp mode injects no hook.
+	// profile. Every session injects that hook, so every launch runs it.
 	verifyHook  func(profilePath, selfPath string) error
 	startBroker func(*config.Config) (socket string, cleanup func(), err error)
 	// startShellWrapper writes the shell Claude runs tool commands with. It
@@ -281,14 +274,12 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 		return err
 	}
 
-	if cfg.ToolMode == "hook" {
-		self, selfErr := launcherPath()
-		if selfErr != nil {
-			return selfErr
-		}
-		if err := d.verifyHook(profilePath, self); err != nil {
-			return fmt.Errorf("hook check: %w", err)
-		}
+	self, selfErr := launcherPath()
+	if selfErr != nil {
+		return selfErr
+	}
+	if err := d.verifyHook(profilePath, self); err != nil {
+		return fmt.Errorf("hook check: %w", err)
 	}
 
 	// A wrapper that cannot be written costs noise, not safety: Claude falls

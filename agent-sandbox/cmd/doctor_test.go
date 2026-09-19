@@ -71,7 +71,7 @@ func configWithBothProfiles(t *testing.T, dir string) *config.Config {
 		}
 	}
 	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
-	if err := os.WriteFile(cfgPath, []byte("tool_mode = \"hook\"\n"), 0o600); err != nil {
+	if err := os.WriteFile(cfgPath, []byte(""), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 	cfg, err := config.Load(cfgPath)
@@ -245,7 +245,7 @@ func TestRunDoctor_MissingCommandProfileReportsActionableHint(t *testing.T) {
 		t.Fatalf("write claude profile: %v", err)
 	}
 	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
-	body := "tool_mode = \"hook\"\ncommand_profile = " + strconv.Quote(missing) + "\n"
+	body := "command_profile = " + strconv.Quote(missing) + "\n"
 	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -400,7 +400,7 @@ func TestRenderResults_Mixed(t *testing.T) {
 func configWithProfile(t *testing.T, dir, profile string) *config.Config {
 	t.Helper()
 	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
-	body := "tool_mode = \"hook\"\ncommand_profile = " + strconv.Quote(profile) + "\n"
+	body := "command_profile = " + strconv.Quote(profile) + "\n"
 	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}

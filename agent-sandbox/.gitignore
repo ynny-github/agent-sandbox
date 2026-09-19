@@ -1,6 +1,3 @@
-# Binary
-mcp-command-router
-
 # Go build artifacts
 *.exe
 *.exe~

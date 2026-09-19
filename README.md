@@ -55,8 +55,6 @@ Write `agent-sandbox.toml` in your project root. It only names the profile
 files; it does not build them.
 
 ```toml
-tool_mode = "hook"
-
 [agents.claude]
 profile = "claude-profile.json"
 ```
@@ -118,8 +116,7 @@ for `nono profile show` / `nono why`.
 | `agent-sandbox debug -- [claude args...]` | Print the `nono` invocations for both sessions — without running anything |
 | `agent-sandbox ai explain` | Agent-facing description of the sandbox: how commands run, both tiers, and every denial's reason |
 | `agent-sandbox ai config-check` | Validate `agent-sandbox.toml` and both nono profiles the way launch reads them |
-| `agent-sandbox command-router` | Start the MCP server (`tool_mode = "mcp"`) |
-| `agent-sandbox hook` | PreToolUse adapter (`tool_mode = "hook"`; invoked by Claude, not by you) |
+| `agent-sandbox hook` | PreToolUse adapter, injected at launch and invoked by Claude, not by you |
 
 Global flags: `--config <path>` (default `agent-sandbox.toml`) and `--env <ref>`
 (repeatable). For `claude` and `debug`, only those two may appear before `--`;
@@ -129,20 +126,19 @@ the PreToolUse hook — and is rejected as a passthrough option.
 ## Configuration
 
 ```toml
-tool_mode = "hook"                       # "hook" | "mcp" (default "mcp")
 command_profile = "command-profile.json" # default name; shared by every agent
-
-[mcp]
-command_output_dir = "..."               # required in mcp mode; ignored in hook mode
 
 [agents.claude]
 profile = "claude-profile.json"          # default name: "<agent>-profile.json"
 ```
 
-| `tool_mode` | Behavior |
-|---|---|
-| `hook` | Bash and Monitor stay enabled. A PreToolUse hook is injected at launch via `claude --settings`, rewriting each command to `agent-sandbox exec -- <command>`. Nothing is written to `.claude/settings.json`. `agent-sandbox` must be on `PATH`. Before handing over control the launcher runs the hook once with a probe payload and refuses to launch unless the command comes back rewritten. |
-| `mcp` | Bash and Monitor are disabled. The agent routes commands through the `run_command` MCP tool, and output is written to files under `mcp.command_output_dir`. |
+Bash and Monitor stay enabled, and a PreToolUse hook injected at launch via
+`claude --settings` rewrites each command to `agent-sandbox exec -- <command>`.
+Nothing is written to `.claude/settings.json`, and `agent-sandbox` must be on
+`PATH`. Before handing over control the launcher runs the hook once with a
+probe payload and refuses to launch unless the command comes back rewritten —
+Claude Code treats a hook that cannot start as a non-blocking error and runs
+the command anyway, which would be a bypass rather than a degraded mode.
 
 Profile paths resolve beside `agent-sandbox.toml` unless written absolute. An
 optional `~/.config/agent-sandbox/config.toml` is composed with the project
@@ -181,12 +177,10 @@ go build ./...
 mise run build        # install a working-tree build via `go install`
 ```
 
+
 **Use `mise run build`, not `go build` or `go run .`.** Only `go install`
 puts the binary outside this working tree and on `PATH`, which is where it
 has to be for a launch to work.
-
-End-to-end suites live in `e2e` (Python/pytest, MCP stdio).
-
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/);
 `lefthook` validates the title on `commit-msg`.
 

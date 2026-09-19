@@ -28,12 +28,7 @@ func writeTempConfig(t *testing.T, body string) string {
 }
 
 func TestRunExplain_RendersConfig(t *testing.T) {
-	cfgPath := writeTempConfig(t, `
-tool_mode = "hook"
-
-[mcp]
-command_output_dir = "./tmp"
-`)
+	cfgPath := writeTempConfig(t, "")
 	orig := configPath
 	configPath = cfgPath
 	t.Cleanup(func() { configPath = orig })
@@ -80,9 +75,7 @@ func TestRunConfigCheck_ValidConfig(t *testing.T) {
 	})
 	defer restore()
 
-	out, err := runConfigCheckWith(t, `
-tool_mode = "hook"
-`)
+	out, err := runConfigCheckWith(t, "")
 	if err != nil {
 		t.Fatalf("runConfigCheck: %v", err)
 	}
@@ -92,7 +85,7 @@ tool_mode = "hook"
 }
 
 func TestRunConfigCheck_BrokenToml(t *testing.T) {
-	if _, err := runConfigCheckWith(t, "tool_mode = \n"); err == nil {
+	if _, err := runConfigCheckWith(t, "command_profile = \n"); err == nil {
 		t.Fatal("expected an error for unparseable TOML, got nil")
 	}
 }
@@ -111,7 +104,7 @@ func TestRunConfigCheck_ValidatesBothProfilesWithNono(t *testing.T) {
 
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
-	if err := os.WriteFile(cfgPath, []byte("tool_mode = \"hook\"\n"), 0o600); err != nil {
+	if err := os.WriteFile(cfgPath, []byte(""), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"command-profile.json", "claude-profile.json"} {
@@ -149,7 +142,7 @@ func TestRunConfigCheck_FailsWhenTheAgentProfileIsMissing(t *testing.T) {
 
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
-	if err := os.WriteFile(cfgPath, []byte("tool_mode = \"hook\"\n"), 0o600); err != nil {
+	if err := os.WriteFile(cfgPath, []byte(""), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "command-profile.json"), []byte("{}"), 0o600); err != nil {

@@ -1,8 +1,3 @@
-# Tool execution mode: "mcp" (agent uses the run_command MCP tool; Bash/Monitor
-# disabled) or "hook" (agent uses Bash/Monitor, routed via a PreToolUse hook that
-# `agent-sandbox claude` injects at launch). Default: "mcp".
-tool_mode = "mcp"
-
 # The nono profile every brokered command runs under. Default name, resolved
 # beside this file. agent-sandbox does not generate or read it.
 #
@@ -11,9 +6,6 @@ tool_mode = "mcp"
 # can reach the broker socket can recurse into the broker, which spawns
 # handlers with no concurrency cap — a host-side fork bomb.
 command_profile = "command-profile.json"
-
-[mcp]
-command_output_dir = "/tmp/mcp-output"
 
 # The nono profile the launched agent itself runs under — its own file tools,
 # and any MCP server it spawns as a direct child (those are not brokered, so a

@@ -1,7 +1,7 @@
-  # Tool execution mode: "hook" routes the agent's Bash/Monitor commands into
-  # `agent-sandbox exec` through a PreToolUse hook that `agent-sandbox claude`
-  # injects at launch via --settings (nothing is stored in .claude/settings.json).
-  tool_mode = "hook"
+  # The agent's Bash/Monitor commands are routed into `agent-sandbox exec` by a
+  # PreToolUse hook that `agent-sandbox claude` injects at launch via --settings
+  # (nothing is stored in .claude/settings.json). There is no other mode and no
+  # key to select one.
 
   # agent-sandbox generates no nono profile. Two files, both written in nono's
   # own schema, decide everything: claude-profile.json is the sandbox the agent

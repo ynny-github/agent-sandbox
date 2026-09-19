@@ -10,7 +10,6 @@ import (
 )
 
 type Config struct {
-	ToolMode string `toml:"tool_mode"`
 	// CommandProfile names the nono profile the command broker runs under. It
 	// is written by the operator in nono's own schema, not generated: every
 	// decision about commands — which may run, what each may touch, which
@@ -20,7 +19,6 @@ type Config struct {
 	// Agents maps a launch subcommand's name ("claude") to that agent's
 	// configuration. An absent table is not an error: every key has a default.
 	Agents map[string]AgentConfig `toml:"agents"`
-	MCP    MCPConfig              `toml:"mcp"`
 
 	// dir is the directory the project config was loaded from. A relative
 	// command_profile resolves against it rather than the process working
@@ -83,10 +81,6 @@ func absPath(p string) string {
 	return p
 }
 
-type MCPConfig struct {
-	CommandOutputDir string `toml:"command_output_dir"`
-}
-
 // Load composes the optional user-scope config
 // (~/.config/agent-sandbox/config.toml) with the project-scope config at path,
 // then validates the merged result. Scalars: project overrides user.
@@ -143,6 +137,15 @@ func decodeInto(path string, cfg *Config) (toml.MetaData, error) {
 // Order matters: the sandbox.command checks run most-specific first, since
 // IsDefined("sandbox", "command") is also true for its sub-tables.
 func checkDeprecated(md toml.MetaData) error {
+	// tool_mode and [mcp] are not under [sandbox], so their order relative to
+	// the checks below does not matter; they lead because they are the most
+	// recent removal and the one a stale config is likeliest to carry.
+	if md.IsDefined("tool_mode") {
+		return ErrRemovedToolMode
+	}
+	if md.IsDefined("mcp") {
+		return ErrRemovedMCPSection
+	}
 	if md.IsDefined("sandbox", "network", "allow_cidrs") || md.IsDefined("sandbox", "network", "allow_hosts") {
 		return ErrDeprecatedNetworkKeys
 	}
@@ -195,32 +198,20 @@ func checkDeprecated(md toml.MetaData) error {
 	return nil
 }
 
-// validate applies the tool_mode default and all required-field checks to the
-// merged config, returning it unchanged on success.
+// validate applies the required-field checks to the merged config, returning
+// it unchanged on success. Only the command profile is checked: every other
+// key has a default, and neither profile's contents are agent-sandbox's to
+// judge — nono reads them.
 func validate(cfg *Config) (*Config, error) {
-	switch cfg.ToolMode {
-	case "":
-		cfg.ToolMode = "mcp"
-	case "mcp", "hook":
-		// valid
-	default:
-		return nil, fmt.Errorf("%w: %q", ErrInvalidToolMode, cfg.ToolMode)
-	}
-
 	if _, err := os.Stat(cfg.CommandProfilePath()); err != nil {
-		// Unlike the other validate failures below, cfg itself is returned
-		// alongside this error: doctor's checkProfiles needs
+		// cfg itself is returned alongside this error, unusually for a
+		// validate failure: doctor's checkProfiles needs
 		// cfg.CommandProfilePath() to report the dedicated, actionable
 		// "write the profile, or point command_profile at it" hint instead of
 		// the generic "fix the config first" one — see cmd/doctor.go.
 		return cfg, fmt.Errorf("%w: %s", ErrCommandProfileMissing, cfg.CommandProfilePath())
 	}
 
-	// command_output_dir is only consumed by the MCP server path, so require it
-	// only in mcp mode. In hook mode it is optional and, if set, ignored.
-	if cfg.ToolMode == "mcp" && strings.TrimSpace(cfg.MCP.CommandOutputDir) == "" {
-		return nil, ErrMissingMCPCommandOutputDir
-	}
 	return cfg, nil
 }
 

@@ -148,8 +148,9 @@ func TestRun_ExportsTheShellWrapperBeforeSupervise(t *testing.T) {
 	const wantWrapper = "/tmp/test-norc-bash-1"
 	var gotEnv string
 	var gotArgs []string
-	err := run(&config.Config{ToolMode: "mcp"}, Options{}, runDeps{
+	err := run(&config.Config{}, Options{}, runDeps{
 		agentProfile:      func(*config.Config) (string, error) { return "/tmp/asb-profile-1.json", nil },
+		verifyHook:        func(string, string) error { return nil },
 		startBroker:       testBrokerStart("/tmp/test.sock", nil),
 		startShellWrapper: testWrapperStart(wantWrapper, nil),
 		supervise: func(_ string, args []string) int {
@@ -174,8 +175,9 @@ func TestRun_CleansUpTheShellWrapperBeforeExit(t *testing.T) {
 	makeFakeNono(t)
 	cleaned := 0
 	cleanedBeforeExit := false
-	err := run(&config.Config{ToolMode: "mcp"}, Options{}, runDeps{
+	err := run(&config.Config{}, Options{}, runDeps{
 		agentProfile:      func(*config.Config) (string, error) { return "/tmp/asb-profile-1.json", nil },
+		verifyHook:        func(string, string) error { return nil },
 		startBroker:       testBrokerStart("/tmp/test.sock", nil),
 		startShellWrapper: testWrapperStart("/tmp/test-norc-bash-1", &cleaned),
 		supervise:         func(string, []string) int { return 0 },
@@ -196,8 +198,9 @@ func TestRun_LaunchesWithoutTheWrapperWhenItCannotBeWritten(t *testing.T) {
 	// A missing wrapper costs noise, not safety: Claude falls back to the
 	// host's bash and every tool result carries a line about ~/.bashrc. That
 	// is not worth refusing to launch over.
-	err := run(&config.Config{ToolMode: "mcp"}, Options{}, runDeps{
+	err := run(&config.Config{}, Options{}, runDeps{
 		agentProfile:      func(*config.Config) (string, error) { return "/tmp/asb-profile-1.json", nil },
+		verifyHook:        func(string, string) error { return nil },
 		startBroker:       testBrokerStart("/tmp/test.sock", nil),
 		startShellWrapper: func() (string, func(), error) { return "", nil, errors.New("no state dir") },
 		supervise:         func(string, []string) int { superviseCalls++; return 0 },

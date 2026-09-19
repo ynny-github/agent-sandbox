@@ -17,8 +17,8 @@ func TestPointer_MentionsExplainCommand(t *testing.T) {
 	}
 }
 
-func TestExplain_HookMode(t *testing.T) {
-	cfg := &config.Config{ToolMode: "hook"}
+func TestExplain_RoutingSection(t *testing.T) {
+	cfg := &config.Config{}
 	got := agentconfig.Explain(cfg, "agent-sandbox.toml")
 	for _, want := range []string{
 		"# agent-sandbox environment",
@@ -30,24 +30,10 @@ func TestExplain_HookMode(t *testing.T) {
 			t.Errorf("Explain() missing %q\nfull output:\n%s", want, got)
 		}
 	}
+	// The MCP tool is gone; a document that still offered it would send the
+	// agent after a tool its session does not have.
 	if strings.Contains(got, "run_command") {
-		t.Errorf("Explain() hook branch should not mention the mcp run_command tool:\n%s", got)
-	}
-}
-
-func TestExplain_McpMode(t *testing.T) {
-	cfg := &config.Config{ToolMode: "mcp"}
-	got := agentconfig.Explain(cfg, "agent-sandbox.toml")
-	for _, want := range []string{
-		"run_command",
-		"written to files",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("Explain() mcp branch missing %q:\n%s", want, got)
-		}
-	}
-	if strings.Contains(got, "PreToolUse hook") {
-		t.Errorf("Explain() mcp branch should not mention the hook flow:\n%s", got)
+		t.Errorf("Explain() must not mention the removed run_command MCP tool:\n%s", got)
 	}
 }
 
@@ -55,7 +41,7 @@ func TestExplain_McpMode(t *testing.T) {
 // way config.Config.CommandProfilePath() does, without describing what it
 // allows: agent-sandbox neither generates nor reads its contents.
 func TestExplain_NamesTheCommandProfilePath(t *testing.T) {
-	cfg := &config.Config{ToolMode: "hook"}
+	cfg := &config.Config{}
 	got := agentconfig.Explain(cfg, "agent-sandbox.toml")
 	if !strings.Contains(got, cfg.CommandProfilePath()) {
 		t.Errorf("Explain() missing the command profile path %q\nfull output:\n%s", cfg.CommandProfilePath(), got)
@@ -63,21 +49,21 @@ func TestExplain_NamesTheCommandProfilePath(t *testing.T) {
 }
 
 func TestExplain_ConfigEditingSection(t *testing.T) {
-	cfg := &config.Config{ToolMode: "hook"}
+	cfg := &config.Config{}
 	got := agentconfig.Explain(cfg, "/work/proj/agent-sandbox.toml")
 
 	for _, want := range []string{
 		"## Changing the config",
 		"/work/proj/agent-sandbox.toml",
 		"[agents.claude]",
-		"tool_mode",
+		"command_profile",
 		"agent-sandbox ai config-check",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("Explain() config section missing %q\nfull output:\n%s", want, got)
 		}
 	}
-	for _, unwanted := range []string{"[sandbox.shared]", "[sandbox.shell]", "[sandbox.agent]", "capabilities", "allow_commands", "drop_commands", "allow_domains"} {
+	for _, unwanted := range []string{"[sandbox.shared]", "[sandbox.shell]", "[sandbox.agent]", "capabilities", "allow_commands", "drop_commands", "allow_domains", "tool_mode", "[mcp]"} {
 		if strings.Contains(got, unwanted) {
 			t.Errorf("Explain() config section still mentions removed key %q\nfull output:\n%s", unwanted, got)
 		}
@@ -85,7 +71,7 @@ func TestExplain_ConfigEditingSection(t *testing.T) {
 }
 
 func TestExplain_SaysEditsApplyAtNextLaunch(t *testing.T) {
-	got := agentconfig.Explain(&config.Config{ToolMode: "hook"}, "agent-sandbox.toml")
+	got := agentconfig.Explain(&config.Config{}, "agent-sandbox.toml")
 	for _, want := range []string{
 		"does not affect the current session",
 		"agent-sandbox claude",
@@ -97,7 +83,7 @@ func TestExplain_SaysEditsApplyAtNextLaunch(t *testing.T) {
 }
 
 func TestExplain_MentionsUserScopeConfigMerge(t *testing.T) {
-	got := agentconfig.Explain(&config.Config{ToolMode: "hook"}, "agent-sandbox.toml")
+	got := agentconfig.Explain(&config.Config{}, "agent-sandbox.toml")
 	for _, want := range []string{
 		"~/.config/agent-sandbox/config.toml",
 		"wins",
@@ -110,7 +96,7 @@ func TestExplain_MentionsUserScopeConfigMerge(t *testing.T) {
 func TestExplain_NamesBothProfilesAndTheNonoCommands(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
-	if err := os.WriteFile(cfgPath, []byte("tool_mode = \"hook\"\n"), 0o600); err != nil {
+	if err := os.WriteFile(cfgPath, []byte(""), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"command-profile.json", "claude-profile.json"} {
@@ -147,7 +133,7 @@ func TestExplain_NamesBothProfilesAndTheNonoCommands(t *testing.T) {
 // restate the profile's contents.
 func TestExplain_PointsAtNonoRatherThanListingCommands(t *testing.T) {
 	dir := t.TempDir()
-	cfg := &config.Config{ToolMode: "hook", CommandProfile: "command-profile.json"}
+	cfg := &config.Config{CommandProfile: "command-profile.json"}
 	out := agentconfig.Explain(cfg, filepath.Join(dir, "agent-sandbox.toml"))
 
 	for _, want := range []string{
@@ -168,7 +154,7 @@ func TestExplain_PointsAtNonoRatherThanListingCommands(t *testing.T) {
 // 2026-09-12 profile.
 func TestExplain_MakesNoTwoTierOrWrapperClaims(t *testing.T) {
 	dir := t.TempDir()
-	cfg := &config.Config{ToolMode: "hook", CommandProfile: "command-profile.json"}
+	cfg := &config.Config{CommandProfile: "command-profile.json"}
 	out := agentconfig.Explain(cfg, filepath.Join(dir, "agent-sandbox.toml"))
 
 	for _, forbidden := range []string{
@@ -190,7 +176,7 @@ func TestExplain_MakesNoTwoTierOrWrapperClaims(t *testing.T) {
 // produce its full document rather than degrade or report a broker issue.
 func TestExplain_ReadsNoProfile(t *testing.T) {
 	dir := t.TempDir()
-	cfg := &config.Config{ToolMode: "hook", CommandProfile: "does-not-exist.json"}
+	cfg := &config.Config{CommandProfile: "does-not-exist.json"}
 	out := agentconfig.Explain(cfg, filepath.Join(dir, "agent-sandbox.toml"))
 
 	if strings.Contains(out, "could not identify the broker entry") {

@@ -6,7 +6,7 @@ import (
 )
 
 func TestHookSettingsJSON(t *testing.T) {
-	got, err := settingsJSON(true)
+	got, err := settingsJSON()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -43,15 +43,5 @@ func TestHookSettingsJSON(t *testing.T) {
 	}
 	if len(got2) != 2 || got2[0] != "Bash" || got2[1] != "Monitor" {
 		t.Errorf("matchers = %v, want [Bash Monitor]", got2)
-	}
-}
-
-func TestSettingsJSON_EmptyWhenNothing(t *testing.T) {
-	got, err := settingsJSON(false)
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
-	if got != "" {
-		t.Errorf("expected empty settings, got %q", got)
 	}
 }

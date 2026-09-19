@@ -590,3 +590,79 @@ func TestShellExecutorStopsPacingWhenTheContextIsCancelled(t *testing.T) {
 // paced launch's wait, leaving room to tell "the wait was interrupted" apart
 // from "the wait finished and then the line stopped".
 const PolicyLaunchCancelDelay = execd.PolicyLaunchInterval / 10
+
+// TestRunLeavesNoDescendants reproduces the measured defect this branch
+// exists to fix: before Job was wired in, cancelling a command killed only
+// its direct child, a surviving grandchild kept the command's stdout pipe
+// open, and the handler goroutine — and so Run — never returned. "sleep 2972
+// & wait" gives the shell a child (the backgrounded sleep) that is not the
+// direct process exec.Command starts (sh is), so a teardown that only kills
+// sh's own pid leaves sleep 2972 running and its inherited stdout pipe held
+// open.
+//
+// The test is only a guard against that defect if the descendant is proven
+// to have actually run: without the existence poll below, a Run that
+// rejected the line in milliseconds — an unresolvable "sh", a pacer refusal,
+// a future change that makes Run reject the line outright — would return
+// well inside the 4s bound and leave pgrep with nothing to find either way,
+// and this test would pass green having exercised none of the teardown
+// machinery it exists to check. So it polls for the descendant to exist
+// before the context's cancellation gets a chance to tear it down, and it
+// fails on a 126/127 exit the same way a stray infrastructure error fails
+// it: those mean the line never ran rather than that it ran and was torn
+// down cleanly.
+func TestRunLeavesNoDescendants(t *testing.T) {
+	e := execd.NewShellExecutor()
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	// Registered before the existence poll, so a t.Fatal there (the
+	// descendant never appearing) still tears down a leaked sleep 2972
+	// instead of skipping straight past cleanup.
+	t.Cleanup(func() { exec.Command("pkill", "-f", "sleep 2972").Run() })
+
+	type result struct {
+		code int
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		code, err := e.Run(ctx, "sh -c 'sleep 2972 & wait'", t.TempDir(), nil, io.Discard, io.Discard)
+		done <- result{code, err}
+	}()
+
+	// Poll for the grandchild rather than assuming a fixed delay is long
+	// enough: the deadline sits comfortably inside the 500ms the context
+	// gives the line before cancelling it, and sh forks the backgrounded
+	// sleep near-instantly, so this reliably observes it before teardown
+	// starts rather than racing that teardown.
+	deadline := time.Now().Add(400 * time.Millisecond)
+	for {
+		out, _ := exec.Command("pgrep", "-f", "sleep 2972").Output()
+		if len(strings.Fields(string(out))) != 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("descendant never appeared; sleep 2972 was not observed running")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	var res result
+	select {
+	case res = <-done:
+	case <-time.After(4 * time.Second):
+		t.Fatal("Run did not return within 4s after the context was cancelled")
+	}
+	if res.err != nil {
+		t.Fatalf("Run returned an infrastructure error: %v", res.err)
+	}
+	if res.code == 126 || res.code == 127 {
+		t.Fatalf("Run rejected the line (exit %d) instead of running it; the descendant this test checks for never had a chance to run", res.code)
+	}
+
+	out, _ := exec.Command("pgrep", "-f", "sleep 2972").Output()
+	if pids := strings.Fields(string(out)); len(pids) != 0 {
+		t.Errorf("descendants survived the request: %v", pids)
+	}
+}

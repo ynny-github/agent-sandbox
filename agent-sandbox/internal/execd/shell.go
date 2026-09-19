@@ -87,6 +87,14 @@ func (e *ShellExecutor) Run(ctx context.Context, command, cwd string,
 		return 0, fmt.Errorf("execd: build interpreter: %w", err)
 	}
 
+	// One Job per request: every command the line starts, across every
+	// pipeline stage, belongs to it, and it is torn down on every path out of
+	// Run — normal completion, a parse/exec error, or the context being
+	// cancelled — so nothing this request started outlives Run itself.
+	job := NewJob()
+	defer job.Terminate()
+	ctx = withJob(ctx, job)
+
 	if err := runner.Run(ctx, file); err != nil {
 		if status, ok := interp.IsExitStatus(err); ok {
 			return int(status), nil
@@ -119,7 +127,11 @@ func (e *ShellExecutor) execHandler(ctx context.Context, args []string) error {
 		return interp.NewExitStatus(126)
 	}
 
-	cmd := exec.CommandContext(ctx, path, args[1:]...)
+	// exec.Command, not exec.CommandContext: cancellation is the Job's
+	// responsibility now (see the watcher below), and CommandContext's own
+	// kill would race Job.Terminate's killpg, two mechanisms killing the same
+	// process by different means.
+	cmd := exec.Command(path, args[1:]...)
 	cmd.Dir = hc.Dir
 	cmd.Env = execEnv(hc)
 
@@ -176,13 +188,40 @@ func (e *ShellExecutor) execHandler(ctx context.Context, args []string) error {
 	// own process-spawning machinery that a read ordering fix on this side of
 	// the boundary cannot address. See task-8-report.md's Finding B fix
 	// report for what was tried and measured.
-	if err := cmd.Start(); err != nil {
+	job := jobFrom(ctx)
+	if job == nil {
+		job = NewJob() // a bare interpreter, in a test: the command still gets its own group
+	}
+	if err := job.Start(cmd); err != nil {
 		for _, d := range drains {
 			d.abort()
 		}
 		fmt.Fprintf(hc.Stderr, "agent-sandbox: %s: %v\n", args[0], err)
 		return interp.NewExitStatus(126)
 	}
+
+	// Tear the whole group down the instant the context is cancelled, not
+	// just when the interpreter next checks it between statements — this is
+	// what makes a cancelled request return promptly even while this one
+	// command is still running. stop stops the watcher once execHandler no
+	// longer needs it — but only on the path where nothing has cancelled:
+	// once the select below has taken the ctx.Done() branch, it is committed
+	// to job.Terminate(), and closing stop afterwards does nothing. So the
+	// goroutine can outlive execHandler, and possibly Run, by up to
+	// TerminateGrace: that is how long Terminate may poll before it returns.
+	// That is bounded and harmless — Terminate touches only the Job's own
+	// state, nothing execHandler or Run still hold — but it is a real bound,
+	// not "never outlives the command it watches".
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		select {
+		case <-ctx.Done():
+			job.Terminate()
+		case <-stop:
+		}
+	}()
+
 	for _, d := range drains {
 		d.wait()
 	}

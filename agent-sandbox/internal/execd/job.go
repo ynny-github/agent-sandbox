@@ -121,8 +121,9 @@ const TerminateGrace = 200 * time.Millisecond
 // Three successive revisions of this comment carried numbers belonging to a
 // neighbouring set — the 2028-2029ms pair above is exactly what leaked into
 // the 21-run range twice. If you change a number here, re-derive it from the
-// named set rather than from this comment's previous wording; the probe doc
-// carries the per-run tables.
+// named set rather than from this comment's previous wording;
+// docs/superpowers/probes/2026-09-19-policy-pipe-hang.md carries the per-run
+// tables each log set above is named for.
 //
 // So the hazard is unchanged — the fd is still leaked, inside nono's own
 // machinery — but it is a bounded incident now rather than a permanent one.

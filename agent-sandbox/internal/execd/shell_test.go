@@ -21,10 +21,13 @@ import (
 // this), and each command's own stdout/stderr drain (see wiring) writes
 // into whatever the caller supplied independently of the others — a plain
 // bytes.Buffer's internal bookkeeping is not safe for that, and a race there
-// can silently truncate or lose one side's output (measured while chasing
-// Finding B, task-8-report.md: a message written by one command's own exec
-// handler vanished under a bare bytes.Buffer, racing against a different
-// concurrent command's own, empty stderr drain). execd never has
+// can silently truncate or lose one side's output. That is not hypothetical: it
+// was measured here while this file was being written, with a bare bytes.Buffer
+// in this type's place — a message written by one command's own exec handler
+// vanished, racing against a different concurrent command's own, empty stderr
+// drain. Swapping syncBuffer back for a bytes.Buffer is how to see it again;
+// note that -race cannot be used to catch it in this repository, because it
+// needs cgo and this build sets CGO_ENABLED=0. execd never has
 // this problem:
 // internal/execd/server.go's frameWriter already serializes every write
 // with its own mutex, for the same reason.
@@ -432,9 +435,11 @@ func TestExecuteTimesOut(t *testing.T) {
 // without a real nono session — the shape of the resolved path is all that
 // tier check ever looks at. cat, not a symlink straight to its own
 // resolved binary, because on a host where coreutils are one combined
-// multi-call binary dispatching on argv[0] (NixOS, notably — see
-// task-8-report.md), a symlink named anything other than "cat" would exec
-// that binary with the wrong argv[0] and fail outright. Shelling out here is
+// multi-call binary dispatching on argv[0], a symlink named anything other
+// than "cat" would exec that binary with the wrong argv[0] and fail outright.
+// NixOS is such a host, and it is checkable in one line there:
+// `readlink -f "$(command -v cat)"` ends at .../bin/coreutils, not at a binary
+// named cat. Shelling out here is
 // fine: this file drives the executor under test from the host, unsandboxed,
 // same as every other fixture in this file.
 func fakePolicyShim(t *testing.T, dir, id, name string) string {

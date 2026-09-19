@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"syscall"
 )
 
 // Channel identifies which stream a frame belongs to.
@@ -27,7 +28,42 @@ const (
 	// ChanStdinClose signals end-of-input; a zero-length stdin frame would be
 	// ambiguous with "no bytes available yet".
 	ChanStdinClose Channel = 6
+	// ChanSignal carries a signal from the client to a running command. It is the
+	// only way to interrupt a command short of dropping the connection, which is a
+	// SIGKILL in effect.
+	ChanSignal Channel = 7
 )
+
+// deliverableSignals is the set a client may send. It is an allow-list rather
+// than a range check because the number travels across a sandbox boundary: a
+// caller inside the sandbox must not be able to name a signal the profile
+// author never considered.
+var deliverableSignals = map[syscall.Signal]bool{
+	syscall.SIGINT:  true,
+	syscall.SIGTERM: true,
+	syscall.SIGHUP:  true,
+	syscall.SIGQUIT: true,
+	syscall.SIGKILL: true,
+}
+
+// WriteSignal writes a signal frame. It refuses a signal outside the
+// deliverable set rather than sending a frame the peer will reject.
+func WriteSignal(w io.Writer, sig syscall.Signal) error {
+	if !deliverableSignals[sig] {
+		return fmt.Errorf("execd: signal %d is not deliverable", sig)
+	}
+	return WriteFrame(w, ChanSignal, []byte{byte(sig)})
+}
+
+// Signal decodes a signal frame. The second result is false for a payload that
+// is not exactly one deliverable signal number.
+func (f Frame) Signal() (syscall.Signal, bool) {
+	if f.Channel != ChanSignal || len(f.Payload) != 1 {
+		return 0, false
+	}
+	sig := syscall.Signal(f.Payload[0])
+	return sig, deliverableSignals[sig]
+}
 
 // maxPayload bounds a single frame so a malformed length cannot make the peer
 // allocate without limit. 1 MiB comfortably exceeds any realistic pipe read.
@@ -69,6 +105,9 @@ type Request struct {
 	Cwd             string `json:"cwd"`
 	WithStdin       bool   `json:"with_stdin"`
 	ProtocolVersion int    `json:"protocol_version"`
+	// TimeoutMs bounds the whole request. Zero means no bound: the caller's own
+	// timeout (the harness's, for an agent's command) is the only one.
+	TimeoutMs int `json:"timeout_ms"`
 }
 
 // Frame is one decoded frame.

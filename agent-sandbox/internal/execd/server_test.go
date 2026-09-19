@@ -249,3 +249,59 @@ func TestServerRejectsUnknownProtocolVersion(t *testing.T) {
 		t.Errorf("payload = %q, want it to name the protocol version", f.Payload)
 	}
 }
+
+// gatedExecutor reports when Execute has started and then blocks until the
+// test releases it. A direction rule can only be enforced while there is a
+// request to enforce it on: against an executor that returns at once, the exit
+// frame is written before watchConn has been scheduled to read anything, and
+// the assertion becomes a race with the request's own completion rather than a
+// test of the rule.
+type gatedExecutor struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (g *gatedExecutor) Execute(ctx context.Context, req execd.Request,
+	stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	close(g.started)
+	<-g.release
+	return 0, nil
+}
+
+func TestServerRefusesAnOutboundChannelFromTheClient(t *testing.T) {
+	exec := &gatedExecutor{started: make(chan struct{}), release: make(chan struct{})}
+	sock := startTestServer(t, exec)
+	conn, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := execd.WriteRequest(conn, execd.Request{
+		Command: "true", Cwd: "/tmp", ProtocolVersion: execd.ProtocolVersion,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The command is running and cannot finish until this test says so, which
+	// is what keeps an exit frame from overtaking the frame sent below.
+	<-exec.started
+	defer close(exec.release)
+
+	if err := execd.WriteFrame(conn, execd.ChanStdout, []byte("not mine to send")); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		f, err := execd.ReadFrame(conn)
+		if err != nil {
+			t.Fatalf("read frame: %v", err)
+		}
+		if f.Channel == execd.ChanError {
+			if !strings.Contains(string(f.Payload), "channel") {
+				t.Errorf("payload = %q, want it to name the channel", f.Payload)
+			}
+			return
+		}
+		if f.Channel == execd.ChanExit {
+			t.Fatal("server accepted a frame the client may not send")
+		}
+	}
+}

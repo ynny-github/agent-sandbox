@@ -109,11 +109,12 @@ func (s *Server) handle(conn net.Conn) {
 		pr, pw := io.Pipe()
 		stdin, stdinWriter = pr, pw
 	}
-	go s.watchConn(conn, stdinWriter, cancel)
-
 	// Frames from the executor are written from two goroutines inside
 	// Execute's implementation, so serialize them here.
 	fw := &frameWriter{w: conn}
+
+	go s.watchConn(conn, fw, stdinWriter, cancel)
+
 	code, execErr := s.exec.Execute(ctx, req, stdin,
 		fw.channel(ChanStdout), fw.channel(ChanStderr))
 
@@ -127,11 +128,17 @@ func (s *Server) handle(conn net.Conn) {
 	fw.writeExit(code)
 }
 
-// watchConn relays stdin frames into pw (nil when the request has no stdin)
-// and cancels the command when the connection ends. It keeps reading after a
+// watchConn relays the frames a client may send — stdin, stdin-close, signal —
+// and refuses the rest. The channels are one namespace with two directions, and
+// a client sending an exit frame is either a bug or a probe; neither should be
+// read as data.
+//
+// It relays stdin frames into pw (nil when the request has no stdin) and
+// cancels the command when the connection ends. It keeps reading after a
 // stdin-close frame, because a later read error is how a disconnect is
 // detected.
-func (s *Server) watchConn(conn net.Conn, pw *io.PipeWriter, cancel context.CancelFunc) {
+func (s *Server) watchConn(conn net.Conn, fw *frameWriter, pw *io.PipeWriter,
+	cancel context.CancelFunc) {
 	for {
 		f, err := ReadFrame(conn)
 		if err != nil {
@@ -153,6 +160,15 @@ func (s *Server) watchConn(conn net.Conn, pw *io.PipeWriter, cancel context.Canc
 				pw.Close()
 				pw = nil
 			}
+		case ChanSignal:
+			// Accepted and dropped here: the frame is legal, and Task 9 is what
+			// routes it into the running command. Accepting it now is what keeps
+			// this step from having to know about Jobs.
+		default:
+			fw.writeError(fmt.Sprintf(
+				"execd: channel %d may not be sent by a client", f.Channel))
+			cancel()
+			return
 		}
 	}
 }

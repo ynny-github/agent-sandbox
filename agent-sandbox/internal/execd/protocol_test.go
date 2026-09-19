@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"syscall"
 	"testing"
 
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/execd"
@@ -116,5 +117,37 @@ func TestClientSetsProtocolVersion(t *testing.T) {
 	}
 	if got.ProtocolVersion != execd.ProtocolVersion {
 		t.Errorf("ProtocolVersion = %d, want %d", got.ProtocolVersion, execd.ProtocolVersion)
+	}
+}
+
+func TestSignalFrameRoundTrip(t *testing.T) {
+	for _, sig := range []syscall.Signal{
+		syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGKILL,
+	} {
+		var buf bytes.Buffer
+		if err := execd.WriteSignal(&buf, sig); err != nil {
+			t.Fatalf("WriteSignal(%v): %v", sig, err)
+		}
+		f, err := execd.ReadFrame(&buf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if f.Channel != execd.ChanSignal {
+			t.Fatalf("channel = %d, want ChanSignal", f.Channel)
+		}
+		got, ok := f.Signal()
+		if !ok || got != sig {
+			t.Errorf("Signal() = %v, %v; want %v, true", got, ok, sig)
+		}
+	}
+}
+
+func TestSignalFrameRejectsOtherSignals(t *testing.T) {
+	if err := execd.WriteSignal(io.Discard, syscall.SIGUSR1); err == nil {
+		t.Error("WriteSignal(SIGUSR1) = nil, want an error")
+	}
+	f := execd.Frame{Channel: execd.ChanSignal, Payload: []byte{byte(syscall.SIGUSR1)}}
+	if _, ok := f.Signal(); ok {
+		t.Error("Signal() accepted SIGUSR1; want it refused")
 	}
 }

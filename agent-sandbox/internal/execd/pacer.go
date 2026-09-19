@@ -108,16 +108,14 @@ func (p *launchPacer) wait(ctx context.Context) bool {
 // measured directly), not a documented API: nono gives this process no other
 // signal that distinguishes the two tiers from a resolved path alone. A
 // future nono that renames this directory would make this heuristic stop
-// matching — the failure mode is a return to the hang refusePolicyPipeChains
-// exists to prevent, not a false refusal, since that function only acts when
-// this matches.
+// matching, and the failure mode is silent: every command would be treated as
+// a floor command, so nothing would be paced and the launch-rate defect above
+// would come back.
 //
 // command_policies is back in the profile this repository ships: git, ssh,
 // bash and sh each carry a command_policies entry, so nono generates a real
 // shim for each of the four and PATH resolves them there, not to their real
-// binaries. This function and refusePolicyPipeChains below are therefore
-// live against real shims, not inert — a refusal from either is the guard
-// doing its job, not a false positive to investigate away.
+// binaries. This function is therefore live against real shims, not inert.
 func isPolicyControlledPath(path string) bool {
 	shimsDir := filepath.Dir(path)
 	return filepath.Base(shimsDir) == "shims" &&

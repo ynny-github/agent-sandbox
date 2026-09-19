@@ -428,9 +428,9 @@ func TestExecuteTimesOut(t *testing.T) {
 // fakePolicyShim creates a real, executable file at
 // <dir>/nono-tool-sandbox-<id>/shims/<name>, a script that execs "cat" by
 // name. This is the directory shape isPolicyControlledPath matches, which
-// lets these tests drive refusePolicyPipeChains through the executor's
-// public API without a real nono session — the shape of the resolved path is
-// all the check ever looks at. cat, not a symlink straight to its own
+// lets these tests drive the launch pacer through the executor's public API
+// without a real nono session — the shape of the resolved path is all that
+// tier check ever looks at. cat, not a symlink straight to its own
 // resolved binary, because on a host where coreutils are one combined
 // multi-call binary dispatching on argv[0] (NixOS, notably — see
 // task-8-report.md), a symlink named anything other than "cat" would exec
@@ -453,96 +453,46 @@ func fakePolicyShim(t *testing.T, dir, id, name string) string {
 	return shimsDir
 }
 
-// TestShellExecutorRefusesTwoPolicyCommandsInOnePipe covers Finding B
-// (task-8-report.md): a pipe with a policy-controlled command on both ends is
-// measured to hang against a real nono session, for a reason entirely inside
-// nono's own process-spawning machinery — outside anything this package
-// controls. refusePolicyPipeChains catches this statically, before either
-// side of the pipe ever runs.
-func TestShellExecutorRefusesTwoPolicyCommandsInOnePipe(t *testing.T) {
+// TestShellExecutorRunsTwoPolicyCommandsInOnePipe pins the behaviour that
+// replaced refusePolicyPipeChains, deleted 2026-09-20: a pipeline with a
+// policy-controlled command on both ends is no longer refused, it runs.
+//
+// This guards the reintroduction of a refusal, and that is all it can guard.
+// The hazard the refusal stood in for lives on nono's side of the boundary —
+// nono retains a duplicate of the pipe's write end, the downstream stage waits
+// for an EOF that never comes, and DrainGrace is what breaks the stall — and
+// these fake shims are ordinary host processes that hold no such duplicate, so
+// nothing here exercises it. The measurement that does — 21 runs of `git log
+// --oneline | git cat-file --batch-check` against nono 0.74.0, 14 of them
+// ending only because the grace expired — is recorded on DrainGrace in job.go,
+// with the denominator for each of its figures. Read it there rather than
+// restating it here: those aggregates do not all share one denominator, and two
+// copies of them is two things to keep true.
+func TestShellExecutorRunsTwoPolicyCommandsInOnePipe(t *testing.T) {
 	dir := t.TempDir()
-	shimsDir := fakePolicyShim(t, dir, "refuse-test", "fakepolicy")
-	t.Setenv("PATH", shimsDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-
-	code, out, errOut := runShell(t, dir, "fakepolicy | fakepolicy", "hello\n")
-	if code != 126 {
-		t.Errorf("exit = %d, want 126 (refused)", code)
-	}
-	if out != "" {
-		t.Errorf("stdout = %q, want empty: the pipeline should be refused before either side runs", out)
-	}
-	if !strings.Contains(errOut, "refused") {
-		t.Errorf("stderr = %q, want it to explain the refusal", errOut)
-	}
-}
-
-// TestShellExecutorRefusesAFloorCommandBetweenTwoPolicyCommands widens the
-// detection past a direct 2-stage pipe, per the ruling on Finding B: a
-// policy command feeding a policy command through an intermediate floor
-// command (`policy | floor | policy`) is exposed to the identical hazard,
-// since all three stages still run concurrently and the leaked reference
-// this refusal exists to route around does not care which stage is adjacent
-// to which.
-func TestShellExecutorRefusesAFloorCommandBetweenTwoPolicyCommands(t *testing.T) {
-	dir := t.TempDir()
-	shimsDir := fakePolicyShim(t, dir, "widen-test", "fakepolicy")
-	t.Setenv("PATH", shimsDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-
-	code, out, errOut := runShell(t, dir, "fakepolicy | cat | fakepolicy", "hello\n")
-	if code != 126 {
-		t.Errorf("exit = %d, want 126 (refused)", code)
-	}
-	if out != "" {
-		t.Errorf("stdout = %q, want empty: the pipeline should be refused before any stage runs", out)
-	}
-	if !strings.Contains(errOut, "refused") {
-		t.Errorf("stderr = %q, want it to explain the refusal", errOut)
-	}
-}
-
-// TestShellExecutorAllowsAPolicyCommandPipedToAFloorCommand and
-// TestShellExecutorAllowsABuiltinPipedToAPolicyCommand are the control cases:
-// only two-or-more policy commands in the same pipe chain are refused. A
-// policy command paired with an ordinary floor command, or with a shell
-// builtin (which never reaches LookPathDir/execve at all — mvdan.cc/sh
-// dispatches it internally), must keep working. This is the overwhelmingly
-// common shape in practice (git piped into rg, head, or fed by echo, ...),
-// and must not pay any real latency for the check either.
-func TestShellExecutorAllowsAPolicyCommandPipedToAFloorCommand(t *testing.T) {
-	dir := t.TempDir()
-	shimsDir := fakePolicyShim(t, dir, "allow-test", "fakepolicy")
+	shimsDir := fakePolicyShim(t, dir, "pipe-test", "fakepolicy")
 	t.Setenv("PATH", shimsDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	for _, tc := range []struct {
 		name    string
 		command string
 	}{
-		{"policy writer, floor reader", "fakepolicy | cat"},
-		{"floor writer, policy reader", "cat | fakepolicy"},
+		{"two stages", "fakepolicy | fakepolicy"},
+		{"floor command between two policy stages", "fakepolicy | cat | fakepolicy"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			code, out, errOut := runShell(t, dir, tc.command, "hello\n")
 			if code != 0 {
-				t.Errorf("exit = %d, want 0; stderr = %q", code, errOut)
+				t.Errorf("exit = %d, want 0 (a refusal would be %d); stderr = %q",
+					code, execd.ExitCannotStart, errOut)
 			}
 			if strings.TrimSpace(out) != "hello" {
-				t.Errorf("stdout = %q, want %q", out, "hello")
+				t.Errorf("stdout = %q, want %q: both stages must run and the bytes reach the end of the pipe", out, "hello")
+			}
+			if strings.Contains(errOut, "refused") {
+				t.Errorf("stderr = %q, want no refusal: piping two policy-controlled commands together is allowed now", errOut)
 			}
 		})
-	}
-}
-
-func TestShellExecutorAllowsABuiltinPipedToAPolicyCommand(t *testing.T) {
-	dir := t.TempDir()
-	shimsDir := fakePolicyShim(t, dir, "builtin-test", "fakepolicy")
-	t.Setenv("PATH", shimsDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-
-	code, out, errOut := runShell(t, dir, "echo hello | fakepolicy", "")
-	if code != 0 {
-		t.Errorf("exit = %d, want 0; stderr = %q", code, errOut)
-	}
-	if strings.TrimSpace(out) != "hello" {
-		t.Errorf("stdout = %q, want %q", out, "hello")
 	}
 }
 
@@ -664,6 +614,18 @@ const PolicyLaunchCancelDelay = execd.PolicyLaunchInterval / 10
 // fails on a 126/127 exit the same way a stray infrastructure error fails
 // it: those mean the line never ran rather than that it ran and was torn
 // down cleanly.
+//
+// What it pins is HOST behaviour, and the distinction is the whole caveat:
+// the "sh" it resolves is the host's real shell, so sh, the backgrounded
+// sleep and Job's killpg are all on the same side of the sandbox boundary and
+// the teardown reaches. Under nono, where sh is a policy-controlled command
+// reached through a shim, the identical line strands: measured on nono
+// 0.74.0, 2026-09-20, `sh -c 'sleep 60'` under a 3000ms request timeout
+// reported 124 and left the sleep running, 3/3 runs, because the shim puts
+// the real shell and its children inside a child sandbox outside the process
+// group this side created. So read a green run here as "execd tears down what
+// it started", never as "no command can outlive a request". See the Job doc
+// comment in job.go.
 func TestRunLeavesNoDescendants(t *testing.T) {
 	e := execd.NewShellExecutor()
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)

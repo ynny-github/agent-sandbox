@@ -26,7 +26,10 @@ var execTimeout time.Duration
 
 func init() {
 	execCmd.Flags().DurationVar(&execTimeout, "timeout", 0,
-		"kill the command if it has not finished within this duration (0 = no limit)")
+		"give up on the command after this duration, exiting 124 (0 = no limit). "+
+			"Teardown starts at the deadline but the exit can lag it by up to a "+
+			"couple of seconds while output drains, and a sandboxed command's own "+
+			"children may survive it")
 	rootCmd.AddCommand(execCmd)
 }
 

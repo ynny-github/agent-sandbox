@@ -36,6 +36,19 @@ const (
 	// ExitTimeout is the status a timed-out request reports. It follows GNU
 	// timeout(1), so a caller that already knows that convention reads it
 	// right.
+	//
+	// Two ways it is weaker than GNU timeout(1), both measured on nono 0.74.0,
+	// 2026-09-20. It does not return AT the timeout: cancellation tears the
+	// process groups down then, but the request still pays out whatever of
+	// DrainGrace the drains have left, so it returns at the timeout plus up to
+	// that grace. Measured with `git log --oneline | git cat-file
+	// --batch-check` at a 1000ms timeout, 5 runs (probe log set bt1-5): the 4
+	// that hit a stall reported 124 at 2017-2024ms, and the 1 that did not
+	// finished 0 at 18ms.
+	// And what it kills is what execd started: a policy-controlled command's
+	// own children survive it — `sh -c 'sleep 60'` at a 3000ms timeout
+	// reported 124 at 5004-5005ms and left the sleep running, 3/3 (log set
+	// ss1-3). See Job and DrainGrace for both.
 	ExitTimeout     = 124
 	ExitCannotStart = 126
 	ExitNotFound    = 127
@@ -80,29 +93,6 @@ func (e *ShellExecutor) Run(ctx context.Context, command, cwd string,
 		return ExitSyntaxError, nil
 	}
 
-	// See refusePolicyPipeChains: a specific shape of this — a two-stage
-	// pipe with a policy-controlled reader that blocks on stdin, fed by a
-	// policy-controlled writer (`git log ... | git cat-file --batch-check`,
-	// the case this exists for) — is measured, against a real nono session,
-	// to hang and strand a process, for a reason entirely inside nono's own
-	// process-spawning machinery, outside anything this package controls
-	// (task-8-report.md's Finding B). Detecting and refusing it statically,
-	// before any command in the line has run, is deterministic and
-	// side-effect-free in a way that trying to detect and recover from the
-	// hang at runtime was not. The refusal is wider than what was directly
-	// measured — see refusePolicyPipeChains's own doc comment for exactly
-	// which shapes were measured to hang, which were only reasoned to be
-	// exposed to the same hazard, and which are not caught at all — so the
-	// message below says "a combination measured to hang or exposed to the
-	// same underlying hazard", not that every refused case was itself
-	// observed hanging.
-	if names, refuse := refusePolicyPipeChains(file, cwd, expand.ListEnviron(os.Environ()...)); refuse {
-		fmt.Fprintf(stderr,
-			"agent-sandbox: refused: this pipeline pipes two or more policy-controlled commands together (%s) — a combination measured to hang and strand a process in at least one shape, and reasoned to be exposed to the same underlying hazard in general. Run them as separate commands instead of piping them directly together.\n",
-			strings.Join(names, ", "))
-		return ExitCannotStart, nil
-	}
-
 	runner, err := interp.New(
 		interp.Dir(cwd),
 		interp.StdIO(stdin, stdout, stderr),
@@ -119,8 +109,11 @@ func (e *ShellExecutor) Run(ctx context.Context, command, cwd string,
 	// it) Run borrows it and leaves the teardown there. A caller that builds
 	// an interpreter by hand, as tests do, gets a Job of Run's own, torn down
 	// on every path out of Run — normal completion, a parse or exec error, or
-	// the context being cancelled — so nothing that caller started outlives
-	// Run either.
+	// the context being cancelled — so nothing execd started for that caller
+	// outlives Run either. Not "nothing outlives Run": teardown is killpg over
+	// the groups this side created, and a policy-controlled command's own
+	// children sit inside nono's child sandbox, outside them. Measured; see
+	// Job.
 	job := jobFrom(ctx)
 	if job == nil {
 		job = NewJob()
@@ -173,14 +166,20 @@ func (e *ShellExecutor) execHandler(ctx context.Context, args []string) error {
 	// it is given and keeps the copy: pass the interpreter's pipe writer
 	// straight through and it stays open after the command exits, so the next
 	// stage of the pipeline never sees EOF and the pipeline hangs after
-	// producing its complete output. Interposing a pipe this side owns avoids
-	// this because the shim only ever duplicates that pipe's fd; the
-	// interpreter's own writer is never touched by the child (or the shim) at
-	// all, so it stays exactly as open or closed as the interpreter itself left
-	// it. What ends a pipeline stage is every copy of the interposed pipe's
-	// write end being closed — the child's on exit, this side's in
-	// closeJobEnds. A real file needs none of that and goes straight to the
-	// child: see wiring.
+	// producing its complete output. Interposing a pipe this side owns confines
+	// that leak instead of curing it. The interpreter's own writer is never
+	// touched by the child or the shim, so it stays exactly as open or closed
+	// as the interpreter left it — but nono retains a duplicate of the
+	// interposed pipe's write end too, measured, so the leak lands on an fd
+	// this side can close on a deadline rather than on one it must never touch.
+	//
+	// So a pipeline stage ends by one of three closes, not two: the child's on
+	// exit, this side's in closeJobEnds, and — when a duplicate outlives both —
+	// waitDrains force-closing the read end at DrainGrace, which is what ended
+	// the stage in 14 of the 21 measured runs of a policy-to-policy pipe (probe
+	// log set runB1-6, full, full2, bb1-10 plus three transcript-only runs).
+	// See DrainGrace for the rest of the numbers. A real file needs none of
+	// this and goes straight to the child: see wiring.
 	w, err := wireOutputs(cmd, hc)
 	if err != nil {
 		fmt.Fprintf(hc.Stderr, "agent-sandbox: %s: %v\n", args[0], err)
@@ -246,6 +245,12 @@ func (e *ShellExecutor) execHandler(ctx context.Context, args []string) error {
 
 	if truncated := w.waitDrains(DrainGrace); truncated {
 		// Not an exit code: inventing one would hide the command's real result.
+		//
+		// Nor, for a non-final pipeline stage, does it reach the caller at all:
+		// mvdan.cc/sh drops such a stage's stderr entirely (measured, and
+		// reproduced with the library's own default exec handler). That is the
+		// common case for this particular note, since the stall that produces it
+		// needs a downstream stage to be stalled by. See DrainGrace.
 		fmt.Fprintf(hc.Stderr,
 			"agent-sandbox: output truncated: %s left a process holding its output after %s\n",
 			args[0], DrainGrace)

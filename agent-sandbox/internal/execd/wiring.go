@@ -35,8 +35,12 @@ type drain struct {
 }
 
 // startDrain launches the copy goroutine and returns immediately. The
-// goroutine ends when the pipe reaches EOF — every copy of its write end
-// closed, this side's included — or when the copy fails.
+// goroutine ends one of three ways: the pipe reaches EOF (every copy of its
+// write end closed, this side's included), the copy fails, or waitDrains
+// force-closes the read end below when the grace runs out. The third is not an
+// edge case — against a policy-controlled reader it is how the copy ends in
+// most runs, because nono keeps a duplicate of the write end and the EOF never
+// comes. See DrainGrace.
 //
 // It does not close w: the interpreter's writer may still be alive after this
 // one command — a later command in the same pipeline stage writes to it too
@@ -65,6 +69,13 @@ func startDrain(w io.Writer, r *os.File) *drain {
 // the shim duplicates every fd it is given and keeps the copy, so a child
 // handed the interpreter's own pipe writer leaves the next pipeline stage
 // waiting for an EOF that only arrives when the shim exits.
+//
+// Interposing does not stop nono retaining that duplicate — measured, it
+// retains one of the interposed write end too. What it buys is that the
+// retained copy is now of an fd this side owns and may close on a deadline,
+// instead of one belonging to the interpreter that this side must never touch.
+// The hang becomes bounded rather than absent; waitDrains is where the bound
+// is spent.
 //
 // The test is an allowlist — a regular file or a character device (/dev/null, a
 // tty) — rather than "anything that is not a pipe", because the hazard is not
@@ -193,8 +204,15 @@ func (w *wiring) closeJobEnds() {
 }
 
 // waitDrains waits for every copy to reach EOF, bounded. It reports whether it
-// gave up: a process that left the group can still be holding a write end, and
-// a request must end anyway.
+// gave up.
+//
+// Giving up is not evidence that a process escaped the group. The holder
+// measured in practice was never in it: nono's own machinery retains a
+// duplicate of the write end on the far side of the shim, where this package
+// has no reach and no visibility. A process that left the group could hold one
+// too. Either way the request must end, so this bound is what ends it — and
+// against a policy-controlled reader it is the ordinary path, not the
+// exceptional one. See DrainGrace.
 func (w *wiring) waitDrains(timeout time.Duration) (truncated bool) {
 	deadline := time.After(timeout)
 	for _, d := range w.drains {

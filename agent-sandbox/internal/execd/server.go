@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"syscall"
 )
 
 // Executor runs one command line. The production implementation is
@@ -113,10 +114,33 @@ func (s *Server) handle(conn net.Conn) {
 	// Execute's implementation, so serialize them here.
 	fw := &frameWriter{w: conn}
 
-	go s.watchConn(conn, fw, stdinWriter, cancel)
+	// Buffered by one and written without blocking: a client that spams
+	// signals must never be able to block the connection reader, and the
+	// interesting signal in a burst is the first one, which this keeps. The
+	// channel outlives the executor by design — watchConn keeps reading until
+	// the connection ends, and a signal that arrives after the command is
+	// gone lands in the buffer and is dropped with it.
+	sigs := make(chan syscall.Signal, 1)
 
-	code, execErr := s.exec.Execute(ctx, req, stdin,
-		fw.channel(ChanStdout), fw.channel(ChanStderr))
+	go s.watchConn(conn, fw, stdinWriter, sigs, cancel)
+
+	// An executor that can be signalled gets the channel; one that cannot is
+	// run exactly as before. The capability is reached by assertion rather
+	// than by widening Executor, because Executor is the seam the tests'
+	// fakes implement and a signal channel means nothing to a fake that
+	// starts no process.
+	var code int
+	var execErr error
+	if se, ok := s.exec.(interface {
+		ExecuteWithSignals(context.Context, Request, io.Reader, io.Writer, io.Writer,
+			<-chan syscall.Signal) (int, error)
+	}); ok {
+		code, execErr = se.ExecuteWithSignals(ctx, req, stdin,
+			fw.channel(ChanStdout), fw.channel(ChanStderr), sigs)
+	} else {
+		code, execErr = s.exec.Execute(ctx, req, stdin,
+			fw.channel(ChanStdout), fw.channel(ChanStderr))
+	}
 
 	if stdinWriter != nil {
 		stdinWriter.Close()
@@ -138,21 +162,42 @@ func (s *Server) handle(conn net.Conn) {
 // stdin-close frame, because a later read error is how a disconnect is
 // detected.
 func (s *Server) watchConn(conn net.Conn, fw *frameWriter, pw *io.PipeWriter,
-	cancel context.CancelFunc) {
+	sigs chan<- syscall.Signal, cancel context.CancelFunc) {
+	// end tears this request down the same way whatever ended it: the stdin
+	// pipe is failed, not merely abandoned, so a reader blocked on it wakes
+	// with an error instead of depending on the executor noticing the
+	// cancellation. The read-error path already did this; the refusal paths
+	// only cancelled, which was correct solely because ShellExecutor honours
+	// the context. Nothing writes to pw after this returns, so failing it is
+	// the honest description of the state either way.
+	end := func(err error) {
+		if pw != nil {
+			pw.CloseWithError(err)
+			pw = nil
+		}
+		cancel()
+	}
 	for {
 		f, err := ReadFrame(conn)
 		if err != nil {
-			if pw != nil {
-				pw.CloseWithError(err)
-			}
-			cancel()
+			end(err)
 			return
 		}
 		switch f.Channel {
 		case ChanStdin:
 			if pw != nil {
 				if _, werr := pw.Write(f.Payload); werr != nil {
-					return
+					// The one path that does not end the request. A failed
+					// write means the command stopped reading its stdin — it
+					// exited, or never read at all — which says nothing about
+					// whether the request is over or the client is still
+					// there. So stop feeding the pipe, exactly as end does,
+					// and keep reading the connection: this loop is now the
+					// only route for a signal frame and the only detector of
+					// a disconnect, and returning here would silently cost
+					// the request both for the rest of its life.
+					pw.CloseWithError(werr)
+					pw = nil
 				}
 			}
 		case ChanStdinClose:
@@ -161,13 +206,36 @@ func (s *Server) watchConn(conn net.Conn, fw *frameWriter, pw *io.PipeWriter,
 				pw = nil
 			}
 		case ChanSignal:
-			// Accepted and dropped here: the frame is legal, and Task 9 is what
-			// routes it into the running command. Accepting it now is what keeps
-			// this step from having to know about Jobs.
+			// The allow-list is enforced here, at the boundary, and not only in
+			// the client's WriteSignal: a client that does not use this package
+			// — or one inside the sandbox that was tampered with — reaches this
+			// code with whatever byte it likes. Frame.Signal is the one decoder,
+			// so a malformed payload and a signal outside the set are refused by
+			// the same rule that WriteSignal applies on the way out.
+			sig, ok := f.Signal()
+			if !ok {
+				// This message is read inside the sandbox, by someone who
+				// cannot see this side at all, so it says which signal was
+				// refused rather than printing the raw bytes at them.
+				msg := "execd: signal frame refused: malformed payload " +
+					"(a signal frame carries exactly one byte)"
+				if len(f.Payload) == 1 {
+					msg = fmt.Sprintf(
+						"execd: signal frame refused: signal %d may not be delivered",
+						f.Payload[0])
+				}
+				fw.writeError(msg)
+				end(errors.New(msg))
+				return
+			}
+			select {
+			case sigs <- sig:
+			default: // a burst of signals is not worth queueing
+			}
 		default:
 			fw.writeError(fmt.Sprintf(
 				"execd: channel %d may not be sent by a client", f.Channel))
-			cancel()
+			end(fmt.Errorf("execd: channel %d may not be sent by a client", f.Channel))
 			return
 		}
 	}

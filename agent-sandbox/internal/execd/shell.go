@@ -90,12 +90,20 @@ func (e *ShellExecutor) Run(ctx context.Context, command, cwd string,
 	}
 
 	// One Job per request: every command the line starts, across every
-	// pipeline stage, belongs to it, and it is torn down on every path out of
-	// Run — normal completion, a parse/exec error, or the context being
-	// cancelled — so nothing this request started outlives Run itself.
-	job := NewJob()
-	defer job.Terminate()
-	ctx = withJob(ctx, job)
+	// pipeline stage, belongs to it. Ownership follows creation — whoever
+	// makes the Job tears it down — so when the caller already put one on the
+	// context (ExecuteWithSignals does, because it has to relay signals into
+	// it) Run borrows it and leaves the teardown there. A caller that builds
+	// an interpreter by hand, as tests do, gets a Job of Run's own, torn down
+	// on every path out of Run — normal completion, a parse or exec error, or
+	// the context being cancelled — so nothing that caller started outlives
+	// Run either.
+	job := jobFrom(ctx)
+	if job == nil {
+		job = NewJob()
+		defer job.Terminate()
+		ctx = withJob(ctx, job)
+	}
 
 	if err := runner.Run(ctx, file); err != nil {
 		if status, ok := interp.IsExitStatus(err); ok {
@@ -252,22 +260,89 @@ func execEnv(hc interp.HandlerContext) []string {
 }
 
 // Execute satisfies Executor so the server can run a request directly. The
-// server owns the transport; ShellExecutor owns the shell language.
-//
-// req.Cwd is client-controlled and flows straight into interp.Dir, and from
-// there into every command's own working directory. The old router-based
-// design (NonoExecutor.checkCwd) rejected a relative path or one outside the
-// granted root itself; this executor does not reproduce that check, because
-// the bound it enforced now comes from execd's own nono session instead:
-// execd runs under --profile with no --allow-cwd (see ExecdArgs), so
-// every filesystem access the interpreter or a child process makes — cwd
-// included — is already confined to whatever that profile grants, whatever
-// req.Cwd claims. What is checked here is only the request's shape, not its
-// reach: a non-absolute Cwd (including the empty string a client sends when
-// its own os.Getwd fails) is refused rather than silently resolved against
-// this process's own working directory, which would not be the directory the
-// agent thinks it is running commands in.
+// server owns the transport; ShellExecutor owns the shell language. It is
+// ExecuteWithSignals with no signal channel, so the contract — the request
+// shape it refuses, the timeout it honours, the Job it tears down — is that
+// function's and executeWithJob's, and is documented there.
 func (e *ShellExecutor) Execute(ctx context.Context, req Request,
+	stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	return e.ExecuteWithSignals(ctx, req, stdin, stdout, stderr, nil)
+}
+
+// ExecuteWithSignals is Execute plus in-flight signal delivery: every signal
+// read from sigs is delivered to the request's process groups — not to one pid,
+// because a pipeline has a group per stage and a command's own children are in
+// its group. A nil channel means no signals, which is exactly Execute.
+//
+// The relay goroutine cannot outlive the request: its only exits are the stop
+// channel and the caller closing sigs, and the deferred wait below blocks until
+// it has actually returned. Because defers run last-registered-first, that wait
+// completes before this function's own job.Terminate, so no relayed signal is
+// ever in flight during or after the teardown that ends the request.
+//
+// That is the only teardown this ordering covers. execHandler starts a watcher
+// that calls job.Terminate when the context is cancelled, and that watcher runs
+// independently of this function and may outlive Run by up to TerminateGrace,
+// so a relayed signal can run concurrently with that teardown. It is safe
+// rather than ordered: Job guards its own state with a mutex, both paths reach
+// the same groups through the same liveness probe, and the worst outcome is a
+// SIGTERM landing beside the one Terminate is already sending. It does not
+// widen the pid-recycling window liveGroups documents — the relay stops
+// existing before this request stops tracking its groups.
+func (e *ShellExecutor) ExecuteWithSignals(ctx context.Context, req Request,
+	stdin io.Reader, stdout, stderr io.Writer, sigs <-chan syscall.Signal) (int, error) {
+	// The Job is created here rather than in Run because the relay has to
+	// have something to relay into before the first command exists: a signal
+	// that arrives early finds a Job with no groups yet and delivers nothing,
+	// which is the correct outcome for a command that has not started.
+	job := NewJob()
+	defer job.Terminate()
+
+	if sigs != nil {
+		stop := make(chan struct{})
+		done := make(chan struct{})
+		defer func() {
+			close(stop)
+			<-done
+		}()
+		go func() {
+			defer close(done)
+			for {
+				select {
+				case sig, ok := <-sigs:
+					if !ok {
+						return
+					}
+					job.Signal(sig)
+				case <-stop:
+					return
+				}
+			}
+		}()
+	}
+
+	return e.executeWithJob(withJob(ctx, job), req, stdin, stdout, stderr)
+}
+
+// executeWithJob is Execute's body once the Job exists. It is separate so both
+// entry points share one path: ExecuteWithSignals creates the Job because it
+// has to relay into it, and Execute goes through ExecuteWithSignals with no
+// signal channel.
+//
+// This is where a request's shape is checked. req.Cwd is client-controlled and
+// flows straight into interp.Dir, and from there into every command's own
+// working directory. The old router-based design (NonoExecutor.checkCwd)
+// rejected a relative path or one outside the granted root itself; this
+// executor does not reproduce that check, because the bound it enforced now
+// comes from execd's own nono session instead: execd runs under --profile
+// with no --allow-cwd (see ExecdArgs), so every filesystem access the
+// interpreter or a child process makes — cwd included — is already confined to
+// whatever that profile grants, whatever req.Cwd claims. What is checked here
+// is only the request's shape, not its reach: a non-absolute Cwd (including
+// the empty string a client sends when its own os.Getwd fails) is refused
+// rather than silently resolved against this process's own working directory,
+// which would not be the directory the agent thinks it is running commands in.
+func (e *ShellExecutor) executeWithJob(ctx context.Context, req Request,
 	stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	if strings.TrimSpace(req.Command) == "" {
 		return 0, fmt.Errorf("execd: empty command")

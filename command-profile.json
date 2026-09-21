@@ -457,6 +457,40 @@
 
       // The only reason ~/.ssh can come off the floor. Reachable from git and
       // from nothing else: direct session ssh is refused with exit 126.
+      //
+      // The read grant is the DIRECTORY, not a list of files, and that is
+      // deliberate. It used to be fs_read_file over id_main, config and
+      // known_hosts, which meant every host with a differently-named key
+      // needed this file edited before ssh could use it. The key is already
+      // declared exactly once, in ~/.ssh/config ("Host * / IdentityFile
+      // ~/.ssh/id_main / IdentitiesOnly yes", whose own comment records that
+      // the name is deliberately off OpenSSH's defaults so that the config is
+      // the single declaration point) — so naming it again here bought
+      // nothing and cost a profile edit per environment. Measured, 2/2 each
+      // way: with the file list, `ssh -i ~/.ssh/<other-key>` reports
+      // `Load key "...": Permission denied`; with this directory grant the
+      // same key loads and is offered. ~/.ssh/config resolves either way — it
+      // is a symlink into /nix/store on this host, and the /nix/store entry
+      // below covers the target.
+      //
+      // What that opens: every file under ~/.ssh, readable by ssh and by
+      // nothing else. The floor still refuses the directory outright, and ssh
+      // is still reachable only from git. Write is deliberately NOT widened
+      // with it — known_hosts stays the one writable file below, because
+      // adding a key is a host-side operation and nothing inside this sandbox
+      // needs to perform it.
+      //
+      // RESIDUAL, and it is NOT what this grant opened — it was equally true
+      // of the file list, measured identically under both: ~/.ssh/agent/ holds
+      // live sshd agent-forwarding sockets, and this child sandbox reaches
+      // them. `ssh -o IdentityAgent=~/.ssh/agent/s.<...>` returned
+      // "agent returned 4 keys", two of them key material that is not
+      // id_main at all. Tool Sandbox child sandboxes carry no AF_UNIX
+      // mediation (see the "linux" comment above), so no filesystem grant
+      // here gates that — the floor refuses the same socket 3/3, this edge
+      // does not. Read "~/.ssh comes off the floor for ssh alone" as a
+      // statement about the FILESYSTEM only; the agent sockets are a second,
+      // wider route to key material that this entry does not bound.
       "ssh": {
         "from": {
           "session": "deny",
@@ -471,9 +505,17 @@
             //     "path": "$SSH_AUTH_SOCK", "mode": "connect",
             //     "env_var": "SSH_AUTH_SOCK" } }
             // at command_policies level, and "use_credentials": ["ssh-agent"] here.
-            "fs_read_file":  ["~/.ssh/id_main", "~/.ssh/config", "~/.ssh/known_hosts"],
+            // Note the residual above: a forwarded agent is in fact reachable
+            // from this sandbox already, just not as a declared credential.
+            "fs_read":       ["~/.ssh", "/nix/store", "/run/current-system/sw"],
+            // UserKnownHostsFile resolves to ~/.ssh/known_hosts AND
+            // ~/.ssh/known_hosts2 on this host; only the first is writable
+            // here, which is the one OpenSSH writes to. Whether a host key
+            // actually gets written through this grant is unverified — the
+            // probe never reached the host-key stage — and was equally
+            // unverified before the read grant widened. It is not a
+            // regression; it is untested either way.
             "fs_write_file": ["~/.ssh/known_hosts"],
-            "fs_read":       ["/nix/store", "/run/current-system/sw"],
             // `nono profile validate` warns [allow_all_network] on this line.
             // Accepted: ssh cannot be routed through nono's HTTP proxy, and
             // allow_domain without an enforceable proxy is rejected outright.

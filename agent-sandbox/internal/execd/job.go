@@ -136,6 +136,26 @@ const TerminateGrace = 200 * time.Millisecond
 // So the hazard is unchanged — the fd is still leaked, inside nono's own
 // machinery — but it is a bounded incident now rather than a permanent one.
 //
+// What this bound no longer reaches is the outer boundary, and that changed
+// with descriptor passing. A top-level simple command's cmd.Stdout is now the
+// caller's own file, so nothing is interposed there and waitDrains has no read
+// end to force-close. A descendant that outlives Job.Terminate —
+// `sh -c 'sleep 60'` does, 3/3, inside nono's child sandbox; see the Job doc
+// above — therefore holds a duplicate of the *caller's* pipe, which this
+// package cannot touch. Pre-branch it held execd's interposed pipe instead,
+// and this grace force-closing that pipe is why those runs returned at 5004ms.
+// Post-branch the request itself returns sooner, ~3000ms, the timeout alone;
+// but `agent-sandbox exec … | downstream` leaves `downstream` waiting for an
+// EOF for as long as the strand lives, and nothing here bounds that.
+//
+// Accepted, not overlooked. It is inherent to handing a descriptor to a
+// command — ssh has the same shape — and the only way to bound it again is to
+// re-interpose a pipe at the boundary, which is the relay this branch removed.
+// The shape that produces it is narrow and nameable: a command that leaves a
+// descendant running past its own exit, with the caller's stdout a pipe rather
+// than a terminal or a file. What stays bounded is the request; what is not
+// bounded is whoever reads the other end of the caller's pipe.
+//
 // What that split does and does not say about this constant's value. EOF
 // either arrived within ~15ms or had not arrived by 2000ms; nothing landed in
 // between. So shortening the grace would not make stalls rarer or commoner —
@@ -144,16 +164,26 @@ const TerminateGrace = 200 * time.Millisecond
 // producer still writing at that moment loses its tail. That did not bite in
 // any of the 18 runs that have a byte count — the producer had exited ~2s
 // earlier and its bytes were already in the pipe — but a grace short enough to
-// land while output is still in flight would truncate for real, and the note
-// saying so is usually invisible (below). Raising it lengthens every stalled
-// request by the same amount. Re-measure before moving it either way.
+// land while output is still in flight would truncate for real. The note
+// saying so does reach the caller (below), and is the only thing that would
+// tell them; revisions of this comment before 2026-09-21 argued from the
+// opposite premise, so do not resurrect it. Raising the grace lengthens every
+// stalled request by the same amount. Re-measure before moving it either way.
 //
-// That note is the last thing to know here: it does not reach the caller when
-// it comes from a non-final pipeline stage, because mvdan.cc/sh drops a
-// non-final stage's stderr entirely — measured, and reproduced with the
-// library's own default exec handler, so it is not this package's wiring. A
-// user therefore sees a ~2s stall with no explanation, complete output, and,
-// unless the request timeout fired first, a correct exit status.
+// That note is the last thing to know here, and what this comment said about
+// it until 2026-09-21 was false. It claimed the note never reaches the caller
+// from a non-final pipeline stage, because mvdan.cc/sh drops such a stage's
+// stderr entirely, so a policy-to-policy pipe presents as a silent ~2s stall.
+// The drop is real but belongs to the harness that measured it: 2026-09-19
+// drove ShellExecutor.Execute in-process with a bytes.Buffer as stderr.
+// Through the client, where stderr is a real descriptor, the note arrives —
+// 80 bytes, one distinct text, in 69 of 69 stalled runs across three log sets,
+// on this branch and on the pre-branch binary alike
+// (docs/superpowers/probes/2026-09-21-fd-passing.md §8, which is never
+// committed, so this sentence is where that correction survives). A user of
+// `agent-sandbox exec` therefore sees a ~2s stall, the note naming the command
+// that caused it, complete output, and — unless the request timeout fired
+// first — a correct exit status.
 const DrainGrace = 2 * time.Second
 
 // Start puts cmd in a process group of its own and starts it.

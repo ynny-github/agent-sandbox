@@ -191,9 +191,16 @@ func (e *ShellExecutor) execHandler(ctx context.Context, args []string) error {
 	// interpreter made.
 	job := jobFrom(ctx)
 	if job == nil {
-		// A bare interpreter, in a test. The command still gets its own
-		// process group; it inherits nothing, so every writer it is given is
-		// decided by kind alone.
+		// Unreachable. execHandler runs only as the interpreter Run builds,
+		// and Run puts a Job on the context before it runs anything — its own
+		// when the caller supplied none. No caller in this package or its
+		// tests reaches here; an earlier version of this comment claimed a
+		// bare interpreter in a test does, and none does.
+		//
+		// Kept anyway, because it fails in the safe direction and a nil
+		// dereference would not: an empty Stdio matches nothing by identity,
+		// so every descriptor is decided by kind alone and no interpreter pipe
+		// can reach a child by mistake.
 		job = NewJob(Stdio{})
 	}
 	w := &wiring{inherited: job.Stdio().files()}
@@ -258,11 +265,14 @@ func (e *ShellExecutor) execHandler(ctx context.Context, args []string) error {
 	if truncated := w.waitDrains(DrainGrace); truncated {
 		// Not an exit code: inventing one would hide the command's real result.
 		//
-		// Nor, for a non-final pipeline stage, does it reach the caller at all:
-		// mvdan.cc/sh drops such a stage's stderr entirely (measured, and
-		// reproduced with the library's own default exec handler). That is the
-		// common case for this particular note, since the stall that produces it
-		// needs a downstream stage to be stalled by. See DrainGrace.
+		// It does reach the caller, including from a non-final pipeline stage
+		// — which is the common case for this note, since the stall that
+		// produces it needs a downstream stage to be stalled by. This comment
+		// said the opposite until 2026-09-21, on the strength of an in-process
+		// measurement whose stderr was a bytes.Buffer; mvdan.cc/sh really does
+		// drop a non-final stage's stderr in that arrangement, but not when
+		// stderr is a real descriptor, which is every production path. Through
+		// the client the note arrived in 69 of 69 stalled runs. See DrainGrace.
 		fmt.Fprintf(hc.Stderr,
 			"agent-sandbox: output truncated: %s left a process holding its output after %s\n",
 			args[0], DrainGrace)

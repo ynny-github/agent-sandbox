@@ -27,7 +27,11 @@ type Channel byte
 const (
 	ChanExit  Channel = 4
 	ChanError Channel = 5
-	// ChanSignal carries a signal from the client to a running command.
+	// ChanSignal carries a signal from the client to a running command. It is
+	// the only way to interrupt a command short of dropping the connection,
+	// which is a SIGKILL in effect. That is the rationale for both the
+	// allow-list below and the two-stage interrupt in cmd/exec.go: a client
+	// that wants a command to stop politely has this frame and nothing else.
 	ChanSignal Channel = 7
 )
 
@@ -227,6 +231,43 @@ func ReadFrame(r io.Reader) (Frame, error) {
 // All three are always present. A caller with no stdin opens /dev/null and
 // passes that; substituting one here would put a branch in the one place the
 // design wants none.
+//
+// # A blocked read on In cannot be interrupted
+//
+// Known, measured, and deliberately not repaired in code. Every descriptor
+// that reaches RecvStdio is in blocking mode: SendStdio takes each file's
+// number with (*os.File).Fd, and Fd puts the open file description back into
+// blocking mode before returning. os.NewFile on a blocking fd builds a file
+// the runtime poller does not register, and SetReadDeadline on such a file
+// returns "file type does not support deadline" rather than arming anything.
+//
+// mvdan.cc/sh cancels a blocked standard input read only through that
+// deadline — interp.Runner.readLine arms it from the context — and
+// interp.StdIO's own doc warns about exactly this, right after the paragraph
+// on passing an *os.File: an os.Pipe "has the best chance to support
+// cancellable reads". A descriptor that arrived over SCM_RIGHTS is not one.
+//
+// So a command parked in a read on In returns when that read returns and at
+// no other time: not when the request's TimeoutMs fires, not when the client
+// drops the connection. runner.Run does not return, so ShellExecutor.Run does
+// not, so the server's handle does not — the handler goroutine, the
+// connection and all three of these descriptors are held until the byte or
+// the EOF arrives. Measured 2026-09-21 through the real client: `read x` with
+// TimeoutMs 700 against a pipe nobody writes to had not returned after 4s,
+// and returned ExitTimeout the instant the write end was closed.
+// TestPassedStdinCannotBeInterruptedWhileBlockedOnARead pins that shape.
+//
+// Who is exposed. Anything whose stdin is a terminal or a live producer: a
+// human running `agent-sandbox exec`, and `producer | agent-sandbox exec …`.
+// The agent's hook path is not — the harness gives it /dev/null, which reads
+// EOF at once — which is why this is a sharp edge rather than an outage.
+//
+// Why no fix here. Clearing O_NONBLOCK's absence on the received descriptor
+// would mutate the open file description the client and every child share,
+// which is not execd's to mutate. Giving the interpreter a pipe of execd's
+// own while children keep the real descriptor would break, for stdin only,
+// the identity rule wiring.passthrough is built on. Both are design decisions
+// about what this protocol passes, not repairs to this code.
 type Stdio struct {
 	In, Out, Err *os.File
 }

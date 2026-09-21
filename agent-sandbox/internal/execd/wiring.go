@@ -153,13 +153,29 @@ func (w *wiring) wireOutputs(cmd *exec.Cmd, hc interp.HandlerContext) error {
 
 // wireStdin gives the child its input under the same ownership rule.
 //
-// A real file (`cmd < f.txt`) goes straight to cmd.Stdin: the shell opened it,
-// the shim duplicating it is harmless, and os/exec starts no copier for an
-// *os.File. Anything else — a pipeline stage's read end, or the pipe
-// interp.StdIO made out of the caller's reader — gets a pipe this side owns,
-// because the shim keeps a duplicate of every fd it is handed and a duplicate
-// of the interpreter's own read end would leave the upstream writer with no
-// reader to get EPIPE from, blocking it on a pipe nobody drains.
+// Two kinds go straight to cmd.Stdin. The request's own stdin, which
+// passthrough recognises by identity — that is the dominant case now, since
+// every top-level simple command that does not redirect is given it, and it
+// is the only one here that may be a pipe. And a file the interpreter opened
+// for a redirect (`cmd < f.txt`), which qualifies on kind: the shell opened
+// it, the shim duplicating it is harmless, and os/exec starts no copier for
+// an *os.File.
+//
+// What is left is a pipeline stage's read end — a pipe the interpreter made —
+// and that gets a pipe this side owns, because the shim keeps a duplicate of
+// every fd it is handed and a duplicate of the interpreter's own read end
+// would leave the upstream writer with no reader to get EPIPE from, blocking
+// it on a pipe nobody drains. The second case this comment used to name
+// alongside it, "the pipe interp.StdIO made out of the caller's reader",
+// cannot occur any more: ShellExecutor.Run hands interp.StdIO the request's
+// own *os.File, so there is no reader for it to wrap.
+//
+// One consequence of the identity case, stated here because this is the line
+// that performs it: the child — and the interpreter's own `read` builtin —
+// gets a descriptor whose blocked read nothing can interrupt. Not the
+// request's timeout, not the client disconnecting. See Stdio in protocol.go
+// for the mechanism, the measurement, who is exposed, and why it is not
+// repaired in code.
 //
 // The copy goroutine is deliberately not joined: the request must not wait for
 // an upstream that has not finished writing. It ends when hc.Stdin reaches EOF

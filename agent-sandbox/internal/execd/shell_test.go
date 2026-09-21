@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/execd"
+	"mvdan.cc/sh/v3/interp"
+	"mvdan.cc/sh/v3/syntax"
 )
 
 // syncBuffer is a mutex-protected bytes.Buffer. A pipeline stage can run more
@@ -684,5 +686,46 @@ func TestRunLeavesNoDescendants(t *testing.T) {
 	out, _ := exec.Command("pgrep", "-f", "sleep 2972").Output()
 	if pids := strings.Fields(string(out)); len(pids) != 0 {
 		t.Errorf("descendants survived the request: %v", pids)
+	}
+}
+
+// The wiring in this package decides whether a child may receive a writer
+// directly by asking whether it is one of the request's own files. That
+// question is only answerable if the interpreter hands the exec handler the
+// same *os.File it was given, rather than a wrapper around it. mvdan.cc/sh
+// documents HandlerContext.Stdin as always being an *os.File; this pins the
+// stdout side, which is not documented.
+func TestInterpHandsTheSameFileToTheExecHandler(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+
+	var gotOut, gotErr any
+	r, err := interp.New(
+		interp.Dir(t.TempDir()),
+		interp.StdIO(nil, f, f),
+		interp.ExecHandler(func(ctx context.Context, args []string) error {
+			hc := interp.HandlerCtx(ctx)
+			gotOut, gotErr = hc.Stdout, hc.Stderr
+			return nil
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := syntax.NewParser().Parse(strings.NewReader("probe"), "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Run(context.Background(), src); err != nil {
+		t.Fatal(err)
+	}
+	if gotOut != any(f) {
+		t.Errorf("hc.Stdout = %T %v, want the very *os.File passed to StdIO", gotOut, gotOut)
+	}
+	if gotErr != any(f) {
+		t.Errorf("hc.Stderr = %T %v, want the very *os.File passed to StdIO", gotErr, gotErr)
 	}
 }

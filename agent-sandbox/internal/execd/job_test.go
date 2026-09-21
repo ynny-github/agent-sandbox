@@ -12,7 +12,7 @@ import (
 )
 
 func TestJobTerminateReachesGrandchildren(t *testing.T) {
-	j := execd.NewJob()
+	j := execd.NewJob(execd.Stdio{})
 	cmd := exec.Command("sh", "-c", "sleep 2971 & wait")
 	if err := j.Start(cmd); err != nil {
 		t.Fatal(err)
@@ -58,7 +58,7 @@ func TestJobTerminateReachesGrandchildren(t *testing.T) {
 // first-iteration check would also satisfy it on its own — more than one
 // correct implementation passes this test, and that is intentional.
 func TestJobTerminateIsFastWhenNothingIsAlive(t *testing.T) {
-	j := execd.NewJob()
+	j := execd.NewJob(execd.Stdio{})
 	cmd := exec.Command("true")
 	if err := j.Start(cmd); err != nil {
 		t.Fatal(err)
@@ -74,7 +74,7 @@ func TestJobTerminateIsFastWhenNothingIsAlive(t *testing.T) {
 }
 
 func TestJobSignalReachesTheCommand(t *testing.T) {
-	j := execd.NewJob()
+	j := execd.NewJob(execd.Stdio{})
 	cmd := exec.Command("sh", "-c", "trap 'exit 42' TERM; sleep 5193 & wait")
 	if err := j.Start(cmd); err != nil {
 		t.Fatal(err)

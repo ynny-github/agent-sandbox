@@ -21,6 +21,9 @@ import (
 // an os/exec copier parked in Read with the upstream end of the pipeline still
 // open.
 type wiring struct {
+	// inherited is the request's own stdio. Identity against it is what tells a
+	// descriptor the client passed from a pipe the interpreter made.
+	inherited [3]*os.File
 	// jobEnds are this side's copies of the fds the child was given: the write
 	// end of each output pipe, and the read end of an interposed stdin pipe.
 	// They exist only so exec.Cmd can duplicate them into the child, and must
@@ -61,34 +64,28 @@ func startDrain(w io.Writer, r *os.File) *drain {
 	return d
 }
 
-// passthrough reports whether w can be handed to the child as-is.
+// passthrough reports whether x can be handed to the child as-is.
 //
-// A real file can: the shell already decided where those bytes go, closing it
-// is the interpreter's business, and nono's shim keeping a duplicate of it is
-// harmless. A pipe cannot, and this is the invariant the whole file exists for:
-// the shim duplicates every fd it is given and keeps the copy, so a child
-// handed the interpreter's own pipe writer leaves the next pipeline stage
-// waiting for an EOF that only arrives when the shim exits.
+// Two kinds qualify. The request's own three files qualify by identity,
+// whatever they are: the client passed them, nothing inside execd waits on
+// their EOF, and a passed pipe was measured released on time by nono's shim
+// (see the spec's spike). Files the interpreter opened for a redirect qualify
+// by kind — the shell already decided where those bytes go.
 //
-// Interposing does not stop nono retaining that duplicate — measured, it
-// retains one of the interposed write end too. What it buys is that the
-// retained copy is now of an fd this side owns and may close on a deadline,
-// instead of one belonging to the interpreter that this side must never touch.
-// The hang becomes bounded rather than absent; waitDrains is where the bound
-// is spent.
-//
-// The test is an allowlist — a regular file or a character device (/dev/null, a
-// tty) — rather than "anything that is not a pipe", because the hazard is not
-// peculiar to pipes: a socket carries it too, and failing closed for a kind of
-// fd nobody has handed this code yet costs one interposed pipe, while failing
-// open costs a hung pipeline.
-//
-// The kinds are told apart by the file's mode, not by its name: "|1" is Go's
-// naming convention for os.Pipe, not an API.
-func passthrough(w any) (*os.File, bool) {
-	f, ok := w.(*os.File)
+// What must never qualify is one of the interpreter's own pipes. nono's shim
+// duplicates every descriptor it is given and keeps the copy, so a child handed
+// the interpreter's pipe writer leaves the next stage waiting for an EOF that
+// only arrives when the shim exits. Identity is checked before kind precisely
+// because both an inherited descriptor and an interpreter pipe can be a FIFO.
+func (w *wiring) passthrough(x any) (*os.File, bool) {
+	f, ok := x.(*os.File)
 	if !ok {
 		return nil, false
+	}
+	for _, in := range w.inherited {
+		if in != nil && f == in {
+			return f, true
+		}
 	}
 	fi, err := f.Stat()
 	if err != nil {
@@ -100,11 +97,9 @@ func passthrough(w any) (*os.File, bool) {
 	return f, true
 }
 
-func wireOutputs(cmd *exec.Cmd, hc interp.HandlerContext) (*wiring, error) {
-	w := &wiring{}
-
+func (w *wiring) wireOutputs(cmd *exec.Cmd, hc interp.HandlerContext) error {
 	attach := func(dst io.Writer) (*os.File, error) {
-		if f, ok := passthrough(dst); ok {
+		if f, ok := w.passthrough(dst); ok {
 			return f, nil
 		}
 		pr, pw, err := os.Pipe()
@@ -117,7 +112,7 @@ func wireOutputs(cmd *exec.Cmd, hc interp.HandlerContext) (*wiring, error) {
 	}
 
 	if hc.Stdout == nil && hc.Stderr == nil {
-		return w, nil
+		return nil
 	}
 	// interp.StdIO already substitutes io.Discard for a nil writer, so this is
 	// only for an interpreter built by hand with one of the two left nil: a
@@ -137,23 +132,23 @@ func wireOutputs(cmd *exec.Cmd, hc interp.HandlerContext) (*wiring, error) {
 		f, err := attach(hc.Stdout)
 		if err != nil {
 			w.abort()
-			return nil, err
+			return err
 		}
 		cmd.Stdout, cmd.Stderr = f, f
-		return w, nil
+		return nil
 	}
 	so, err := attach(hc.Stdout)
 	if err != nil {
 		w.abort()
-		return nil, err
+		return err
 	}
 	se, err := attach(hc.Stderr)
 	if err != nil {
 		w.abort()
-		return nil, err
+		return err
 	}
 	cmd.Stdout, cmd.Stderr = so, se
-	return w, nil
+	return nil
 }
 
 // wireStdin gives the child its input under the same ownership rule.
@@ -175,7 +170,7 @@ func (w *wiring) wireStdin(cmd *exec.Cmd, hc interp.HandlerContext) error {
 	if hc.Stdin == nil {
 		return nil
 	}
-	if f, ok := passthrough(hc.Stdin); ok {
+	if f, ok := w.passthrough(hc.Stdin); ok {
 		cmd.Stdin = f
 		return nil
 	}

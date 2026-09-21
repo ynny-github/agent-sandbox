@@ -5,6 +5,7 @@ package execd
 // a real nono session, and the whole point of the test is that it needs none.
 
 import (
+	"bytes"
 	"io"
 	"os"
 	"syscall"
@@ -82,5 +83,39 @@ func TestWaitDrainsReturnsWhenAnOutsiderHoldsTheWriteEnd(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the copy goroutine is still running after waitDrains gave up; " +
 			"force-closing the read ends must end every copy")
+	}
+}
+
+func TestWiringPassesAnInheritedPipeToTheChild(t *testing.T) {
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pr.Close(); pw.Close() })
+
+	// A pipe the request inherited is handed to the child as-is; the same pipe
+	// not inherited would be interposed, because it would then be the
+	// interpreter's own.
+	inherited := &wiring{inherited: [3]*os.File{nil, pw, nil}}
+	if _, ok := inherited.passthrough(pw); !ok {
+		t.Error("an inherited pipe was interposed; identity should have decided it")
+	}
+	var bare wiring
+	if _, ok := bare.passthrough(pw); ok {
+		t.Error("a pipe that is not the request's own was passed through")
+	}
+}
+
+// Command substitution is why the non-file case in wireOutputs cannot go away:
+// the interpreter captures the inner command's stdout into a buffer, so
+// hc.Stdout is not an *os.File even when every other writer on the path is.
+//
+// This only pins the passthrough half; the Run half described in the design
+// (feeding a real ShellExecutor a command-substitution line with a Stdio) does
+// not compile until Task 4 gives Run a Stdio parameter, and lands there.
+func TestCommandSubstitutionReachesTheNonFileBranch(t *testing.T) {
+	var w wiring
+	if _, ok := w.passthrough(new(bytes.Buffer)); ok {
+		t.Fatal("a bytes.Buffer passed through; it has no descriptor to give a child")
 	}
 }

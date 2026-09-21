@@ -44,9 +44,17 @@ import (
 type Job struct {
 	mu     sync.Mutex
 	groups []int
+	stdio  Stdio
 }
 
-func NewJob() *Job { return &Job{} }
+// NewJob returns a Job for a request running on stdio. The trio is kept so the
+// wiring can tell the request's own files from the interpreter's: a descriptor
+// the client passed may be a pipe, and a pipe the interpreter made may not be
+// given to a child, so the question can only be settled by identity.
+func NewJob(stdio Stdio) *Job { return &Job{stdio: stdio} }
+
+// Stdio returns the request's own three files.
+func (j *Job) Stdio() Stdio { return j.stdio }
 
 // jobKey is the context key a Job is carried under. Unexported, so only this
 // package can put one on a context or read one back.

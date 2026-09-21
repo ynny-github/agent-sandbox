@@ -116,7 +116,7 @@ func (e *ShellExecutor) Run(ctx context.Context, command, cwd string,
 	// Job.
 	job := jobFrom(ctx)
 	if job == nil {
-		job = NewJob()
+		job = NewJob(Stdio{})
 		defer job.Terminate()
 		ctx = withJob(ctx, job)
 	}
@@ -180,8 +180,17 @@ func (e *ShellExecutor) execHandler(ctx context.Context, args []string) error {
 	// log set runB1-6, full, full2, bb1-10 plus three transcript-only runs).
 	// See DrainGrace for the rest of the numbers. A real file needs none of
 	// this and goes straight to the child: see wiring.
-	w, err := wireOutputs(cmd, hc)
-	if err != nil {
+	//
+	// job is looked up before the wiring is built, not just before Start, so
+	// wiring can be told the request's own three files: that trio is what lets
+	// passthrough tell a descriptor the client passed from a pipe the
+	// interpreter made.
+	job := jobFrom(ctx)
+	if job == nil {
+		job = NewJob(Stdio{}) // a bare interpreter, in a test: the command still gets its own group
+	}
+	w := &wiring{inherited: job.Stdio().files()}
+	if err := w.wireOutputs(cmd, hc); err != nil {
 		fmt.Fprintf(hc.Stderr, "agent-sandbox: %s: %v\n", args[0], err)
 		return interp.NewExitStatus(ExitCannotStart)
 	}
@@ -205,10 +214,6 @@ func (e *ShellExecutor) execHandler(ctx context.Context, args []string) error {
 	// avoid is unreachable rather than avoided. The one thing that does matter
 	// is closeJobEnds: while this side still holds a write end, the drain's EOF
 	// can never arrive.
-	job := jobFrom(ctx)
-	if job == nil {
-		job = NewJob() // a bare interpreter, in a test: the command still gets its own group
-	}
 	if err := job.Start(cmd); err != nil {
 		w.abort()
 		fmt.Fprintf(hc.Stderr, "agent-sandbox: %s: %v\n", args[0], err)
@@ -323,7 +328,7 @@ func (e *ShellExecutor) ExecuteWithSignals(ctx context.Context, req Request,
 	// have something to relay into before the first command exists: a signal
 	// that arrives early finds a Job with no groups yet and delivers nothing,
 	// which is the correct outcome for a command that has not started.
-	job := NewJob()
+	job := NewJob(Stdio{})
 	defer job.Terminate()
 
 	if sigs != nil {

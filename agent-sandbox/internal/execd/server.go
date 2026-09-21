@@ -15,8 +15,7 @@ import (
 // ShellExecutor; tests substitute a fake so the server can be exercised
 // without spawning anything.
 type Executor interface {
-	Execute(ctx context.Context, req Request, stdin io.Reader,
-		stdout, stderr io.Writer) (int, error)
+	Execute(ctx context.Context, req Request, stdio Stdio) (int, error)
 }
 
 // Server accepts one command per connection on a unix socket. It runs in the
@@ -83,6 +82,28 @@ func (s *Server) Close() error {
 
 func (s *Server) handle(conn net.Conn) {
 	defer conn.Close()
+	uc, ok := conn.(*net.UnixConn)
+	if !ok {
+		WriteError(conn, "execd: not a unix connection")
+		return
+	}
+
+	// The descriptors come first, before the request they belong to: a request
+	// that arrives without them cannot be served at all, and receiving them
+	// first is what lets that be one refusal rather than a half-started
+	// request. The variable is stdio rather than io, which this file already
+	// imports as a package.
+	stdio, err := RecvStdio(uc)
+	if err != nil {
+		WriteError(conn, err.Error())
+		return
+	}
+	// execd's own copies of the caller's three files. Closing them when the
+	// request ends is the whole ownership rule: while execd holds one, a caller
+	// that passed the write end of a pipe never sees EOF. This defer is
+	// registered after conn's, so it runs before it — the exit frame is already
+	// on the wire by then, and the caller's EOF follows it.
+	defer stdio.Close()
 
 	req, err := ReadRequest(conn)
 	if err != nil {
@@ -104,14 +125,8 @@ func (s *Server) handle(conn net.Conn) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	var stdin io.Reader
-	var stdinWriter *io.PipeWriter
-	if req.WithStdin {
-		pr, pw := io.Pipe()
-		stdin, stdinWriter = pr, pw
-	}
-	// Frames from the executor are written from two goroutines inside
-	// Execute's implementation, so serialize them here.
+	// Only this function and watchConn write frames now — the exit or error
+	// that ends the request, and a refusal — so serialize the two.
 	fw := &frameWriter{w: conn}
 
 	// Buffered by one and written without blocking: a client that spams
@@ -122,7 +137,7 @@ func (s *Server) handle(conn net.Conn) {
 	// gone lands in the buffer and is dropped with it.
 	sigs := make(chan syscall.Signal, 1)
 
-	go s.watchConn(conn, fw, stdinWriter, sigs, cancel)
+	go s.watchConn(conn, fw, sigs, cancel)
 
 	// An executor that can be signalled gets the channel; one that cannot is
 	// run exactly as before. The capability is reached by assertion rather
@@ -132,19 +147,13 @@ func (s *Server) handle(conn net.Conn) {
 	var code int
 	var execErr error
 	if se, ok := s.exec.(interface {
-		ExecuteWithSignals(context.Context, Request, io.Reader, io.Writer, io.Writer,
-			<-chan syscall.Signal) (int, error)
+		ExecuteWithSignals(context.Context, Request, Stdio, <-chan syscall.Signal) (int, error)
 	}); ok {
-		code, execErr = se.ExecuteWithSignals(ctx, req, stdin,
-			fw.channel(ChanStdout), fw.channel(ChanStderr), sigs)
+		code, execErr = se.ExecuteWithSignals(ctx, req, stdio, sigs)
 	} else {
-		code, execErr = s.exec.Execute(ctx, req, stdin,
-			fw.channel(ChanStdout), fw.channel(ChanStderr))
+		code, execErr = s.exec.Execute(ctx, req, stdio)
 	}
 
-	if stdinWriter != nil {
-		stdinWriter.Close()
-	}
 	if execErr != nil {
 		fw.writeError(execErr.Error())
 		return
@@ -152,59 +161,27 @@ func (s *Server) handle(conn net.Conn) {
 	fw.writeExit(code)
 }
 
-// watchConn relays the frames a client may send — stdin, stdin-close, signal —
-// and refuses the rest. The channels are one namespace with two directions, and
-// a client sending an exit frame is either a bug or a probe; neither should be
-// read as data.
+// watchConn handles the frames a client may send — a signal, and nothing else
+// — and refuses the rest. The channels are one namespace with two directions,
+// and a client sending an exit frame, or stdin bytes execd no longer relays, is
+// either a bug or a probe; neither should be read as data.
 //
-// It relays stdin frames into pw (nil when the request has no stdin) and
-// cancels the command when the connection ends. It keeps reading after a
-// stdin-close frame, because a later read error is how a disconnect is
-// detected.
-func (s *Server) watchConn(conn net.Conn, fw *frameWriter, pw *io.PipeWriter,
+// It is also this request's disconnect detector, and that is why it reads for
+// the whole life of the request rather than only while a signal might arrive.
+// The client hands its descriptors over and then holds nothing but this
+// connection, so the connection ending is the only thing left that says the
+// caller is gone — and ending the request is the same teardown whatever
+// triggered it: cancel the context, and the interpreter, the Job and execd's
+// own copies of the caller's files all come down with it.
+func (s *Server) watchConn(conn net.Conn, fw *frameWriter,
 	sigs chan<- syscall.Signal, cancel context.CancelFunc) {
-	// end tears this request down the same way whatever ended it: the stdin
-	// pipe is failed, not merely abandoned, so a reader blocked on it wakes
-	// with an error instead of depending on the executor noticing the
-	// cancellation. The read-error path already did this; the refusal paths
-	// only cancelled, which was correct solely because ShellExecutor honours
-	// the context. Nothing writes to pw after this returns, so failing it is
-	// the honest description of the state either way.
-	end := func(err error) {
-		if pw != nil {
-			pw.CloseWithError(err)
-			pw = nil
-		}
-		cancel()
-	}
 	for {
 		f, err := ReadFrame(conn)
 		if err != nil {
-			end(err)
+			cancel()
 			return
 		}
 		switch f.Channel {
-		case ChanStdin:
-			if pw != nil {
-				if _, werr := pw.Write(f.Payload); werr != nil {
-					// The one path that does not end the request. A failed
-					// write means the command stopped reading its stdin — it
-					// exited, or never read at all — which says nothing about
-					// whether the request is over or the client is still
-					// there. So stop feeding the pipe, exactly as end does,
-					// and keep reading the connection: this loop is now the
-					// only route for a signal frame and the only detector of
-					// a disconnect, and returning here would silently cost
-					// the request both for the rest of its life.
-					pw.CloseWithError(werr)
-					pw = nil
-				}
-			}
-		case ChanStdinClose:
-			if pw != nil {
-				pw.Close()
-				pw = nil
-			}
 		case ChanSignal:
 			// The allow-list is enforced here, at the boundary, and not only in
 			// the client's WriteSignal: a client that does not use this package
@@ -225,7 +202,7 @@ func (s *Server) watchConn(conn net.Conn, fw *frameWriter, pw *io.PipeWriter,
 						f.Payload[0])
 				}
 				fw.writeError(msg)
-				end(errors.New(msg))
+				cancel()
 				return
 			}
 			select {
@@ -235,29 +212,20 @@ func (s *Server) watchConn(conn net.Conn, fw *frameWriter, pw *io.PipeWriter,
 		default:
 			fw.writeError(fmt.Sprintf(
 				"execd: channel %d may not be sent by a client", f.Channel))
-			end(fmt.Errorf("execd: channel %d may not be sent by a client", f.Channel))
+			cancel()
 			return
 		}
 	}
 }
 
-// frameWriter serializes concurrent frame writes onto one connection.
+// frameWriter serializes the frames this side writes onto one connection.
+// Since stdio became descriptors the only frames left are terminal ones — an
+// exit, an error, a refusal — but they still come from two goroutines, handle
+// and watchConn, and a partially written frame would desync the peer's read of
+// the whole stream.
 type frameWriter struct {
 	mu sync.Mutex
 	w  io.Writer
-}
-
-func (f *frameWriter) channel(ch Channel) io.Writer {
-	return channelWriter{fw: f, ch: ch}
-}
-
-func (f *frameWriter) write(ch Channel, p []byte) (int, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if err := WriteFrame(f.w, ch, p); err != nil {
-		return 0, err
-	}
-	return len(p), nil
 }
 
 func (f *frameWriter) writeExit(code int) {
@@ -271,10 +239,3 @@ func (f *frameWriter) writeError(msg string) {
 	defer f.mu.Unlock()
 	WriteError(f.w, msg)
 }
-
-type channelWriter struct {
-	fw *frameWriter
-	ch Channel
-}
-
-func (c channelWriter) Write(p []byte) (int, error) { return c.fw.write(c.ch, p) }

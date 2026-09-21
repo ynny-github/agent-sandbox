@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -39,17 +38,19 @@ func TestExecdServesOnTheGivenSocket(t *testing.T) {
 		t.Fatalf("chdir: %v", err)
 	}
 
-	var out, errb bytes.Buffer
+	out, readOut := outFile(t)
+	errFile, readErr := outFile(t)
 	code, err := execd.NewClient(sock).RunCommand(
-		context.Background(), "echo served", nil, &out, &errb, execd.RunOptions{})
+		context.Background(), "echo served",
+		execd.Stdio{In: devNull(t), Out: out, Err: errFile}, execd.RunOptions{})
 	if err != nil {
 		t.Fatalf("RunCommand: %v", err)
 	}
 	if code != 0 {
-		t.Errorf("exit = %d, want 0 (stderr=%q)", code, errb.String())
+		t.Errorf("exit = %d, want 0 (stderr=%q)", code, readErr())
 	}
-	if strings.TrimSpace(out.String()) != "served" {
-		t.Errorf("stdout = %q, want %q", out.String(), "served")
+	if strings.TrimSpace(readOut()) != "served" {
+		t.Errorf("stdout = %q, want %q", readOut(), "served")
 	}
 }
 

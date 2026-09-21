@@ -35,16 +35,50 @@ func startFakeExecd(t *testing.T) {
 	t.Setenv(execd.SocketEnvVar, sock)
 }
 
+// outFile returns a file to pass as a command's stdout or stderr, and a func
+// that reads back what landed in it. A duplicate of internal/execd's own test
+// helper, deliberately: a test fixture is not part of that package's API, and
+// one short copy costs less than an export that exists only for this file.
+func outFile(t *testing.T) (*os.File, func() string) {
+	t.Helper()
+	f, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	return f, func() string {
+		b, err := os.ReadFile(f.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+}
+
+// devNull is the stdin a case with no input to send passes; Stdio has no
+// branch for an absent file.
+func devNull(t *testing.T) *os.File {
+	t.Helper()
+	f, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	return f
+}
+
 func TestRunExecCore_Success(t *testing.T) {
 	startFakeExecd(t)
 
-	var out, errBuf bytes.Buffer
-	code := runExecCore(context.Background(), "echo hello", &out, &errBuf)
+	out, readOut := outFile(t)
+	errFile, readErr := outFile(t)
+	code := runExecCore(context.Background(), "echo hello",
+		execd.Stdio{In: devNull(t), Out: out, Err: errFile})
 	if code != 0 {
-		t.Errorf("exit code = %d, want 0 (stderr=%q)", code, errBuf.String())
+		t.Errorf("exit code = %d, want 0 (stderr=%q)", code, readErr())
 	}
-	if !strings.Contains(out.String(), "hello") {
-		t.Errorf("stdout = %q, want it to contain hello", out.String())
+	if !strings.Contains(readOut(), "hello") {
+		t.Errorf("stdout = %q, want it to contain hello", readOut())
 	}
 }
 
@@ -55,24 +89,28 @@ func TestRunExecCore_Success(t *testing.T) {
 func TestRunExecCore_NoExecdSocket_ShowsHint(t *testing.T) {
 	t.Setenv(execd.SocketEnvVar, "")
 
-	var out, errBuf bytes.Buffer
-	code := runExecCore(context.Background(), "true", &out, &errBuf)
+	out, _ := outFile(t)
+	errFile, readErr := outFile(t)
+	code := runExecCore(context.Background(), "true",
+		execd.Stdio{In: devNull(t), Out: out, Err: errFile})
 	if code != 1 {
 		t.Errorf("exit code = %d, want 1", code)
 	}
-	if !strings.Contains(errBuf.String(), execd.SandboxNotRunningHint) {
-		t.Errorf("stderr = %q, want the actionable execd hint", errBuf.String())
+	if !strings.Contains(readErr(), execd.SandboxNotRunningHint) {
+		t.Errorf("stderr = %q, want the actionable execd hint", readErr())
 	}
-	if strings.Contains(errBuf.String(), "exec daemon:") {
-		t.Errorf("stderr = %q, want the hint instead of the raw setup error", errBuf.String())
+	if strings.Contains(readErr(), "exec daemon:") {
+		t.Errorf("stderr = %q, want the hint instead of the raw setup error", readErr())
 	}
 }
 
 func TestRunExecCore_NonZeroExit(t *testing.T) {
 	startFakeExecd(t)
 
-	var out, errBuf bytes.Buffer
-	code := runExecCore(context.Background(), "exit 3", &out, &errBuf)
+	out, _ := outFile(t)
+	errFile, _ := outFile(t)
+	code := runExecCore(context.Background(), "exit 3",
+		execd.Stdio{In: devNull(t), Out: out, Err: errFile})
 	if code != 3 {
 		t.Errorf("exit code = %d, want 3", code)
 	}
@@ -83,30 +121,34 @@ func TestRunExecCore_Timeout(t *testing.T) {
 	execTimeout = 400 * time.Millisecond
 	t.Cleanup(func() { execTimeout = 0 })
 
-	var out, errBuf bytes.Buffer
+	out, _ := outFile(t)
+	errFile, readErr := outFile(t)
 	start := time.Now()
-	code := runExecCore(context.Background(), "sleep 30", &out, &errBuf)
+	code := runExecCore(context.Background(), "sleep 30",
+		execd.Stdio{In: devNull(t), Out: out, Err: errFile})
 
 	if code != 124 {
-		t.Errorf("exit code = %d, want 124 (stderr=%q)", code, errBuf.String())
+		t.Errorf("exit code = %d, want 124 (stderr=%q)", code, readErr())
 	}
 	if d := time.Since(start); d > 3*time.Second {
 		t.Errorf("took %v; want it bounded by --timeout", d)
 	}
-	if !strings.Contains(errBuf.String(), "timed out") {
-		t.Errorf("stderr = %q, want it to say the command timed out", errBuf.String())
+	if !strings.Contains(readErr(), "timed out") {
+		t.Errorf("stderr = %q, want it to say the command timed out", readErr())
 	}
 }
 
 func TestRunExecCore_ParseFailure(t *testing.T) {
 	startFakeExecd(t)
 
-	var out, errBuf bytes.Buffer
-	code := runExecCore(context.Background(), `echo "hi`, &out, &errBuf)
+	out, _ := outFile(t)
+	errFile, readErr := outFile(t)
+	code := runExecCore(context.Background(), `echo "hi`,
+		execd.Stdio{In: devNull(t), Out: out, Err: errFile})
 	if code != 2 {
 		t.Errorf("exit code = %d, want 2", code)
 	}
-	if errBuf.String() == "" {
+	if readErr() == "" {
 		t.Error("stderr should describe the parse error")
 	}
 }

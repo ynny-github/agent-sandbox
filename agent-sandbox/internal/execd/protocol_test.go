@@ -330,3 +330,63 @@ func TestRecvStdioClosesDescriptorsOnWrongCount(t *testing.T) {
 		t.Errorf("open descriptor count = %d after RecvStdio's error, want %d (no leak)", after, before)
 	}
 }
+
+// TestRecvStdioClosesDescriptorsOnAWrongHandshakeByte covers the rejection
+// that is reachable on purpose. The kernel installs SCM_RIGHTS descriptors
+// during recvmsg, before RecvStdio inspects anything, so a peer that attaches
+// three descriptors to a message whose first byte is not the handshake has
+// already cost this process three open descriptors by the time the byte is
+// looked at. Returning on the byte before decoding the control message would
+// abandon them unnamed, and a client inside the sandbox can loop connect,
+// send, disconnect until execd's fd table is exhausted and every request after
+// that fails.
+//
+// This is why RecvStdio decodes first and validates second. The wrong-count
+// path is covered above; this is the path a hostile peer would actually take,
+// since it costs it nothing to get the byte wrong.
+func TestRecvStdioClosesDescriptorsOnAWrongHandshakeByte(t *testing.T) {
+	a, b := socketPair(t)
+	var held []*os.File
+	for i := 0; i < 3; i++ {
+		f, err := os.Open(os.DevNull)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		held = append(held, f)
+	}
+
+	// Snapshot after setup, so the only delta attributable to RecvStdio is the
+	// receiver-side descriptors the kernel installs for the control message.
+	before := openFDCount(t)
+
+	sendErr := make(chan error, 1)
+	go func() {
+		fds := make([]int, 0, len(held))
+		for _, f := range held {
+			fds = append(fds, int(f.Fd()))
+		}
+		// A well-formed control message carrying exactly the right number of
+		// descriptors, attached to the wrong byte: everything about this
+		// message is acceptable except the one thing RecvStdio checks first.
+		_, _, err := a.WriteMsgUnix([]byte{0x00}, syscall.UnixRights(fds...), nil)
+		sendErr <- err
+	}()
+
+	_, err := execd.RecvStdio(b)
+	if err == nil {
+		t.Fatal("RecvStdio accepted a message whose handshake byte was wrong")
+	}
+	if !strings.Contains(err.Error(), "restart the session") {
+		t.Errorf("error = %q, want it to name the likely cause and the remedy", err)
+	}
+	if err := <-sendErr; err != nil {
+		t.Fatalf("WriteMsgUnix: %v", err)
+	}
+
+	if after := openFDCount(t); after != before {
+		t.Errorf("open descriptor count = %d after RecvStdio's error, want %d: "+
+			"the descriptors the kernel installed for a refused message were leaked",
+			after, before)
+	}
+}

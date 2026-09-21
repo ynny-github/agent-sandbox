@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -78,24 +77,29 @@ type ShellExecutor struct {
 // pacer field.
 func NewShellExecutor() *ShellExecutor { return &ShellExecutor{pacer: &launchPacer{}} }
 
-// Run evaluates command with cwd as the working directory, streaming output to
-// stdout and stderr, and returns the exit status of the last command.
+// Run evaluates command with cwd as the working directory, writing output
+// directly to the caller's own stdout and stderr descriptors, and returns the
+// exit status of the last command.
 //
 // The error is non-nil only for a failure of Run itself. A syntax error, a
 // command that does not exist, and a command that fails are all reported
 // through the exit status with a message on stderr, because they are outcomes
 // of the agent's line rather than faults of execd itself.
 func (e *ShellExecutor) Run(ctx context.Context, command, cwd string,
-	stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	stdio Stdio) (int, error) {
 	file, err := syntax.NewParser().Parse(strings.NewReader(command), "command")
 	if err != nil {
-		fmt.Fprintf(stderr, "agent-sandbox: %v\n", err)
+		fmt.Fprintf(stdio.Err, "agent-sandbox: %v\n", err)
 		return ExitSyntaxError, nil
 	}
 
+	// The interpreter is given the caller's own three files, not copies of
+	// them and nothing wrapping them: identity is what the wiring later uses to
+	// tell a descriptor the caller passed from a pipe the interpreter made, and
+	// a wrapper here would make that question unanswerable.
 	runner, err := interp.New(
 		interp.Dir(cwd),
-		interp.StdIO(stdin, stdout, stderr),
+		interp.StdIO(stdio.In, stdio.Out, stdio.Err),
 		interp.ExecHandler(e.execHandler),
 	)
 	if err != nil {
@@ -116,7 +120,7 @@ func (e *ShellExecutor) Run(ctx context.Context, command, cwd string,
 	// Job.
 	job := jobFrom(ctx)
 	if job == nil {
-		job = NewJob(Stdio{})
+		job = NewJob(stdio)
 		defer job.Terminate()
 		ctx = withJob(ctx, job)
 	}
@@ -125,7 +129,7 @@ func (e *ShellExecutor) Run(ctx context.Context, command, cwd string,
 		if status, ok := interp.IsExitStatus(err); ok {
 			return int(status), nil
 		}
-		fmt.Fprintf(stderr, "agent-sandbox: %v\n", err)
+		fmt.Fprintf(stdio.Err, "agent-sandbox: %v\n", err)
 		return 1, nil
 	}
 	return 0, nil
@@ -187,7 +191,10 @@ func (e *ShellExecutor) execHandler(ctx context.Context, args []string) error {
 	// interpreter made.
 	job := jobFrom(ctx)
 	if job == nil {
-		job = NewJob(Stdio{}) // a bare interpreter, in a test: the command still gets its own group
+		// A bare interpreter, in a test. The command still gets its own
+		// process group; it inherits nothing, so every writer it is given is
+		// decided by kind alone.
+		job = NewJob(Stdio{})
 	}
 	w := &wiring{inherited: job.Stdio().files()}
 	if err := w.wireOutputs(cmd, hc); err != nil {
@@ -298,8 +305,8 @@ func execEnv(hc interp.HandlerContext) []string {
 // shape it refuses, the timeout it honours, the Job it tears down — is that
 // function's and executeWithJob's, and is documented there.
 func (e *ShellExecutor) Execute(ctx context.Context, req Request,
-	stdin io.Reader, stdout, stderr io.Writer) (int, error) {
-	return e.ExecuteWithSignals(ctx, req, stdin, stdout, stderr, nil)
+	stdio Stdio) (int, error) {
+	return e.ExecuteWithSignals(ctx, req, stdio, nil)
 }
 
 // ExecuteWithSignals is Execute plus in-flight signal delivery: every signal
@@ -323,12 +330,12 @@ func (e *ShellExecutor) Execute(ctx context.Context, req Request,
 // widen the pid-recycling window liveGroups documents — the relay stops
 // existing before this request stops tracking its groups.
 func (e *ShellExecutor) ExecuteWithSignals(ctx context.Context, req Request,
-	stdin io.Reader, stdout, stderr io.Writer, sigs <-chan syscall.Signal) (int, error) {
+	stdio Stdio, sigs <-chan syscall.Signal) (int, error) {
 	// The Job is created here rather than in Run because the relay has to
 	// have something to relay into before the first command exists: a signal
 	// that arrives early finds a Job with no groups yet and delivers nothing,
 	// which is the correct outcome for a command that has not started.
-	job := NewJob(Stdio{})
+	job := NewJob(stdio)
 	defer job.Terminate()
 
 	if sigs != nil {
@@ -354,7 +361,7 @@ func (e *ShellExecutor) ExecuteWithSignals(ctx context.Context, req Request,
 		}()
 	}
 
-	return e.executeWithJob(withJob(ctx, job), req, stdin, stdout, stderr)
+	return e.executeWithJob(withJob(ctx, job), req, stdio)
 }
 
 // executeWithJob is Execute's body once the Job exists. It is separate so both
@@ -376,7 +383,7 @@ func (e *ShellExecutor) ExecuteWithSignals(ctx context.Context, req Request,
 // rather than silently resolved against this process's own working directory,
 // which would not be the directory the agent thinks it is running commands in.
 func (e *ShellExecutor) executeWithJob(ctx context.Context, req Request,
-	stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	stdio Stdio) (int, error) {
 	if strings.TrimSpace(req.Command) == "" {
 		return 0, fmt.Errorf("execd: empty command")
 	}
@@ -403,9 +410,9 @@ func (e *ShellExecutor) executeWithJob(ctx context.Context, req Request,
 		defer timer.Stop()
 	}
 
-	code, err := e.Run(ctx, req.Command, req.Cwd, stdin, stdout, stderr)
+	code, err := e.Run(ctx, req.Command, req.Cwd, stdio)
 	if timedOut.Load() {
-		fmt.Fprintf(stderr, "agent-sandbox: command timed out after %dms\n", req.TimeoutMs)
+		fmt.Fprintf(stdio.Err, "agent-sandbox: command timed out after %dms\n", req.TimeoutMs)
 		return ExitTimeout, nil
 	}
 	return code, err

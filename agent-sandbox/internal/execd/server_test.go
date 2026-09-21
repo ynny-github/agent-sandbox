@@ -1,7 +1,6 @@
 package execd_test
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -25,14 +24,12 @@ type echoExecutor struct {
 }
 
 func (e *echoExecutor) Execute(ctx context.Context, req execd.Request,
-	stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	stdio execd.Stdio) (int, error) {
 	e.gotReq = req
-	fmt.Fprintf(stdout, "ran %s in %s", req.Command, req.Cwd)
-	fmt.Fprint(stderr, "warned")
-	if stdin != nil {
-		if b, _ := io.ReadAll(stdin); len(b) > 0 {
-			fmt.Fprintf(stdout, " stdin=%s", b)
-		}
+	fmt.Fprintf(stdio.Out, "ran %s in %s", req.Command, req.Cwd)
+	fmt.Fprint(stdio.Err, "warned")
+	if b, _ := io.ReadAll(stdio.In); len(b) > 0 {
+		fmt.Fprintf(stdio.Out, " stdin=%s", b)
 	}
 	return 7, nil
 }
@@ -58,13 +55,93 @@ func startTestServer(t *testing.T, ex execd.Executor) string {
 	return sock
 }
 
+// outFile returns a file to pass as a command's stdout, and a func that reads
+// back what landed in it. A request's output is no longer a writer this side
+// holds, so a test that used to assert on a bytes.Buffer asserts on a file.
+func outFile(t *testing.T) (*os.File, func() string) {
+	t.Helper()
+	f, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	return f, func() string {
+		b, err := os.ReadFile(f.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+}
+
+// inFile returns a file holding content, to pass as a command's stdin.
+func inFile(t *testing.T, content string) *os.File {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "in")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	return f
+}
+
+// devNull is what a caller with nothing to send passes as stdin. Stdio has no
+// branch for an absent file, which is the point: there is one path, not two.
+func devNull(t *testing.T) *os.File {
+	t.Helper()
+	f, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	return f
+}
+
+// nullOut opens os.DevNull for writing, for a case that asserts nothing about
+// what the command produced.
+func nullOut(t *testing.T) *os.File {
+	t.Helper()
+	f, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	return f
+}
+
+// dialWithStdio opens a connection and hands it a request's three files, which
+// is the first thing execd expects on any connection. It is what a test that
+// drives the wire by hand needs before it can write a request at all.
+func dialWithStdio(t *testing.T, sock string, stdio execd.Stdio) *net.UnixConn {
+	t.Helper()
+	conn, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatalf("Dial() error = %v", err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	uc, ok := conn.(*net.UnixConn)
+	if !ok {
+		t.Fatalf("Dial() returned %T, want *net.UnixConn", conn)
+	}
+	if err := execd.SendStdio(uc, stdio); err != nil {
+		t.Fatalf("SendStdio() error = %v", err)
+	}
+	return uc
+}
+
 func TestClientSendsTheCommandLine(t *testing.T) {
 	echo := &echoExecutor{}
 	sock := startTestServer(t, echo)
 
-	var out, errb bytes.Buffer
+	out, readOut := outFile(t)
+	errf, _ := outFile(t)
 	code, err := execd.NewClient(sock).RunCommand(
-		context.Background(), "echo hi | cat", nil, &out, &errb, execd.RunOptions{})
+		context.Background(), "echo hi | cat",
+		execd.Stdio{In: devNull(t), Out: out, Err: errf}, execd.RunOptions{})
 	if err != nil {
 		t.Fatalf("RunCommand: %v", err)
 	}
@@ -74,8 +151,8 @@ func TestClientSendsTheCommandLine(t *testing.T) {
 	if echo.gotReq.Command != "echo hi | cat" {
 		t.Errorf("server saw Command = %q, want %q", echo.gotReq.Command, "echo hi | cat")
 	}
-	if !strings.Contains(out.String(), "echo hi | cat") {
-		t.Errorf("stdout = %q, want it to carry the command", out.String())
+	if !strings.Contains(readOut(), "echo hi | cat") {
+		t.Errorf("stdout = %q, want it to carry the command", readOut())
 	}
 }
 
@@ -84,17 +161,18 @@ func TestServerRunsCommandAndReturnsExitCode(t *testing.T) {
 	sock := startTestServer(t, echo)
 
 	c := execd.NewClient(sock)
-	var out, errb testBuffer
-	code, err := c.RunCommand(context.Background(),
-		"go test", nil, &out, &errb, execd.RunOptions{})
+	out, readOut := outFile(t)
+	errf, readErr := outFile(t)
+	code, err := c.RunCommand(context.Background(), "go test",
+		execd.Stdio{In: devNull(t), Out: out, Err: errf}, execd.RunOptions{})
 	if err != nil {
 		t.Fatalf("RunCommand() error = %v", err)
 	}
 	if code != 7 {
 		t.Errorf("exit code = %d, want 7", code)
 	}
-	if out.String() == "" || errb.String() != "warned" {
-		t.Errorf("stdout = %q, stderr = %q", out.String(), errb.String())
+	if readOut() == "" || readErr() != "warned" {
+		t.Errorf("stdout = %q, stderr = %q", readOut(), readErr())
 	}
 	if echo.gotReq.Command != "go test" {
 		t.Errorf("server received command %q, want %q", echo.gotReq.Command, "go test")
@@ -102,26 +180,40 @@ func TestServerRunsCommandAndReturnsExitCode(t *testing.T) {
 }
 
 // blockingExecutor blocks until its context is cancelled, so a test can prove
-// that a client disconnect reaches the executor.
+// that something which ends a request — a client disconnect, a refusal —
+// reaches the executor. started is closed once rather than unconditionally, so
+// a second request against the same instance blocks like the first instead of
+// panicking on a double close.
 type blockingExecutor struct {
+	started   chan struct{}
+	startOnce sync.Once
 	cancelled chan struct{}
 }
 
+func newBlockingExecutor() *blockingExecutor {
+	return &blockingExecutor{started: make(chan struct{}), cancelled: make(chan struct{})}
+}
+
 func (b *blockingExecutor) Execute(ctx context.Context, req execd.Request,
-	stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	stdio execd.Stdio) (int, error) {
+	b.startOnce.Do(func() { close(b.started) })
 	<-ctx.Done()
 	close(b.cancelled)
 	return 0, ctx.Err()
 }
 
+// TestServerCancelsCommandOnClientDisconnect is the disconnect detector, and
+// it matters more now than it did: the client hands its descriptors away and
+// then holds nothing but this connection, so closing it is the only thing left
+// that tells execd the caller is gone. execd keeps its own copies of those
+// three files for the whole request, and they are not what it watches —
+// watchConn reads the control socket, exactly as before.
 func TestServerCancelsCommandOnClientDisconnect(t *testing.T) {
-	blocking := &blockingExecutor{cancelled: make(chan struct{})}
+	blocking := newBlockingExecutor()
 	sock := startTestServer(t, blocking)
 
-	conn, err := net.Dial("unix", sock)
-	if err != nil {
-		t.Fatalf("Dial() error = %v", err)
-	}
+	conn := dialWithStdio(t, sock, execd.Stdio{
+		In: devNull(t), Out: nullOut(t), Err: nullOut(t)})
 	if err := execd.WriteRequest(conn, execd.Request{
 		Command:         "sleep",
 		Cwd:             "/",
@@ -138,46 +230,48 @@ func TestServerCancelsCommandOnClientDisconnect(t *testing.T) {
 	}
 }
 
-func TestServerForwardsStdin(t *testing.T) {
+func TestServerGivesTheExecutorTheCallersStdin(t *testing.T) {
 	sock := startTestServer(t, &echoExecutor{})
 
 	c := execd.NewClient(sock)
-	var out, errb testBuffer
-	_, err := c.RunCommand(context.Background(),
-		"cat", stringsReader("piped"), &out, &errb, execd.RunOptions{})
+	out, readOut := outFile(t)
+	errf, _ := outFile(t)
+	_, err := c.RunCommand(context.Background(), "cat",
+		execd.Stdio{In: inFile(t, "piped"), Out: out, Err: errf}, execd.RunOptions{})
 	if err != nil {
 		t.Fatalf("RunCommand() error = %v", err)
 	}
-	if !containsStr(out.String(), "stdin=piped") {
-		t.Errorf("stdout = %q, want it to contain stdin=piped", out.String())
+	if !strings.Contains(readOut(), "stdin=piped") {
+		t.Errorf("stdout = %q, want it to contain stdin=piped", readOut())
 	}
 }
 
-// blockingReader never returns data and never reports EOF until it is
-// released. It models the live upstream of a mixed pipeline such as
-// `tail -f app.log | grep -m1 ERROR`: once grep matches and exits, tail is
-// still running and sends nothing more, so execd sees neither a stdin
-// frame nor a stdin-close frame.
-type blockingReader struct{ release chan struct{} }
-
-func (b *blockingReader) Read([]byte) (int, error) {
-	<-b.release
-	return 0, io.EOF
-}
-
-// Regression test for the execd deadlock: a command that exits without
-// draining stdin must still produce an exit frame. Before the fix, os/exec's
-// own stdin copier kept cmd.Wait blocked forever, so no exit frame was
-// written and every caller — up to Claude's Bash tool — hung. "exit 5" is a
-// shell builtin: the interpreter never touches stdin at all, which is exactly
-// the case that must not block on the still-open request stdin below.
+// A request whose stdin never delivers a byte and never ends must still report
+// its exit status. The caller passes the read end of a pipe whose write end
+// this test holds and neither writes to nor closes, which is the live upstream
+// of a mixed pipeline such as `tail -f app.log | grep -m1 ERROR`: once grep
+// matches and exits, tail is still running, so the input neither arrives nor
+// finishes. "exit 5" is a shell builtin, so nothing in the request reads that
+// stdin at all — the question is entirely whether anything on the path waits
+// for it anyway.
 //
-// The deadline makes this fail fast instead of hanging the suite.
+// Three places could, and this covers all three at once: the interpreter, the
+// server's handle, and the client's read loop. What it no longer covers is the
+// defect it was written for — os/exec's own stdin copier keeping cmd.Wait
+// blocked forever, which hung every caller up to Claude's Bash tool. That mode
+// is unreachable twice over now: stdin is an *os.File, for which os/exec
+// starts no copier, and a builtin forks nothing for Wait to be called on. The
+// property outlived its original mechanism, which is why this stays.
+//
+// The deadline makes a regression fail fast instead of hanging the suite.
 func TestServerReportsExitWhenStdinNeverCloses(t *testing.T) {
 	sock := startTestServer(t, execd.NewShellExecutor())
 
-	stdin := &blockingReader{release: make(chan struct{})}
-	t.Cleanup(func() { close(stdin.release) })
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pr.Close(); pw.Close() })
 
 	type result struct {
 		code int
@@ -185,9 +279,9 @@ func TestServerReportsExitWhenStdinNeverCloses(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		var out, errb testBuffer
 		code, rerr := execd.NewClient(sock).RunCommand(
-			context.Background(), "exit 5", stdin, &out, &errb, execd.RunOptions{})
+			context.Background(), "exit 5",
+			execd.Stdio{In: pr, Out: nullOut(t), Err: nullOut(t)}, execd.RunOptions{})
 		done <- result{code, rerr}
 	}()
 
@@ -205,34 +299,10 @@ func TestServerReportsExitWhenStdinNeverCloses(t *testing.T) {
 	}
 }
 
-type testBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (b *testBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
-}
-
-func (b *testBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.String()
-}
-
-func stringsReader(s string) io.Reader { return strings.NewReader(s) }
-
-func containsStr(haystack, needle string) bool { return strings.Contains(haystack, needle) }
-
 func TestServerRejectsUnknownProtocolVersion(t *testing.T) {
 	sock := startTestServer(t, &echoExecutor{})
-	conn, err := net.Dial("unix", sock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
+	conn := dialWithStdio(t, sock, execd.Stdio{
+		In: devNull(t), Out: nullOut(t), Err: nullOut(t)})
 	if err := execd.WriteRequest(conn, execd.Request{
 		Command:         "true",
 		Cwd:             "/tmp",
@@ -269,7 +339,7 @@ type gatedExecutor struct {
 }
 
 func (g *gatedExecutor) Execute(ctx context.Context, req execd.Request,
-	stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	stdio execd.Stdio) (int, error) {
 	g.startOnce.Do(func() { close(g.started) })
 	<-g.release
 	return 0, nil
@@ -278,11 +348,8 @@ func (g *gatedExecutor) Execute(ctx context.Context, req execd.Request,
 func TestServerRefusesAnOutboundChannelFromTheClient(t *testing.T) {
 	gated := &gatedExecutor{started: make(chan struct{}), release: make(chan struct{})}
 	sock := startTestServer(t, gated)
-	conn, err := net.Dial("unix", sock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
+	conn := dialWithStdio(t, sock, execd.Stdio{
+		In: devNull(t), Out: nullOut(t), Err: nullOut(t)})
 	if err := execd.WriteRequest(conn, execd.Request{
 		Command: "true", Cwd: "/tmp", ProtocolVersion: execd.ProtocolVersion,
 	}); err != nil {
@@ -325,20 +392,29 @@ func TestServerRefusesAnOutboundChannelFromTheClient(t *testing.T) {
 // its backgrounded sleep both get it.
 //
 // The command announces itself on stdout and the signal is sent only once that
-// frame has arrived, because a signal sent before the process exists reaches a
-// Job with no groups in it and is correctly delivered to nothing. That is a
-// handshake, not a sleep: nothing here depends on how long a fork takes.
+// announcement has arrived, because a signal sent before the process exists
+// reaches a Job with no groups in it and is correctly delivered to nothing.
+// That is a handshake, not a sleep: nothing here depends on how long a fork
+// takes. The announcement arrives on a pipe the test passes as the request's
+// stdout and reads directly — there is no stdout frame to wait for any more,
+// which is the point of the change this test now runs against.
 func TestServerForwardsSignalToTheCommand(t *testing.T) {
 	// Leave nothing behind on any path, this test's own failure included. The
 	// sleep is distinctive so this cannot match anything else on the machine.
 	t.Cleanup(func() { exec.Command("pkill", "-f", "sleep 5941").Run() })
 
 	sock := startTestServer(t, execd.NewShellExecutor())
-	conn, err := net.Dial("unix", sock)
+
+	pr, pw, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	t.Cleanup(func() { pr.Close(); pw.Close() })
+
+	conn := dialWithStdio(t, sock, execd.Stdio{In: devNull(t), Out: pw, Err: pw})
+	// This side's copy of the write end, dropped once execd has its own: only
+	// the command's copies should keep this pipe open from here.
+	pw.Close()
 
 	if err := execd.WriteRequest(conn, execd.Request{
 		Command:         "sh -c 'trap \"exit 42\" TERM; echo ready; sleep 5941 & wait'",
@@ -348,30 +424,34 @@ func TestServerForwardsSignalToTheCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A signal that is never delivered leaves the command sleeping for over an
-	// hour. The deadline turns that into a prompt failure rather than a hung
-	// suite; it is not a timing assertion, so it is generous.
+	// hour. These deadlines turn that into a prompt failure rather than a hung
+	// suite; they are not timing assertions, so they are generous.
+	if err := pr.SetReadDeadline(time.Now().Add(20 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
 	if err := conn.SetReadDeadline(time.Now().Add(20 * time.Second)); err != nil {
 		t.Fatal(err)
 	}
 
-	signalled := false
+	var announced strings.Builder
+	buf := make([]byte, 64)
+	for !strings.Contains(announced.String(), "ready") {
+		n, rerr := pr.Read(buf)
+		announced.Write(buf[:n])
+		if rerr != nil {
+			t.Fatalf("read the command's stdout: %v (got %q)", rerr, announced.String())
+		}
+	}
+	if err := execd.WriteSignal(conn, syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+
 	for {
 		f, err := execd.ReadFrame(conn)
 		if err != nil {
 			t.Fatalf("read frame: %v", err)
 		}
-		switch f.Channel {
-		case execd.ChanStdout:
-			if !signalled && strings.Contains(string(f.Payload), "ready") {
-				signalled = true
-				if err := execd.WriteSignal(conn, syscall.SIGTERM); err != nil {
-					t.Fatal(err)
-				}
-			}
-		case execd.ChanExit:
-			if !signalled {
-				t.Fatal("the command exited before it announced itself; nothing was signalled")
-			}
+		if f.Channel == execd.ChanExit {
 			if f.ExitCode() != 42 {
 				t.Errorf("exit = %d, want 42 from the trap", f.ExitCode())
 			}
@@ -380,52 +460,27 @@ func TestServerForwardsSignalToTheCommand(t *testing.T) {
 	}
 }
 
-// stdinReaderExecutor reads its stdin to completion and reports how that read
-// ended. It is what makes a refusal path's treatment of the stdin pipe
-// observable: when watchConn fails the pipe, this read returns an error; when
-// the pipe is merely abandoned, the read blocks forever and the test's read
-// deadline fires instead.
-type stdinReaderExecutor struct {
-	started   chan struct{}
-	startOnce sync.Once
-	readErr   chan error
-}
-
-func (s *stdinReaderExecutor) Execute(ctx context.Context, req execd.Request,
-	stdin io.Reader, stdout, stderr io.Writer) (int, error) {
-	s.startOnce.Do(func() { close(s.started) })
-	_, err := io.ReadAll(stdin)
-	s.readErr <- err
-	return 0, nil
-}
-
 // TestServerRefusesASignalOutsideTheAllowList holds the read side of the
 // allow-list to the same standard as the write side. WriteSignal refuses to
 // send SIGUSR1, so this builds the frame by hand — which is exactly what a
 // client that did not use this package would do.
 //
-// The request carries stdin, so the refusal path has a pipe to deal with: the
-// executor is parked in a read of it, and a refusal that only cancelled the
-// context would leave that read blocked on a pipe with no writer left alive.
-// Asserting that the read woke with an error is what keeps the refusal path
-// from quietly reverting to the abandon-the-pipe form.
+// It also pins what a refusal does to the request. Every path out of watchConn
+// now ends the same way, by cancelling the request's context, so asserting
+// that the executor's context was cancelled is what keeps a refusal from
+// quietly becoming a frame the server writes and then ignores.
 func TestServerRefusesASignalOutsideTheAllowList(t *testing.T) {
-	reader := &stdinReaderExecutor{started: make(chan struct{}), readErr: make(chan error, 1)}
-	sock := startTestServer(t, reader)
-	conn, err := net.Dial("unix", sock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
+	blocking := newBlockingExecutor()
+	sock := startTestServer(t, blocking)
+	conn := dialWithStdio(t, sock, execd.Stdio{
+		In: devNull(t), Out: nullOut(t), Err: nullOut(t)})
 	if err := execd.WriteRequest(conn, execd.Request{
-		Command: "cat", Cwd: "/tmp", WithStdin: true,
-		ProtocolVersion: execd.ProtocolVersion,
+		Command: "cat", Cwd: "/tmp", ProtocolVersion: execd.ProtocolVersion,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	// As in the direction-rule test: the rule can only be observed while there
-	// is a request to observe it on.
-	<-reader.started
+	// The rule can only be observed while there is a request to observe it on.
+	<-blocking.started
 
 	if err := execd.WriteFrame(conn, execd.ChanSignal, []byte{byte(syscall.SIGUSR1)}); err != nil {
 		t.Fatal(err)
@@ -456,36 +511,30 @@ func TestServerRefusesASignalOutsideTheAllowList(t *testing.T) {
 	}
 
 	select {
-	case err := <-reader.readErr:
-		if err == nil {
-			t.Error("the executor's stdin read ended cleanly; " +
-				"a refused request should fail the pipe, not close it as if the client were done")
-		}
+	case <-blocking.cancelled:
 	case <-time.After(10 * time.Second):
-		t.Fatal("the executor is still blocked reading stdin: " +
-			"the refusal path abandoned the pipe instead of failing it")
+		t.Fatal("the executor is still running: a refused request must end, " +
+			"not merely have its refusal reported")
 	}
 }
 
-// closedStdinExecutor closes the request's stdin before anything is sent on it,
-// so the next stdin frame the server relays fails to write, and then waits for
-// a signal. It implements ExecuteWithSignals directly, which is also what makes
-// the server's capability assertion visible to a test that starts no process.
-type closedStdinExecutor struct {
+// signalWatchExecutor implements ExecuteWithSignals directly, which is what
+// makes the server's capability assertion visible to a test that starts no
+// process. The assertion is by interface value rather than by widening
+// Executor, so a double like this one — which knows nothing about signals in
+// its Execute — stays a valid Executor.
+type signalWatchExecutor struct {
 	started chan struct{}
 	got     chan syscall.Signal
 }
 
-func (c *closedStdinExecutor) Execute(ctx context.Context, req execd.Request,
-	stdin io.Reader, stdout, stderr io.Writer) (int, error) {
-	return c.ExecuteWithSignals(ctx, req, stdin, stdout, stderr, nil)
+func (c *signalWatchExecutor) Execute(ctx context.Context, req execd.Request,
+	stdio execd.Stdio) (int, error) {
+	return c.ExecuteWithSignals(ctx, req, stdio, nil)
 }
 
-func (c *closedStdinExecutor) ExecuteWithSignals(ctx context.Context, req execd.Request,
-	stdin io.Reader, stdout, stderr io.Writer, sigs <-chan syscall.Signal) (int, error) {
-	if rc, ok := stdin.(io.Closer); ok {
-		rc.Close() // every later write on the other end now fails
-	}
+func (c *signalWatchExecutor) ExecuteWithSignals(ctx context.Context, req execd.Request,
+	stdio execd.Stdio, sigs <-chan syscall.Signal) (int, error) {
 	close(c.started)
 	select {
 	case sig := <-sigs:
@@ -495,42 +544,140 @@ func (c *closedStdinExecutor) ExecuteWithSignals(ctx context.Context, req execd.
 	return 0, nil
 }
 
-// TestServerKeepsRelayingSignalsAfterAStdinWriteFails pins the one path in
-// watchConn that does not end the request. A command that stops reading its
-// stdin — it exited, or never read at all — says nothing about whether the
-// request is over or the client is still there, so the reader has to survive
-// it: it is the only route a signal frame has, and the only detector of a
-// disconnect. A server that returned from the loop here would leave the
-// request running and unsignallable for the rest of its life.
-func TestServerKeepsRelayingSignalsAfterAStdinWriteFails(t *testing.T) {
-	exe := &closedStdinExecutor{started: make(chan struct{}), got: make(chan syscall.Signal, 1)}
+// TestServerRelaysASignalToAnExecutorThatWantsOne pins the capability
+// assertion in handle: an executor that implements ExecuteWithSignals is
+// reached through it and gets the channel. The signature it is asserted
+// against carries a Stdio, so an executor left on the old three-stream shape
+// would silently fall back to Execute and never see a signal again — a
+// regression that no test of the real ShellExecutor could tell apart from a
+// signal that simply did not arrive.
+func TestServerRelaysASignalToAnExecutorThatWantsOne(t *testing.T) {
+	exe := &signalWatchExecutor{started: make(chan struct{}), got: make(chan syscall.Signal, 1)}
 	sock := startTestServer(t, exe)
-	conn, err := net.Dial("unix", sock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
+	conn := dialWithStdio(t, sock, execd.Stdio{
+		In: devNull(t), Out: nullOut(t), Err: nullOut(t)})
 	if err := execd.WriteRequest(conn, execd.Request{
-		Command: "cat", Cwd: "/tmp", WithStdin: true,
-		ProtocolVersion: execd.ProtocolVersion,
+		Command: "cat", Cwd: "/tmp", ProtocolVersion: execd.ProtocolVersion,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	<-exe.started
 
-	if err := execd.WriteFrame(conn, execd.ChanStdin, []byte("nobody is reading this")); err != nil {
-		t.Fatal(err)
-	}
 	if err := execd.WriteSignal(conn, syscall.SIGINT); err != nil {
 		t.Fatal(err)
 	}
-
 	select {
 	case sig := <-exe.got:
 		if sig != syscall.SIGINT {
 			t.Errorf("signal = %v, want SIGINT", sig)
 		}
 	case <-time.After(10 * time.Second):
-		t.Fatal("no signal reached the executor: the stdin write error stopped the connection reader")
+		t.Fatal("no signal reached the executor")
+	}
+}
+
+// The end-to-end shape: a real server, a real command, and the caller's own
+// file on the other end of the descriptor.
+func TestCommandWritesThroughThePassedDescriptor(t *testing.T) {
+	sock := startTestServer(t, execd.NewShellExecutor())
+	c := execd.NewClient(sock)
+
+	dir := t.TempDir()
+	out, err := os.Create(filepath.Join(dir, "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer out.Close()
+	devnull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer devnull.Close()
+
+	code, err := c.RunCommand(context.Background(), "echo through-the-descriptor",
+		execd.Stdio{In: devnull, Out: out, Err: out}, execd.RunOptions{})
+	if err != nil || code != 0 {
+		t.Fatalf("RunCommand = %d, %v", code, err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(b)) != "through-the-descriptor" {
+		t.Errorf("file = %q, want the command's output", b)
+	}
+}
+
+// Stdin arrives the same way, with no frames involved.
+func TestCommandReadsThroughThePassedDescriptor(t *testing.T) {
+	sock := startTestServer(t, execd.NewShellExecutor())
+	c := execd.NewClient(sock)
+
+	dir := t.TempDir()
+	inPath := filepath.Join(dir, "in")
+	if err := os.WriteFile(inPath, []byte("fed-through\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	in, err := os.Open(inPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer in.Close()
+	out, err := os.Create(filepath.Join(dir, "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer out.Close()
+
+	code, err := c.RunCommand(context.Background(), "cat",
+		execd.Stdio{In: in, Out: out, Err: out}, execd.RunOptions{})
+	if err != nil || code != 0 {
+		t.Fatalf("RunCommand = %d, %v", code, err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(b)) != "fed-through" {
+		t.Errorf("file = %q, want the stdin the caller passed", b)
+	}
+}
+
+// execd must close its copies when the request ends, or a caller that passed a
+// pipe's write end waits forever. This is the ownership rule the spec names as
+// the one a future edit is most likely to break.
+func TestServerClosesItsCopiesWhenTheRequestEnds(t *testing.T) {
+	sock := startTestServer(t, execd.NewShellExecutor())
+	c := execd.NewClient(sock)
+
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pr.Close(); pw.Close() })
+	devnull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer devnull.Close()
+
+	if _, err := c.RunCommand(context.Background(), "echo done",
+		execd.Stdio{In: devnull, Out: pw, Err: pw}, execd.RunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	pw.Close() // this side's copy; only execd's may be keeping the pipe open now
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := io.ReadAll(pr)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("read to EOF: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("no EOF: execd leaked its copy of the passed descriptor")
 	}
 }

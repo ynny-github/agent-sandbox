@@ -1,15 +1,11 @@
 package execd_test
 
 import (
-	"bytes"
 	"context"
-	"errors"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -18,65 +14,39 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
-// syncBuffer is a mutex-protected bytes.Buffer. A pipeline stage can run more
-// than one command concurrently (mvdan.cc/sh's own Pipe case does exactly
-// this), and each command's own stdout/stderr drain (see wiring) writes
-// into whatever the caller supplied independently of the others — a plain
-// bytes.Buffer's internal bookkeeping is not safe for that, and a race there
-// can silently truncate or lose one side's output. That is not hypothetical: it
-// was measured here while this file was being written, with a bare bytes.Buffer
-// in this type's place — a message written by one command's own exec handler
-// vanished, racing against a different concurrent command's own, empty stderr
-// drain. Swapping syncBuffer back for a bytes.Buffer is how to see it again;
-// note that -race cannot be used to catch it in this repository, because it
-// needs cgo and this build sets CGO_ENABLED=0. execd never has
-// this problem:
-// internal/execd/server.go's frameWriter already serializes every write
-// with its own mutex, for the same reason.
-type syncBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (s *syncBuffer) Write(p []byte) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.buf.Write(p)
-}
-
-func (s *syncBuffer) String() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.buf.String()
-}
-
 // runShell executes command in dir and returns exit code, stdout and stderr.
 // Every case is bounded: the failure this executor exists to prevent is a
 // pipeline that produces its output and then never returns, and a test that
 // hangs forever reports that as a timeout of the whole package rather than of
 // the case that caused it.
+//
+// The three streams are files, because that is what Run takes now: a request
+// runs on the caller's own descriptors and there is no writer for this side to
+// collect bytes into. That also removes the mutex-protected buffer this helper
+// used to need — a pipeline stage can run more than one command concurrently
+// (mvdan.cc/sh's own Pipe case does exactly this), and a plain bytes.Buffer
+// written by two of them at once was measured losing output here. A file has
+// no such bookkeeping to corrupt.
 func runShell(t *testing.T, dir, command string, stdin string) (int, string, string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	var out, errb syncBuffer
-	// in must stay a nil *interface*, not a typed nil pointer: a nil
-	// *strings.Reader assigned to an io.Reader makes a non-nil interface, and
-	// the executor would take the stdin path for every case that wants none.
-	var in io.Reader
+	out, readOut := outFile(t)
+	errf, readErr := outFile(t)
+	in := devNull(t)
 	if stdin != "" {
-		in = strings.NewReader(stdin)
+		in = inFile(t, stdin)
 	}
 	e := execd.NewShellExecutor()
-	code, err := e.Run(ctx, command, dir, in, &out, &errb)
+	code, err := e.Run(ctx, command, dir, execd.Stdio{In: in, Out: out, Err: errf})
 	if err != nil {
 		t.Fatalf("Run(%q): %v", command, err)
 	}
 	if ctx.Err() != nil {
 		t.Fatalf("Run(%q) did not finish within the timeout", command)
 	}
-	return code, out.String(), errb.String()
+	return code, readOut(), readErr()
 }
 
 func TestShellExecutorRunsASimpleCommand(t *testing.T) {
@@ -186,15 +156,17 @@ func TestShellExecutorFeedsStdinToTheFirstCommand(t *testing.T) {
 
 func TestShellExecutorReportsAParseError(t *testing.T) {
 	e := execd.NewShellExecutor()
-	var out, errb bytes.Buffer
-	code, err := e.Run(context.Background(), "echo 'unterminated", t.TempDir(), nil, &out, &errb)
+	out, _ := outFile(t)
+	errf, readErr := outFile(t)
+	code, err := e.Run(context.Background(), "echo 'unterminated", t.TempDir(),
+		execd.Stdio{In: devNull(t), Out: out, Err: errf})
 	if err != nil {
 		t.Fatalf("Run returned an infrastructure error for a syntax error: %v", err)
 	}
 	if code == 0 {
 		t.Errorf("exit = 0, want non-zero for a syntax error")
 	}
-	if errb.Len() == 0 {
+	if readErr() == "" {
 		t.Errorf("stderr is empty; a syntax error must say what is wrong")
 	}
 }
@@ -224,7 +196,8 @@ func TestExitCodesAreNamed(t *testing.T) {
 	}
 	e := execd.NewShellExecutor()
 	for _, c := range cases {
-		code, err := e.Run(context.Background(), c.line, t.TempDir(), nil, io.Discard, io.Discard)
+		code, err := e.Run(context.Background(), c.line, t.TempDir(),
+			execd.Stdio{In: devNull(t), Out: nullOut(t), Err: nullOut(t)})
 		if err != nil {
 			t.Fatalf("%q: %v", c.line, err)
 		}
@@ -250,69 +223,35 @@ func TestShellExecutorRunsMultipleExternalCommandsInOnePipelineStage(t *testing.
 	}
 }
 
-// recordingWriteCloser is a stdout stand-in that notices whether it was
-// closed and, once closed, behaves like a real closed transport by failing
-// further writes — the way an HTTP response writer or a closed file would.
-type recordingWriteCloser struct {
-	mu     sync.Mutex
-	buf    bytes.Buffer
-	closed bool
-}
-
-func (w *recordingWriteCloser) Write(p []byte) (int, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.closed {
-		return 0, errors.New("write to closed writer")
-	}
-	return w.buf.Write(p)
-}
-
-func (w *recordingWriteCloser) Close() error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.closed = true
-	return nil
-}
-
-func (w *recordingWriteCloser) String() string {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.buf.String()
-}
-
-func (w *recordingWriteCloser) wasClosed() bool {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.closed
-}
-
 // TestShellExecutorDoesNotCloseTheCallersStdout runs two external commands in
 // sequence — sh, not a shell builtin like echo, so each one actually reaches
-// execHandler and wireOutputs — against a stdout that implements
-// io.Closer, which is exactly what Task 3 hands the executor for its response
-// stream. Only the interpreter — which alone knows when the whole request is
-// done with the writer — may end its lifetime; if Run closed it after the
-// first command, the second command's output would be silently lost.
+// execHandler and wireOutputs — and then writes to the caller's stdout itself.
+// That last write is the assertion: the file belongs to whoever passed it, and
+// only they may end its lifetime. Run closing it after the first command would
+// silently lose the second command's output; Run closing it at all would break
+// a caller that passes one file to several requests, which is exactly what the
+// server does when it hands the same trio to a whole request.
 func TestShellExecutorDoesNotCloseTheCallersStdout(t *testing.T) {
-	out := &recordingWriteCloser{}
-	var errb bytes.Buffer
+	out, readOut := outFile(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
 	e := execd.NewShellExecutor()
-	code, err := e.Run(ctx, "sh -c 'echo one'; sh -c 'echo two'", t.TempDir(), nil, out, &errb)
+	code, err := e.Run(ctx, "sh -c 'echo one'; sh -c 'echo two'", t.TempDir(),
+		execd.Stdio{In: devNull(t), Out: out, Err: nullOut(t)})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if code != 0 {
 		t.Errorf("exit = %d, want 0", code)
 	}
-	if out.wasClosed() {
-		t.Errorf("Run closed the caller's stdout; the interpreter must own that writer's lifetime")
+	if _, werr := out.WriteString("still-open\n"); werr != nil {
+		t.Errorf("Run closed the caller's stdout: %v; only the caller may end that file's lifetime", werr)
 	}
-	if got := strings.TrimSpace(out.String()); got != "one\ntwo" {
-		t.Errorf("stdout = %q, want %q (a close between commands would drop \"two\")", got, "one\ntwo")
+	if got := strings.Fields(readOut()); len(got) != 3 ||
+		got[0] != "one" || got[1] != "two" || got[2] != "still-open" {
+		t.Errorf("stdout = %q, want \"one\", \"two\" and then the caller's own write "+
+			"(a close between commands would drop \"two\")", readOut())
 	}
 }
 
@@ -359,21 +298,22 @@ func TestShellExecutorLooksUpCommandsRelativeToCwd(t *testing.T) {
 // cwd check: a well-formed request from a real client runs normally.
 func TestExecuteAcceptsAnAbsoluteCwd(t *testing.T) {
 	e := execd.NewShellExecutor()
-	var out, errb bytes.Buffer
+	out, readOut := outFile(t)
+	errf, readErr := outFile(t)
 	code, err := e.Execute(context.Background(),
 		execd.Request{
 			Command:         "echo hi",
 			Cwd:             t.TempDir(),
 			ProtocolVersion: execd.ProtocolVersion,
-		}, nil, &out, &errb)
+		}, execd.Stdio{In: devNull(t), Out: out, Err: errf})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
 	if code != 0 {
-		t.Errorf("exit = %d, want 0; stderr = %q", code, errb.String())
+		t.Errorf("exit = %d, want 0; stderr = %q", code, readErr())
 	}
-	if strings.TrimSpace(out.String()) != "hi" {
-		t.Errorf("stdout = %q, want %q", out.String(), "hi")
+	if strings.TrimSpace(readOut()) != "hi" {
+		t.Errorf("stdout = %q, want %q", readOut(), "hi")
 	}
 }
 
@@ -385,13 +325,12 @@ func TestExecuteAcceptsAnAbsoluteCwd(t *testing.T) {
 func TestExecuteRejectsANonAbsoluteCwd(t *testing.T) {
 	e := execd.NewShellExecutor()
 	for _, cwd := range []string{"", "relative/path", "./here"} {
-		var out, errb bytes.Buffer
 		_, err := e.Execute(context.Background(),
 			execd.Request{
 				Command:         "echo hi",
 				Cwd:             cwd,
 				ProtocolVersion: execd.ProtocolVersion,
-			}, nil, &out, &errb)
+			}, execd.Stdio{In: devNull(t), Out: nullOut(t), Err: nullOut(t)})
 		if err == nil {
 			t.Errorf("Execute() with Cwd=%q: error = nil, want a rejection", cwd)
 			continue
@@ -408,14 +347,14 @@ func TestExecuteRejectsANonAbsoluteCwd(t *testing.T) {
 // have produced.
 func TestExecuteTimesOut(t *testing.T) {
 	e := execd.NewShellExecutor()
-	var errb strings.Builder
+	errf, readErr := outFile(t)
 	start := time.Now()
 	code, err := e.Execute(context.Background(), execd.Request{
 		Command:         "sleep 30",
 		Cwd:             t.TempDir(),
 		TimeoutMs:       400,
 		ProtocolVersion: execd.ProtocolVersion,
-	}, nil, io.Discard, &errb)
+	}, execd.Stdio{In: devNull(t), Out: nullOut(t), Err: errf})
 	if err != nil {
 		t.Fatalf("Execute = %v", err)
 	}
@@ -425,8 +364,8 @@ func TestExecuteTimesOut(t *testing.T) {
 	if d := time.Since(start); d > 3*time.Second {
 		t.Errorf("took %v; want it bounded by the timeout", d)
 	}
-	if !strings.Contains(errb.String(), "timed out") {
-		t.Errorf("stderr = %q, want it to say the command timed out", errb.String())
+	if !strings.Contains(readErr(), "timed out") {
+		t.Errorf("stderr = %q, want it to say the command timed out", readErr())
 	}
 }
 
@@ -573,10 +512,9 @@ func TestShellExecutorStopsPacingWhenTheContextIsCancelled(t *testing.T) {
 		cancel()
 	}()
 
-	var out, errb syncBuffer
-	var in io.Reader
 	start := time.Now()
-	code, err := execd.NewShellExecutor().Run(ctx, line, dir, in, &out, &errb)
+	code, err := execd.NewShellExecutor().Run(ctx, line, dir,
+		execd.Stdio{In: devNull(t), Out: nullOut(t), Err: nullOut(t)})
 	elapsed := time.Since(start)
 
 	if err != nil {
@@ -607,8 +545,13 @@ const PolicyLaunchCancelDelay = execd.PolicyLaunchInterval / 10
 // open, and the handler goroutine — and so Run — never returned. "sleep 2972
 // & wait" gives the shell a child (the backgrounded sleep) that is not the
 // direct process exec.Command starts (sh is), so a teardown that only kills
-// sh's own pid leaves sleep 2972 running and its inherited stdout pipe held
-// open.
+// sh's own pid leaves sleep 2972 running.
+//
+// The held-pipe half of that defect is no longer reachable from Run at all:
+// the caller's stdout is a descriptor the child is given directly, so there is
+// no drain of this side's for a survivor to hold open. What this pins is the
+// teardown — that the group, grandchild included, is gone when the request is
+// — and that Run returns.
 //
 // The test is only a guard against that defect if the descendant is proven
 // to have actually run: without the existence poll below, a Run that
@@ -649,7 +592,8 @@ func TestRunLeavesNoDescendants(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		code, err := e.Run(ctx, "sh -c 'sleep 2972 & wait'", t.TempDir(), nil, io.Discard, io.Discard)
+		code, err := e.Run(ctx, "sh -c 'sleep 2972 & wait'", t.TempDir(),
+			execd.Stdio{In: devNull(t), Out: nullOut(t), Err: nullOut(t)})
 		done <- result{code, err}
 	}()
 

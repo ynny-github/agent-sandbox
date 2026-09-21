@@ -104,9 +104,13 @@ type Request struct {
 	// commands the interpreter execs, but nothing in this package bounds it to
 	// any particular root — see ShellExecutor.Execute for where that bound
 	// actually lives.
-	Cwd             string `json:"cwd"`
-	WithStdin       bool   `json:"with_stdin"`
-	ProtocolVersion int    `json:"protocol_version"`
+	Cwd string `json:"cwd"`
+	// WithStdin is no longer read by either side and no longer set by the
+	// client: every request carries a stdin descriptor, so there is nothing
+	// for it to announce. It stays on the wire only until the retirement of
+	// the byte-relay fields it belongs with.
+	WithStdin       bool `json:"with_stdin"`
+	ProtocolVersion int  `json:"protocol_version"`
 	// TimeoutMs bounds the whole request. Zero means no bound: the caller's own
 	// timeout (the harness's, for an agent's command) is the only one.
 	TimeoutMs int `json:"timeout_ms"`
@@ -291,37 +295,72 @@ func RecvStdio(uc *net.UnixConn) (Stdio, error) {
 	noFDs := fmt.Errorf("execd: no file descriptors arrived with the request. " +
 		"This usually means the agent-sandbox binary sending it is older than the " +
 		"execd serving it — restart the session so both come from the same build")
-	if n != 1 || buf[0] != stdioHandshake || oobn == 0 {
-		return Stdio{}, noFDs
-	}
-	// ParseSocketControlMessage is all-or-nothing: on error it discards
-	// anything it already decoded, so there is never a partially-decoded
-	// message this call could leak. Nothing arrived that this function can
-	// identify, so there is nothing to close.
-	scms, err := syscall.ParseSocketControlMessage(oob[:oobn])
-	if err != nil || len(scms) == 0 {
-		return Stdio{}, noFDs
-	}
-	// A peer inside the sandbox controls these bytes; do not assume a single
-	// well-formed message. Decode every control message the kernel handed
-	// back, and if a later one fails to decode, close whatever earlier ones
-	// already gave us real, kernel-installed descriptors for — otherwise a
-	// crafted trailing message would leak them.
+
+	// Decode first, validate second. The kernel installs SCM_RIGHTS descriptors
+	// into this process's fd table during recvmsg itself, before this function
+	// sees a byte of the message: by the time control reaches here they are
+	// already open, whatever the message turns out to say. Decoding does not
+	// obtain them — it only recovers their numbers, which is what closing them
+	// requires. So rejecting the handshake before decoding would abandon
+	// descriptors this process holds and can no longer name, and a peer inside
+	// the sandbox could exhaust execd's fd table by looping connect, send one
+	// wrong byte with three descriptors attached, disconnect. Every rejection
+	// below therefore closes what arrived.
+	//
+	// What remains unrecoverable is a control buffer this function cannot parse
+	// at all: ParseSocketControlMessage is all-or-nothing, so a failure there
+	// leaves nothing nameable to close. That buffer is written by the kernel
+	// rather than by the peer — a sender controls how many descriptors it
+	// attaches, not the cmsghdr layout they arrive in — and sendmsg validates
+	// and installs atomically, so a send carrying a malformed header fails
+	// outright rather than delivering one.
 	var fds []int
-	for i := range scms {
-		got, err := syscall.ParseUnixRights(&scms[i])
-		if err != nil {
-			for _, fd := range fds {
-				syscall.Close(fd)
-			}
-			return Stdio{}, fmt.Errorf("execd: decode stdio: %w", err)
-		}
-		fds = append(fds, got...)
-	}
-	if len(fds) != 3 {
+	// Deliberately does not clear fds: every caller returns immediately after,
+	// and the count is still wanted for the message one of them builds.
+	closeAll := func() {
 		for _, fd := range fds {
 			syscall.Close(fd)
 		}
+	}
+	scms, parseErr := syscall.ParseSocketControlMessage(oob[:oobn])
+	// A peer inside the sandbox decides how many control messages to attach, so
+	// do not assume a single one. A message that is not SCM_RIGHTS does not end
+	// the loop: the messages are independent, and a later one can still carry
+	// real, installed descriptors that only this loop can name. The first
+	// failure is what gets reported, which is the one the old
+	// return-on-first-error form reported too.
+	var decodeErr error
+	for i := range scms {
+		got, gerr := syscall.ParseUnixRights(&scms[i])
+		if gerr != nil {
+			if decodeErr == nil {
+				decodeErr = gerr
+			}
+			continue
+		}
+		fds = append(fds, got...)
+	}
+
+	// Decoding moved ahead of validation; reporting did not. These four checks
+	// are in the order the old code applied them, so every input still produces
+	// the message it always produced — a wrong handshake byte says "restart the
+	// session" even when the control buffer is also bad, rather than reporting a
+	// corrupt message and sending an operator after the wrong cause. What
+	// changed is only that each of them now closes what arrived first.
+	if n != 1 || buf[0] != stdioHandshake {
+		closeAll()
+		return Stdio{}, noFDs
+	}
+	if oobn == 0 || parseErr != nil || len(scms) == 0 {
+		closeAll()
+		return Stdio{}, noFDs
+	}
+	if decodeErr != nil {
+		closeAll()
+		return Stdio{}, fmt.Errorf("execd: decode stdio: %w", decodeErr)
+	}
+	if len(fds) != 3 {
+		closeAll()
 		return Stdio{}, fmt.Errorf("execd: %d descriptors arrived, want exactly 3 (stdin, stdout, stderr)", len(fds))
 	}
 	return Stdio{

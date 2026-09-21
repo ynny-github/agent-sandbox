@@ -50,7 +50,8 @@ func runExec(cmd *cobra.Command, args []string) error {
 	if strings.TrimSpace(command) == "" {
 		return fmt.Errorf("no command given after --")
 	}
-	os.Exit(runExecCore(context.Background(), command, os.Stdout, os.Stderr))
+	os.Exit(runExecCore(context.Background(), command,
+		execd.Stdio{In: os.Stdin, Out: os.Stdout, Err: os.Stderr}))
 	return nil
 }
 
@@ -63,23 +64,27 @@ func commandFromArgs(cmd *cobra.Command, args []string) string {
 	return strings.Join(args, " ")
 }
 
-// runExecCore sends command to execd and streams its output, returning the
-// exit code. There is no routing left to do: the command profile decides what
-// may run, and execd's interpreter decides how the line is executed.
-func runExecCore(ctx context.Context, command string, stdout, stderr io.Writer) int {
+// runExecCore sends command to execd and returns the exit code. There is no
+// routing left to do: the command profile decides what may run, and execd's
+// interpreter decides how the line is executed.
+//
+// stdio is this process's own stdin, stdout and stderr. They are passed to
+// execd as descriptors, so the command writes to this process's terminal (or
+// pipe, or file) itself and nothing copies its bytes through here.
+func runExecCore(ctx context.Context, command string, stdio execd.Stdio) int {
 	client, err := execd.NewClientFromEnv()
 	if err != nil {
 		// The overwhelmingly common cause is running `agent-sandbox exec`
 		// outside a `claude` session, so the socket variable is unset. Print the
 		// actionable hint instead of the raw dial/lookup error.
 		if errors.Is(err, execd.ErrExecdUnavailable) {
-			fmt.Fprintln(stderr, execd.SandboxNotRunningHint)
+			fmt.Fprintln(stdio.Err, execd.SandboxNotRunningHint)
 		} else {
-			fmt.Fprintf(stderr, "exec daemon: %v\n", err)
+			fmt.Fprintf(stdio.Err, "exec daemon: %v\n", err)
 		}
 		return 1
 	}
-	// os.Stdin is wired unconditionally rather than behind a flag. The hook
+	// stdin is wired unconditionally rather than behind a flag. The hook
 	// rewrites every Bash tool call to `agent-sandbox exec -- <command>`, so a
 	// flag the hook did not pass would leave the agent unable to send input at
 	// all, and a flag the hook always passed would not be a flag. The harness
@@ -128,7 +133,7 @@ func runExecCore(ctx context.Context, command string, stdout, stderr io.Writer) 
 	// written once, before the cancel that unblocks RunCommand, so the value is
 	// always in the buffer by the time it is read below.
 	forced := make(chan syscall.Signal, 1)
-	go twoStageSignals(sigs, relay, relayDone, stderr, forced, func() {
+	go twoStageSignals(sigs, relay, relayDone, stdio.Err, forced, func() {
 		// Hand this process its default disposition back before closing the
 		// connection: a third signal then terminates the client outright, which
 		// is the floor under the floor and costs nothing to keep.
@@ -136,7 +141,7 @@ func runExecCore(ctx context.Context, command string, stdout, stderr io.Writer) 
 		cancel()
 	})
 
-	code, runErr := client.RunCommand(ctx, command, os.Stdin, stdout, stderr, execd.RunOptions{
+	code, runErr := client.RunCommand(ctx, command, stdio, execd.RunOptions{
 		TimeoutMs: int(execTimeout.Milliseconds()),
 		Signals:   relay,
 	})
@@ -152,9 +157,9 @@ func runExecCore(ctx context.Context, command string, stdout, stderr io.Writer) 
 		default:
 		}
 		if errors.Is(runErr, execd.ErrExecdUnavailable) {
-			fmt.Fprintln(stderr, execd.SandboxNotRunningHint)
+			fmt.Fprintln(stdio.Err, execd.SandboxNotRunningHint)
 		} else {
-			fmt.Fprintf(stderr, "%v\n", runErr)
+			fmt.Fprintf(stdio.Err, "%v\n", runErr)
 		}
 		return 1
 	}

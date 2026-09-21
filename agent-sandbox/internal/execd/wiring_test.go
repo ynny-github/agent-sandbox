@@ -2,10 +2,10 @@ package execd_test
 
 import (
 	"context"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -14,15 +14,16 @@ import (
 
 // TestWiringDoesNotLeakARedirectToTheCallersWriter checks what this case can
 // actually check: the redirect lands in the file and none of it also reaches the
-// caller's writer. It does not distinguish a file passed straight to the child
+// caller's own stdout. It does not distinguish a file passed straight to the child
 // from one a drain copies into — that check is
 // TestWiringGivesTheChildTheRedirectsOwnFile.
 func TestWiringDoesNotLeakARedirectToTheCallersWriter(t *testing.T) {
 	dir := t.TempDir()
 	out := filepath.Join(dir, "out.txt")
 	e := execd.NewShellExecutor()
-	var framed strings.Builder
-	code, err := e.Run(context.Background(), "echo redirected > out.txt", dir, nil, &framed, io.Discard)
+	passed, readPassed := outFile(t)
+	code, err := e.Run(context.Background(), "echo redirected > out.txt", dir,
+		execd.Stdio{In: devNull(t), Out: passed, Err: nullOut(t)})
 	if err != nil || code != 0 {
 		t.Fatalf("Run = %d, %v", code, err)
 	}
@@ -30,17 +31,18 @@ func TestWiringDoesNotLeakARedirectToTheCallersWriter(t *testing.T) {
 	if rerr != nil || strings.TrimSpace(string(b)) != "redirected" {
 		t.Fatalf("file = %q, %v; want \"redirected\"", b, rerr)
 	}
-	if framed.String() != "" {
-		t.Errorf("redirected output also reached the caller's writer: %q", framed.String())
+	if readPassed() != "" {
+		t.Errorf("redirected output also reached the caller's own stdout: %q", readPassed())
 	}
 }
 
 func TestWiringKeepsPipelinesTerminating(t *testing.T) {
 	e := execd.NewShellExecutor()
-	var out strings.Builder
+	out, readOut := outFile(t)
 	done := make(chan int, 1)
 	go func() {
-		code, _ := e.Run(context.Background(), "seq 1 100000 | head -n 3", t.TempDir(), nil, &out, io.Discard)
+		code, _ := e.Run(context.Background(), "seq 1 100000 | head -n 3", t.TempDir(),
+			execd.Stdio{In: devNull(t), Out: out, Err: nullOut(t)})
 		done <- code
 	}()
 	select {
@@ -48,20 +50,20 @@ func TestWiringKeepsPipelinesTerminating(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("pipeline did not terminate")
 	}
-	if got := strings.Fields(out.String()); len(got) != 3 {
-		t.Errorf("output = %q, want three lines", out.String())
+	if got := strings.Fields(readOut()); len(got) != 3 {
+		t.Errorf("output = %q, want three lines", readOut())
 	}
 }
 
 func TestWiringMergesWhenStdoutAndStderrAreOneWriter(t *testing.T) {
 	e := execd.NewShellExecutor()
-	var both strings.Builder
+	both, readBoth := outFile(t)
 	if _, err := e.Run(context.Background(), "sh -c 'echo o; echo e >&2' 2>&1",
-		t.TempDir(), nil, &both, &both); err != nil {
+		t.TempDir(), execd.Stdio{In: devNull(t), Out: both, Err: both}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(both.String(), "o") || !strings.Contains(both.String(), "e") {
-		t.Errorf("merged output = %q, want both streams", both.String())
+	if !strings.Contains(readBoth(), "o") || !strings.Contains(readBoth(), "e") {
+		t.Errorf("merged output = %q, want both streams", readBoth())
 	}
 }
 
@@ -126,5 +128,62 @@ func TestWiringInterposesAPipedStdin(t *testing.T) {
 	}
 	if strings.TrimSpace(out) != "from the caller" {
 		t.Errorf("stdout = %q, want %q", out, "from the caller")
+	}
+}
+
+// TestWiringGivesTheChildThePassedOutputDescriptor is the end-to-end half of
+// the claim Task 3's TestWiringPassesAnInheritedPipeToTheChild makes about
+// passthrough alone: a file the request was given reaches the child as itself,
+// not as a pipe this side interposed and copies out of.
+//
+// Output only, as the name says. The stdin half of the rule is not covered
+// here and cannot be covered the same way: a child reading from an interposed
+// pipe receives exactly the bytes the passed descriptor would have given it,
+// and the input side has no analogue of the probe below — a pipe with no
+// writer left reads as EOF, which is also what an interposed pipe reads as
+// once its copier is done, so there is nothing for a child to report that
+// differs. What the stdin rule actually buys shows up only against nono's
+// shim, which retains a duplicate of every descriptor it is handed; no test in
+// this package can hold a shim. wireStdin's comment carries that reasoning,
+// and TestWiringInterposesAPipedStdin is explicitly a smoke test rather than a
+// check of the rule for the same reason.
+//
+// Even on the output side it takes an awkward probe, because nothing direct
+// can see the difference: the bytes land in the caller's pipe either way, a
+// drain copying them there just as faithfully as the child writing them.
+//
+// So the probe is a pipe whose read end is already closed. A child that holds
+// the caller's own write end writes into it and dies of SIGPIPE, reported as
+// 128+SIGPIPE. A child handed an interposed pipe writes into that successfully
+// and exits 0; the EPIPE lands on this side's drain instead, where it is
+// silent. Measured both ways, 5 runs each: 141 with identity in the wiring, 0
+// with it removed.
+//
+// sh, not the interpreter's echo builtin, so the command really reaches
+// execHandler — a builtin writes through the interpreter and never asks the
+// wiring anything.
+func TestWiringGivesTheChildThePassedOutputDescriptor(t *testing.T) {
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pw.Close() })
+	// Closed before the command runs, so the very first write the child makes
+	// is the one that answers the question.
+	if err := pr.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	errf, readErr := outFile(t)
+	code, err := execd.NewShellExecutor().Run(context.Background(),
+		"sh -c 'echo probe'", t.TempDir(),
+		execd.Stdio{In: devNull(t), Out: pw, Err: errf})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if want := 128 + int(syscall.SIGPIPE); code != want {
+		t.Errorf("exit = %d, want %d (128+SIGPIPE); the child wrote somewhere other than "+
+			"the caller's own descriptor, so the wiring interposed a pipe instead of "+
+			"recognising the request's own file (stderr %q)", code, want, readErr())
 	}
 }

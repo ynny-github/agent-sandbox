@@ -204,10 +204,25 @@ func runExecded(t *testing.T, allowDomains []string, command string) int {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	var out, errb strings.Builder
-	code, rcErr := execd.NewClient(sock).RunCommand(ctx, command, nil, &out, &errb, execd.RunOptions{})
+	// The command runs on these descriptors directly; nothing of its output
+	// travels back over the socket, so what the case asserts on is read out of
+	// the file afterwards.
+	errFile, err := os.CreateTemp(t.TempDir(), "err")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { errFile.Close() })
+	devnull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { devnull.Close() })
+
+	code, rcErr := execd.NewClient(sock).RunCommand(ctx, command,
+		execd.Stdio{In: devnull, Out: errFile, Err: errFile}, execd.RunOptions{})
 	if rcErr != nil {
-		t.Fatalf("RunCommand: %v (stderr=%s)", rcErr, errb.String())
+		b, _ := os.ReadFile(errFile.Name())
+		t.Fatalf("RunCommand: %v (output=%s)", rcErr, b)
 	}
 	return code
 }

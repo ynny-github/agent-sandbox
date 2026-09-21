@@ -6,8 +6,10 @@ package execd
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"os"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -110,12 +112,38 @@ func TestWiringPassesAnInheritedPipeToTheChild(t *testing.T) {
 // the interpreter captures the inner command's stdout into a buffer, so
 // hc.Stdout is not an *os.File even when every other writer on the path is.
 //
-// This only pins the passthrough half; the Run half described in the design
-// (feeding a real ShellExecutor a command-substitution line with a Stdio) does
-// not compile until Task 4 gives Run a Stdio parameter, and lands there.
+// The first half pins that a buffer is refused. The second runs a real command
+// substitution through a real ShellExecutor on real descriptors, which is what
+// proves the refused branch is reachable from the outside and still produces
+// the right bytes: the inner command's output is captured and substituted, and
+// the outer command's output reaches the caller's own file.
 func TestCommandSubstitutionReachesTheNonFileBranch(t *testing.T) {
 	var w wiring
 	if _, ok := w.passthrough(new(bytes.Buffer)); ok {
 		t.Fatal("a bytes.Buffer passed through; it has no descriptor to give a child")
+	}
+
+	out, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { out.Close() })
+	devnull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { devnull.Close() })
+
+	e := NewShellExecutor()
+	if _, err := e.Run(context.Background(), `echo "got $(echo inner)"`, t.TempDir(),
+		Stdio{In: devnull, Out: out, Err: out}); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(out.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "got inner") {
+		t.Errorf("out = %q, want the substituted output", b)
 	}
 }

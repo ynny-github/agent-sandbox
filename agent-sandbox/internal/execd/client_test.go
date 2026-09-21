@@ -1,12 +1,10 @@
 package execd_test
 
 import (
-	"bytes"
 	"context"
-	"io"
+	"os"
 	"os/exec"
 	"strings"
-	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -17,14 +15,15 @@ import (
 func TestExecWiresStdin(t *testing.T) {
 	sock := startTestServer(t, execd.NewShellExecutor())
 	c := execd.NewClient(sock)
-	var out strings.Builder
+	out, readOut := outFile(t)
 	code, err := c.RunCommand(context.Background(), "cat",
-		strings.NewReader("fed-through\n"), &out, io.Discard, execd.RunOptions{})
+		execd.Stdio{In: inFile(t, "fed-through\n"), Out: out, Err: nullOut(t)},
+		execd.RunOptions{})
 	if err != nil || code != 0 {
 		t.Fatalf("RunCommand = %d, %v", code, err)
 	}
-	if strings.TrimSpace(out.String()) != "fed-through" {
-		t.Errorf("out = %q, want \"fed-through\"", out.String())
+	if strings.TrimSpace(readOut()) != "fed-through" {
+		t.Errorf("out = %q, want \"fed-through\"", readOut())
 	}
 }
 
@@ -36,7 +35,8 @@ func TestExecForwardsTimeout(t *testing.T) {
 	sock := startTestServer(t, execd.NewShellExecutor())
 	c := execd.NewClient(sock)
 	start := time.Now()
-	code, err := c.RunCommand(context.Background(), "sleep 30", nil, io.Discard, io.Discard,
+	code, err := c.RunCommand(context.Background(), "sleep 30",
+		execd.Stdio{In: devNull(t), Out: nullOut(t), Err: nullOut(t)},
 		execd.RunOptions{TimeoutMs: 400})
 	if err != nil {
 		t.Fatal(err)
@@ -49,94 +49,93 @@ func TestExecForwardsTimeout(t *testing.T) {
 	}
 }
 
-// trickleStdin feeds the command one byte at a time, with a short pause
-// between reads, so the client's stdin pump goroutine keeps writing ChanStdin
-// frames on the connection for as long as stop stays open. That is the
-// window TestExecSignalDuringActiveStdin needs: a signal sent from
-// RunOptions.Signals while stdin is actively streaming is exactly the
-// scenario where an unserialized client would interleave a signal frame into
-// the middle of a stdin frame and desync the connection.
-type trickleStdin struct {
-	stop <-chan struct{}
-}
-
-func (s *trickleStdin) Read(p []byte) (int, error) {
-	select {
-	case <-s.stop:
-		return 0, io.EOF
-	case <-time.After(time.Millisecond):
-		p[0] = 'x'
-		return 1, nil
-	}
-}
-
-// readyTrigger watches stdout for a "ready" marker and fires fire() exactly
-// once as soon as it appears, so a signal can be sent the moment the
-// command's trap is known to be armed rather than on a timer.
-type readyTrigger struct {
-	mu   sync.Mutex
-	buf  bytes.Buffer
-	once sync.Once
-	fire func()
-}
-
-func (r *readyTrigger) Write(p []byte) (int, error) {
-	r.mu.Lock()
-	r.buf.Write(p)
-	ready := strings.Contains(r.buf.String(), "ready")
-	r.mu.Unlock()
-	if ready {
-		r.once.Do(r.fire)
-	}
-	return len(p), nil
-}
-
-// TestExecSignalDuringActiveStdin is the missing end-to-end case: a signal
-// sent through RunOptions.Signals while stdin is actively being pumped on
-// the same connection. Before the client serialized its frame writes
-// (connWriter in client.go), the stdin pump and the signal forwarder wrote
-// to the connection from separate goroutines with no coordination, and a
-// signal frame could land in the middle of a stdin frame's header/payload
-// writes, corrupting the stream the server reads. The command can only
-// report exit 42 by actually trapping the signal, so a regression here shows
-// up as a wrong exit code, a RunCommand error, or (bounded by ctx) a hang.
-func TestExecSignalDuringActiveStdin(t *testing.T) {
+// TestExecRelaysASignalWhileTheCommandRuns is the client-level end of the
+// signal path: a signal handed to RunOptions.Signals while the command is
+// running reaches it. The command can only report exit 42 by actually
+// trapping the signal, so a regression shows up as a wrong exit code, a
+// RunCommand error, or (bounded by ctx) a hang.
+//
+// It replaces TestExecSignalDuringActiveStdin, which sent that signal while
+// the client's stdin pump was writing frames on the same connection. That
+// scenario no longer exists: stdin is a descriptor the command reads itself,
+// so signal forwarding is the only thing left that writes to this connection.
+// What remains testable, and what this covers, is the forwarder itself.
+//
+// The command is kept alive by a stdin that never delivers a byte and never
+// ends — the read end of a pipe this test holds the write end of — so the
+// trap has something to interrupt, and it announces itself on a pipe passed
+// as its stdout so the signal is sent only once the trap is armed.
+func TestExecRelaysASignalWhileTheCommandRuns(t *testing.T) {
 	// Distinctive marker so cleanup cannot match an unrelated process; belt
 	// and suspenders alongside the ctx timeout below, which already causes
 	// execd to kill the command's process group when the connection closes.
-	t.Cleanup(func() { exec.Command("pkill", "-f", "execd-signal-stdin-probe").Run() })
+	t.Cleanup(func() { exec.Command("pkill", "-f", "execd-signal-relay-probe").Run() })
 
 	sock := startTestServer(t, execd.NewShellExecutor())
 	c := execd.NewClient(sock)
 
-	stop := make(chan struct{})
-	t.Cleanup(func() { close(stop) })
+	inr, inw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { inr.Close(); inw.Close() })
+	outr, outw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { outr.Close(); outw.Close() })
 
 	relay := make(chan syscall.Signal, 1)
-	out := &readyTrigger{fire: func() { relay <- syscall.SIGTERM }}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
 	// The backgrounded cat reads the same stdin the shell was given, so it is
-	// what keeps consuming the trickle; `& wait` (rather than a foreground
-	// cat) is what lets the trap fire before stdin ever closes, the same
-	// technique TestServerForwardsSignalToTheCommand uses with sleep. The
-	// leading no-op ": execd-signal-stdin-probe" puts a distinctive, harmless
-	// token into the process's own argv so cleanup's pkill -f can find it.
-	command := `sh -c ': execd-signal-stdin-probe; trap "exit 42" TERM; echo ready; ` +
+	// what keeps the pipeline alive; `& wait` (rather than a foreground cat)
+	// is what lets the trap fire before stdin ever closes, the same technique
+	// TestServerForwardsSignalToTheCommand uses with sleep. The leading no-op
+	// ": execd-signal-relay-probe" puts a distinctive, harmless token into the
+	// process's own argv so cleanup's pkill -f can find it.
+	command := `sh -c ': execd-signal-relay-probe; trap "exit 42" TERM; echo ready; ` +
 		`cat >/dev/null & wait'`
 
+	type result struct {
+		code int
+		err  error
+	}
+	done := make(chan result, 1)
 	start := time.Now()
-	code, err := c.RunCommand(ctx, command, &trickleStdin{stop: stop}, out, io.Discard,
-		execd.RunOptions{Signals: relay})
-	if err != nil {
-		t.Fatalf("RunCommand: %v", err)
+	go func() {
+		code, rerr := c.RunCommand(ctx, command,
+			execd.Stdio{In: inr, Out: outw, Err: outw}, execd.RunOptions{Signals: relay})
+		done <- result{code, rerr}
+	}()
+
+	if err := outr.SetReadDeadline(time.Now().Add(20 * time.Second)); err != nil {
+		t.Fatal(err)
 	}
-	if code != 42 {
-		t.Errorf("exit = %d, want 42 from the trap (stdout=%q)", code, out.buf.String())
+	var announced strings.Builder
+	buf := make([]byte, 64)
+	for !strings.Contains(announced.String(), "ready") {
+		n, rerr := outr.Read(buf)
+		announced.Write(buf[:n])
+		if rerr != nil {
+			t.Fatalf("read the command's stdout: %v (got %q)", rerr, announced.String())
+		}
 	}
-	if d := time.Since(start); d > 5*time.Second {
-		t.Errorf("took %v; a corrupted stream should fail fast via ctx, not hang", d)
+	relay <- syscall.SIGTERM
+
+	select {
+	case r := <-done:
+		if r.err != nil {
+			t.Fatalf("RunCommand: %v", r.err)
+		}
+		if r.code != 42 {
+			t.Errorf("exit = %d, want 42 from the trap", r.code)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("RunCommand did not return; the relayed signal never reached the command")
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Errorf("took %v; a signal that reaches the command ends it promptly", d)
 	}
 }

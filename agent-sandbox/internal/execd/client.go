@@ -49,15 +49,33 @@ type RunOptions struct {
 	Signals <-chan syscall.Signal
 }
 
-// RunCommand sends one command line to execd and streams its output back.
+// RunCommand sends one command line to execd and returns its exit status.
+//
+// The command runs on stdio: those three files are passed to execd over the
+// socket and the command writes through them directly, so nothing of the
+// command's output travels on this connection. All three must be real files —
+// a caller with no input to send opens os.DevNull — because Stdio has no
+// branch for an absent one.
+//
+// This connection carries what is left: the request, a signal the caller
+// forwards, and the exit status. It is also the request's lifeline — dropping
+// it is how execd learns the caller is gone — which is why it stays open for
+// the whole call even though no bytes of the command flow on it.
 func (c *Client) RunCommand(ctx context.Context, command string,
-	stdin io.Reader, stdout, stderr io.Writer, opts RunOptions) (int, error) {
+	stdio Stdio, opts RunOptions) (int, error) {
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", c.sockPath)
 	if err != nil {
 		return 0, fmt.Errorf("%w: %v", ErrExecdUnavailable, err)
 	}
 	defer conn.Close()
+	// Descriptors travel on a SCM_RIGHTS control message, which only a unix
+	// socket carries. Dialing "unix" always yields one; this is the assertion
+	// rather than the possibility.
+	uc, ok := conn.(*net.UnixConn)
+	if !ok {
+		return 0, fmt.Errorf("execd: %s is not a unix socket connection", c.sockPath)
+	}
 
 	// Cancel the in-flight command by closing the connection; the server sees
 	// EOF and tears the child down with it.
@@ -71,10 +89,16 @@ func (c *Client) RunCommand(ctx context.Context, command string,
 		}
 	}()
 
+	// Before the request, because execd refuses a request that arrives without
+	// descriptors: sending them first is what makes a mismatched pair one
+	// refusal instead of a half-started request.
+	if err := SendStdio(uc, stdio); err != nil {
+		return 0, err
+	}
+
 	req := Request{
 		Command:         command,
 		Cwd:             workingDir(),
-		WithStdin:       stdin != nil,
 		ProtocolVersion: ProtocolVersion,
 		TimeoutMs:       opts.TimeoutMs,
 	}
@@ -82,22 +106,7 @@ func (c *Client) RunCommand(ctx context.Context, command string,
 		return 0, err
 	}
 
-	// cw serializes every frame this client writes to conn. WriteFrame issues
-	// a header Write followed by a payload Write for a non-empty payload; it
-	// is not atomic. The stdin pump and the signal forwarder below both write
-	// frames from their own goroutines, so without a shared lock a signal
-	// frame could land between a stdin frame's header and payload writes.
-	// The server trusts the declared length and would read the signal
-	// frame's bytes as stdin payload, desyncing the whole stream for the
-	// rest of the request — exactly the case where someone interrupts a
-	// command that is still streaming input. cw is the client-side
-	// counterpart of the server's frameWriter, which serializes its own
-	// concurrent frame writes the same way.
 	cw := &connWriter{c: conn}
-
-	if stdin != nil {
-		go pumpStdinTo(cw, stdin)
-	}
 
 	// The forwarder is scoped to this request: it exits via done (closed by
 	// the deferred close above) as soon as RunCommand returns, and it never
@@ -142,53 +151,29 @@ func (c *Client) RunCommand(ctx context.Context, command string,
 			return 0, err
 		}
 		switch f.Channel {
-		case ChanStdout:
-			if _, werr := stdout.Write(f.Payload); werr != nil {
-				return 0, fmt.Errorf("execd: write stdout: %w", werr)
-			}
-		case ChanStderr:
-			if _, werr := stderr.Write(f.Payload); werr != nil {
-				return 0, fmt.Errorf("execd: write stderr: %w", werr)
-			}
 		case ChanExit:
 			return f.ExitCode(), nil
 		case ChanError:
 			return 0, fmt.Errorf("execd: %s", f.Payload)
+		default:
+			// The direction rule, from this side. Only an exit and an error
+			// are ever sent to a client now, so anything else is a peer that
+			// is not speaking this protocol — and reading it as data, or
+			// silently skipping it, would leave a desynced stream to surface
+			// later as something harder to read than this.
+			return 0, fmt.Errorf("execd: channel %d may not be sent by the server", f.Channel)
 		}
 	}
 }
 
-func pumpStdinTo(cw *connWriter, stdin io.Reader) {
-	buf := make([]byte, 32*1024)
-	for {
-		n, err := stdin.Read(buf)
-		if n > 0 {
-			if werr := cw.writeFrame(ChanStdin, buf[:n]); werr != nil {
-				return
-			}
-		}
-		if err != nil {
-			cw.writeFrame(ChanStdinClose, nil)
-			return
-		}
-	}
-}
-
-// connWriter serializes concurrent frame writes onto the one connection a
-// request uses. It is the client-side counterpart of the server's
-// frameWriter (server.go), which exists for the same reason: two goroutines
-// — here, the stdin pump and the signal forwarder — must not interleave
-// their writes to the same net.Conn, since a partially written frame would
-// desync the peer's read of the whole stream.
+// connWriter owns every frame this client writes. Since stdio became
+// descriptors there is one writer left — signal forwarding — so the mutex is
+// uncontended today. It stays because the rule it encodes is what keeps a
+// second writer from interleaving a partial frame onto the wire, which is a
+// defect that reads as a corrupted stream rather than as a race.
 type connWriter struct {
 	mu sync.Mutex
 	c  net.Conn
-}
-
-func (cw *connWriter) writeFrame(ch Channel, payload []byte) error {
-	cw.mu.Lock()
-	defer cw.mu.Unlock()
-	return WriteFrame(cw.c, ch, payload)
 }
 
 func (cw *connWriter) writeSignal(sig syscall.Signal) error {
@@ -208,8 +193,8 @@ func workingDir() string {
 // CommandRunner executes one command line inside the sandbox. The execd client
 // is the production implementation; tests substitute their own.
 type CommandRunner interface {
-	RunCommand(ctx context.Context, command string, stdin io.Reader,
-		stdout, stderr io.Writer, opts RunOptions) (int, error)
+	RunCommand(ctx context.Context, command string, stdio Stdio,
+		opts RunOptions) (int, error)
 }
 
 // SandboxNotRunningHint is the actionable message shown when execd is not

@@ -658,3 +658,52 @@ func TestServerClosesItsCopiesWhenTheRequestEnds(t *testing.T) {
 		t.Fatal("no EOF: execd leaked its copy of the passed descriptor")
 	}
 }
+
+// TestServerRefusesARequestThatArrivesWithNoDescriptors is the old-client /
+// new-server half of the structural mismatch detection, driven through a real
+// server rather than through RecvStdio alone.
+//
+// That detection is the entire argument for deleting Request.ProtocolVersion:
+// the field existed because encoding/json drops unknown fields, so an older
+// execd would silently ignore a newer field — running a command with no
+// timeout at all. It is droppable only because this protocol's first move is a
+// descriptor handshake an older binary can neither send nor read, and a
+// mismatched pair is reachable here: the launcher starts execd from its own
+// absolute path while the sandboxed client resolves agent-sandbox through
+// PATH, so rebuilding mid-session produces exactly this pair.
+//
+// An old client's first move is the request itself, which is what this sends:
+// dial, write a request with no control message attached. RecvStdio's own
+// tests cover the same rejection over a socketpair; this one proves the server
+// applies it, turns it into an error frame, and that the frame carries the
+// remedy — restart the session — rather than a protocol complaint the reader
+// cannot act on.
+func TestServerRefusesARequestThatArrivesWithNoDescriptors(t *testing.T) {
+	sock := startTestServer(t, &echoExecutor{})
+	conn, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatalf("Dial() error = %v", err)
+	}
+	t.Cleanup(func() { conn.Close() })
+
+	// Deliberately not dialWithStdio: sending no descriptors is the case.
+	if err := execd.WriteRequest(conn, execd.Request{
+		Command: "true", Cwd: "/tmp",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := execd.ReadFrame(conn)
+	if err != nil {
+		t.Fatalf("read the server's reply: %v", err)
+	}
+	if f.Channel != execd.ChanError {
+		t.Fatalf("channel = %d, want ChanError (%d): the server served a "+
+			"request that arrived without descriptors", f.Channel, execd.ChanError)
+	}
+	if !strings.Contains(string(f.Payload), "restart the session") {
+		t.Errorf("payload = %q, want it to tell the reader to restart the "+
+			"session; a mismatched binary pair is the cause and that is the "+
+			"only remedy", f.Payload)
+	}
+}

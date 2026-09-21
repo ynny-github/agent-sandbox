@@ -20,8 +20,20 @@
       "go_runtime",       // capability: go
       "python_runtime",   // capability: python
       "node_runtime",     // capability: node
-      "rust_runtime",     // capability: rust
       "mise_manager"      // capability: mise (read side; env vars below)
+      // rust_runtime is deliberately NOT included. It grants read over all of
+      // ~/.cargo (`nono profile groups rust_runtime`), publish token included,
+      // and the floor is what every undeclared command now runs at — so that
+      // group put a secret exactly where the scope rule in command_policies
+      // below says no secret may be. Measured before removing it: a floor
+      // `cat ~/.cargo/credentials.toml` printed the token; after, it is
+      // refused. The two ~/.cargo lines under filesystem.allow below keep
+      // cargo's caches reachable without it. (Measured either side of the
+      // change: `cargo --version` fails identically on this host both ways —
+      // this repository does not use rust, so nothing regressed.) Add
+      // ~/.rustup, or a further ~/.cargo subdirectory, by name if a rust
+      // project ever needs one; do not re-include the group.
+      //
       // dart, flutter and bashrc have no nono group — they spell out their
       // paths in filesystem below. docker and ssh have no nono group
       // either, but neither spells its paths out in filesystem any more:
@@ -41,6 +53,12 @@
 
       // -- capability: go   (groups are read-only, so the caches are named here)
       "~/go/pkg/mod",
+      "~/go/pkg/sumdb",                        // NOT from the catalog: carried down from the deleted "go" command
+                                               // entry, which granted it. sum.golang.org's client caches signed
+                                               // tree data here, outside ~/go/pkg/mod, and a module fetch without
+                                               // it downloads the module and then fails writing this cache.
+                                               // Nothing in this repository's current dependency set exercises it
+                                               // — every module is already cached — but a dependency bump would.
       "$XDG_CACHE_HOME/go-build",              // catalog perOSAllow.linux; darwin uses ~/Library/Caches/go-build
 
       // -- capability: python
@@ -55,10 +73,12 @@
       // -- capability: rust
       "~/.cargo/registry",
       "~/.cargo/git",
-      // NOTE: rust_runtime grants all of ~/.cargo, publish token included, so
-      // a command run through execd can read it. There is no deny layer on this
-      // side (or the agent's) that would hide it — this file is the only thing
-      // that decides what a command run through execd may read.
+      // NOTE: these two lines are the whole of ~/.cargo that is reachable now.
+      // rust_runtime, which used to grant all of it, is deliberately out of
+      // groups.include above — see the note there. There is no deny layer on
+      // this side (or the agent's) that would hide anything: this file is the
+      // only thing that decides what a command run through execd may read,
+      // which is why a grant's width is the whole of its security argument.
 
       // -- capability: dart
       "~/.pub-cache",
@@ -69,12 +89,19 @@
       // this file alone.
 
       // -- capability: flutter
-      "~/.config/flutter",
-      "~/.local/share/mise/http-tarballs"
-      // NOTE: this is a WRITE grant over every mise-installed binary, including
-      // agent-sandbox itself. doctor's "execd binary is not writable" check will
-      // fail while this line is present. Drop the flutter capability unless a
-      // project actually needs it.
+      "~/.config/flutter"
+      // NOTE: "~/.local/share/mise/http-tarballs" used to sit here as the
+      // flutter capability's second line. Removed: it is a WRITE grant over
+      // the archives mise later unpacks into toolchains, which makes it a
+      // poisoning route into a future `mise install`, and the floor is now
+      // where every undeclared command runs — measured, a floor shell could
+      // write there. What this note used to claim, that the grant reaches
+      // "every mise-installed binary, including agent-sandbox itself", is
+      // wrong and was never measured: agent-sandbox lives under
+      // ~/.local/share/mise/installs/go/<ver>/bin, which that line did not
+      // cover, and a floor write into installs/ was refused both before and
+      // after. Restore the line only if a project actually builds flutter,
+      // and say so here when you do.
     ],
 
     "read": [
@@ -92,9 +119,10 @@
       "~/.bashrc",
       "/etc/bashrc",
       "/etc/bash.bashrc"
-      // NOTE: bash and sh are declared commands now, but a floor read_file
-      // grant does not propagate into their child sandboxes, so nothing here
-      // reads these. Carried only because the capability defines them.
+      // NOTE: these are live again. While bash and sh were declared commands,
+      // a floor read_file grant did not propagate into their child sandboxes
+      // and so nothing read them; now that both run at the floor, a shell
+      // started through execd reads them like any other floor file.
     ],
 
     "allow_file": [
@@ -188,50 +216,131 @@
     ]
   },
 
-  // The hole this is carried for: Tool Sandbox's child sandboxes carry NO
-  // AF_UNIX mediation at all on this host's nono, so any declared command's
-  // child can speak to host unix sockets, docker.sock included, which is
-  // root-equivalent. Measured on nono 0.74.0: the FLOOR mediates it —
-  // `curl -s --unix-socket /var/run/docker.sock http://localhost/version`,
-  // run at the floor, is refused ("no matching unix_socket capability",
-  // exit 7) — but the identical curl, run through `bash -c` or `sh -c`
-  // (both declared commands below, neither one named docker), reaches the
-  // daemon and prints its version JSON. Not about the `docker` name: a raw
-  // python3 AF_UNIX connect to the same socket from inside `bash`, no
-  // docker binary involved anywhere, reaches it too. `bash -c 'docker ps'`
-  // is already refused by can_use — that is a different, and much
-  // narrower, guarantee than "the socket is gated."
+  // The hole this WAS carried for, and why it is no longer open: Tool
+  // Sandbox's child sandboxes carry NO AF_UNIX mediation at all on this
+  // host's nono, so any declared command whose sandbox can run arbitrary
+  // code reaches host unix sockets the floor refuses — /var/run/docker.sock
+  // among them, which is root-equivalent. Measured on nono 0.74.0, while
+  // bash, sh and go were still declared: the FLOOR refuses
+  // `curl -s --unix-socket /var/run/docker.sock http://localhost/version`
+  // ("no matching unix_socket capability", exit 7), but the identical curl
+  // through `bash -c` or `sh -c` got the daemon's version JSON, and so did
+  // a raw AF_UNIX connect from a Go program under `go run` — no docker
+  // binary involved anywhere, and `bash -c 'docker ps'` refused by can_use
+  // the whole time, which was always a much narrower guarantee than "the
+  // socket is gated". Dropping those three entries (see the scope rule in
+  // command_policies below) is what closed it: with no arbitrary-code
+  // command declared, both routes are refused, 3/3 each.
+  //
+  // That closure does NOT come from the key below, and the key is still
+  // inert here. Measured, 3/3 each side: with this whole "linux" object
+  // deleted, the floor refuses that same curl exactly as it does with the
+  // object present. What refuses it is the floor granting no unix_socket
+  // capability at all, not this switch.
   //
   // "af_unix_mediation": "pathname" is nono's session-level switch for
   // AF_UNIX mediation, default Off. It is session-wide by construction, not
   // per-command: a command policy's own child sandbox ("sandbox" object
-  // under command_policies.commands above) has no connect-side field of
+  // under command_policies.commands below) has no connect-side field of
   // its own to express this — nono's CommandSandboxConfig carries only
   // unix_socket_bind (a bind grant, not a connect gate), and only since
-  // nono 0.76.0 (PR #1780). On 0.74.0, the child schema does not have that
+  // nono 0.76.0 (PR #1780). On 0.74.0 the child schema does not have that
   // field at all, so there is no per-command way to ask for connect-side
-  // mediation even if this switch is flipped on.
+  // mediation even if this switch is flipped on. nono 0.77.0 builds on this
+  // host but cannot start Tool Sandbox at all on NixOS ("failed to resolve
+  // ELF dependency 'libgcc_s.so.1' for .../shims/bash"); tmp/nono-nixos-elf-
+  // fix.patch applies cleanly to 0.77.0 and is correctly wired in, and even
+  // so no longer fixes that failure. And 0.77.0's own child schema still
+  // only has unix_socket_bind — no connect side — so a per-child connect
+  // rule remains inexpressible there too.
   //
-  // Consequently: on this host, TODAY, with nono 0.74.0, the hole above is
-  // STILL OPEN with this key present. Measured, 3/3 runs: with this line
-  // and the matching filesystem.unix_socket_dir_bind grant above both
-  // applied, `bash -c '<the curl above>'` still reaches the daemon and
-  // prints its version JSON, unchanged from before this key existed. This
-  // key is carried for the nono version this repository intends to move
-  // to, on the premise that a session-level switch plus a future
-  // connect-side child field closes it there — that outcome is NOT
-  // verified here. nono 0.77.0 builds on this host but cannot start Tool
-  // Sandbox at all on NixOS ("failed to resolve ELF dependency
-  // 'libgcc_s.so.1' for .../shims/bash"); tmp/nono-nixos-elf-fix.patch
-  // applies cleanly to 0.77.0 and is correctly wired in, and even so no
-  // longer fixes that failure. And 0.77.0's own child schema still only
-  // has unix_socket_bind — no connect side — so a per-child connect rule
-  // remains inexpressible there too. Do not read this key's presence as a
-  // claim that upgrading nono will close the hole; it states the mechanism
-  // and carries it forward, nothing more.
+  // The key is therefore carried, not relied on: it states the mechanism,
+  // and it is the thing that would start mattering the moment anyone
+  // declares an arbitrary-code command here again. Do not read its presence
+  // as the reason the socket is closed today — the short commands list is.
   "linux": { "af_unix_mediation": "pathname" },
 
   "command_policies": {
+    // SCOPE RULE for this block, and the reason it is this short: a command is
+    // declared below ONLY when it handles a secret. git (the global gitconfig
+    // and, through the ssh chain, the signing/push key), ssh (~/.ssh/id_main)
+    // and docker (a root-equivalent daemon socket) are the whole list. Every
+    // other command — the shells, the toolchains, everything an agent actually
+    // types — is NOT declared, and therefore runs at this profile's own floor.
+    //
+    // That is the boundary, and it holds because the floor holds: a command
+    // that is not declared gets the session's grants and nothing more, and the
+    // secrets are not on the floor (`nono run --profile ./command-profile.json
+    // -- cat ~/.ssh/id_main` and the same for ~/.gitconfig are both refused,
+    // measured). Do NOT reason the other way round: a DECLARED command's edge
+    // is not clamped by the floor and can grant a path the floor refuses —
+    // that asymmetry is exactly how ~/.ssh comes off the floor and stays
+    // reachable by ssh alone.
+    //
+    // bash, sh and go used to be declared here, as confinement entries rather
+    // than secret-handling ones. Removing them is what closed this profile's
+    // largest hole. Tool Sandbox child sandboxes carry NO AF_UNIX mediation on
+    // nono 0.74.0, so any declared command that can run arbitrary code reaches
+    // host unix sockets the floor refuses — including /var/run/docker.sock,
+    // which is root-equivalent. Measured, 3/3 each: with bash declared,
+    // `bash -c 'curl -s --unix-socket /var/run/docker.sock ...'` got the
+    // daemon's version JSON; with bash and sh removed but go still declared,
+    // `go run` on a program calling net.Dial("unix", "/var/run/docker.sock")
+    // still connected; with go removed too, both are refused (curl exit 7,
+    // Dial denied), because the floor grants no unix_socket capability and
+    // there is no longer a child sandbox that escapes the floor. NOT because
+    // of "linux": { "af_unix_mediation": "pathname" } above — that key is
+    // still inert here, measured both ways (see its own comment). The hole
+    // was never about which command was named: it was about any
+    // arbitrary-code child sandbox existing at all.
+    //
+    // What that traded away, stated plainly (this is the half that gets
+    // omitted): a shell at the floor now reaches the session's 14-host
+    // network.allow_domain list, where the old bash/sh entries had no network
+    // key at all; and because an undeclared caller resolves as the SESSION,
+    // a shell can now invoke git and docker, which the old can_use chain
+    // refused (`bash -c 'git status'` used to exit 126). docker being freely
+    // reachable from the session is a deliberate, separate decision — see its
+    // entry below — not something this change introduced.
+    //
+    // The Go toolchain's internal tools (compile, link, vet, ...) live off
+    // PATH under mise's install tree, and the non-empty "commands" object
+    // below activates Tool Sandbox, which rebuilds the SESSION's own execute
+    // grant from PATH's trusted directories alone. So dropping the "go" entry
+    // breaks the toolchain unless that grant is restored here: measured, with
+    // go undeclared and this field absent, `go build ./...` fails and `go vet`
+    // dies with "fork/exec .../pkg/tool/linux_amd64/vet: permission denied".
+    // With the two entries below, `go build`, `go vet` and `go run` all pass
+    // through execd — `go run` on a cold AND a warm build cache, which the
+    // old "go" entry did not manage (its exec_paths reached /tmp but not
+    // $XDG_CACHE_HOME/go-build, so a second `go run` of the same program died
+    // at "fork/exec ~/.cache/go-build/.../main: permission denied"). The Go
+    // test suite is green outside the sandbox before and after this change;
+    // `go test ./...` run THROUGH execd fails either way and always has —
+    // those tests spawn processes and bind sockets — so it is not a signal
+    // to read here.
+    //
+    // Three measured properties of this field, none of them obvious:
+    //   - It does NOT expand "~" or "$HOME". A "$HOME/..." entry is refused at
+    //     startup with "command_policies.executable_dirs entry '$HOME/...' is
+    //     not readable". Literal absolute paths only, so this field is the one
+    //     host-specific thing in this file.
+    //   - It is NOT recursive. Pointing it at ~/.local/share/mise changes
+    //     nothing; the directory holding the binaries must be named exactly.
+    //   - A missing entry REFUSES TO START the session. That is the opposite
+    //     of exec_paths (silently skipped) and of a stale "executable" pin
+    //     (silently un-mediates the command) — here the failure is loud, which
+    //     is why pinning a path is acceptable at all.
+    // The version component is mise's own minor symlink
+    // (installs/go/1.25 -> ./1.25.14), so patch bumps pass straight through;
+    // it pairs with go = "1.25" in .mise.toml, and raising that minor means
+    // editing both. `agent-sandbox doctor` checks these paths still exist for
+    // the same reason it checks git's and docker's exec_paths.
+    "executable_dirs": [
+      "/home/yn/.local/share/mise/installs/go/1.25/pkg/tool/linux_amd64",
+      "/home/yn/.local/share/mise/installs/go/1.25/bin"
+    ],
+
     "commands": {
       // DO NOT shorten "from": {"session": …} to the "sandbox" shorthand. nono
       // runs both identically, but `nono why --profile <this> --command git`
@@ -374,192 +483,6 @@
         }
       },
 
-      // Confined shell for the session: arbitrary tools may run inside this
-      // sandbox, reaching $WORKDIR, the nix store, the system path, and
-      // mise-installed toolchains (go, python, node, ...) — nothing else,
-      // with no network. "session": "deny" is deliberately NOT set here,
-      // unlike ssh above — the session is the intended caller, not one to be
-      // blocked. NOT reachable from git (see the git entry's comment above)
-      // — git cannot exec a hook at all, so a from.git edge here would be
-      // dead weight.
-      //
-      // can_use: ["go"] plus the matching command_policies.commands.go.from.bash
-      // edge below are what let `go version`/`go build`/`go test` run from
-      // inside this sandbox at all — now that go is itself a declared
-      // policy command (Tool Sandbox enforces the can_use chain even for a
-      // command that used to be reachable from anywhere on exec_paths).
-      // That edge is deliberately narrower than go's own from.session edge:
-      // no "network" key, same as this sandbox's own denial above — chaining
-      // through go from inside bash/sh must not become a side door around
-      // bash/sh's own no-network rule.
-      "bash": {
-        "can_use": ["go"],
-        "from": {
-          "session": { "sandbox": {
-            // /nix/store and /run/current-system/sw carry read AND exec
-            // grants, not just exec: without the matching fs_read entry,
-            // exec_paths alone does not let bash exec anything under a
-            // directory (measured: with /nix/store dropped from fs_read but
-            // left in exec_paths, `bash -c id` fails "Permission denied",
-            // exit 126). ~/.local/share/mise is the same read+exec pairing,
-            // needed because every toolchain this project uses (go, python,
-            // node, ...) is installed there, not under /nix/store. Written
-            // as "~" here: measured, "~" and "$HOME" both expand correctly
-            // in fs_read/fs_write/exec_paths (unlike nono's
-            // command_policies.executable_dirs field, which does not).
-            "fs_read":     ["$WORKDIR", "/nix/store", "/run/current-system/sw",
-                             "~/.local/share/mise"],
-            "fs_write":    ["$WORKDIR"],
-            "exec_paths":  ["/nix/store", "/run/current-system/sw",
-                             "~/.local/share/mise"],
-            "environment": { "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM"] }
-            // No "network" key at all. Its absence IS the denial — do not
-            // "helpfully" fill it in with allow_domain/allow_all. Measured:
-            // ~/.ssh/id_main and ~/.gitconfig are both denied from inside this
-            // sandbox, and outbound network is refused. Do NOT add
-            // ~/.config/mise here: tool binaries are in scope, mise's own
-            // configuration is not.
-          } }
-        }
-      },
-
-      // Confined shell for the session only — same shape as bash above,
-      // including the mise toolchain reach and the same from.go edge below
-      // for the same reason (go is a declared policy command now; nothing
-      // reaches it through a bare exec_paths grant anymore). NOT reachable
-      // from git: git cannot exec a hook at all (see the git entry's
-      // comment above), so there is no live caller edge for this to invoke
-      // git through, and no git.from.sh edge accepting it as a caller
-      // either.
-      "sh": {
-        "can_use": ["go"],
-        "from": {
-          "session": { "sandbox": {
-            // Same read+exec pairing as bash above, and the same reason:
-            // /nix/store and /run/current-system/sw need both fs_read and
-            // exec_paths to actually exec anything under them, and
-            // ~/.local/share/mise is where every mise-installed toolchain
-            // (go, python, node, ...) lives, not under /nix/store. Written
-            // as "~" here: measured, "~" and "$HOME" both expand correctly
-            // in fs_read/fs_write/exec_paths (unlike nono's
-            // command_policies.executable_dirs field, which does not).
-            "fs_read":     ["$WORKDIR", "/nix/store", "/run/current-system/sw",
-                             "~/.local/share/mise"],
-            "fs_write":    ["$WORKDIR"],
-            "exec_paths":  ["/nix/store", "/run/current-system/sw",
-                             "~/.local/share/mise"],
-            "environment": { "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM"] }
-            // No "network" key at all, same as bash above — absence is the
-            // denial, not an oversight. Do NOT add ~/.config/mise, same
-            // reasoning as bash above.
-          } }
-        }
-      },
-
-      // The Go toolchain's internal tools (compile, link, cover, ...) live off
-      // PATH, under mise's install tree, and activating Tool Sandbox at all
-      // (true the moment any command_policies.commands entry exists, which
-      // git/ssh/bash/sh above already ensure) rebuilds the session's own
-      // execute grant from PATH's trusted directories alone. Without a policy
-      // here, `go build ./...` dies with "fork/exec
-      // .../pkg/tool/linux_amd64/compile: permission denied" — measured, by
-      // temporarily removing this entry and rerunning the same command.
-      //
-      // This replaces command_policies.executable_dirs, which used to grant
-      // that same directory a different way and could not do this job:
-      // executable_dirs does not expand "~" (only a literal, host-specific
-      // path), and separately, nono refuses to treat a group/world-writable
-      // directory as executable at all, so /tmp — where `go test` compiles a
-      // binary and then execs it — could never have been added there. A
-      // per-command policy has neither restriction.
-      //
-      // Network: this "network" key is granted, listing proxy.golang.org
-      // and sum.golang.org — the only two hosts the Go toolchain itself
-      // ever contacts. But that list is not what enforces anything: a
-      // child's "network" key is an on/off switch for nono's own local
-      // proxy, and the proxy filters against the SESSION's own top-level
-      // network.allow_domain (14 hosts), not the two declared here — so
-      // this edge's real reach, once turned on, is the same 14-host set
-      // every other proxied edge in this profile reaches, not a narrower
-      // one (measured the same way as git's edge above: an unrelated
-      // domain substituted for the two below made no difference to
-      // whether proxy.golang.org itself was reachable, because it is
-      // already on the session's own list). Measured both ways with a
-      // module not already in ~/go/pkg/mod: with no "network" key, `go mod
-      // tidy` fails at DNS resolution ("dial udp ... socket: operation not
-      // permitted"); with this "network" key plus the six proxy env vars
-      // below, it succeeds, provided ~/go/pkg/sumdb is also writable
-      // (sum.golang.org's client caches signed tree data there, a
-      // directory `go mod`/`go get` write to even though it is not under
-      // ~/go/pkg/mod) — without it the fetch gets as far as downloading
-      // the module and then fails writing the sumdb cache. Chose to grant
-      // it: every module this repository currently depends on is already
-      // cached, so day-to-day `go build`/`go test` never exercise this,
-      // but a future dependency bump would need it. The child "network"
-      // key depends on the session's own top-level "network" block staying
-      // present — against a proxy-less session it fails at init with "no
-      // loopback proxy env was present" (measured).
-      //
-      // Caveat, stated plainly: a toolchain that compiles and immediately
-      // runs code is bounded only by what its own sandbox reaches — not by
-      // which other commands are declared. This one reaches $WORKDIR and
-      // /tmp with both write and exec, because `go test` needs exactly that
-      // to compile a binary and then run it, and it can write to
-      // ~/go/pkg/sumdb (used above) — the one capability this edge adds
-      // beyond the floor's own go_runtime/mise_manager groups, which do not
-      // grant it; low risk on its own (a signed checksum-database cache,
-      // and GOFLAGS/GONOSUM* are not in this edge's allow_vars), but real.
-      // The filesystem reach here is narrower than the session-wide floor
-      // access `go` had before this entry existed, even though the network
-      // reach is not, and the filesystem boundary is still the honest one:
-      // anything this sandbox can write into $WORKDIR or /tmp, it can also
-      // execute.
-      "go": {
-        "from": {
-          "session": { "sandbox": {
-            "fs_read":     ["$WORKDIR", "/nix/store", "/run/current-system/sw",
-                             "~/.local/share/mise", "~/go/pkg/mod",
-                             "~/go/pkg/sumdb", "$XDG_CACHE_HOME/go-build"],
-            "fs_write":    ["$WORKDIR", "/tmp", "~/go/pkg/mod",
-                             "~/go/pkg/sumdb", "$XDG_CACHE_HOME/go-build"],
-            "exec_paths":  ["~/.local/share/mise", "/tmp"],
-            "network":     { "allow_domain": ["proxy.golang.org", "sum.golang.org"] },
-            "environment": { "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM",
-                                             "MISE*", "__MISE*",
-                                             "http_proxy", "HTTP_PROXY", "https_proxy",
-                                             "HTTPS_PROXY", "no_proxy", "NO_PROXY"] }
-          } },
-          // bash and sh above declare can_use: ["go"] so `go version`/
-          // `go build`/`go test` work from inside either shell. Deliberately
-          // NOT the same sandbox as the session edge above: no "network" key
-          // here, matching bash/sh's own no-network design — a script run
-          // inside either shell must not gain module-proxy network access
-          // that the shell itself does not have. Same filesystem/exec_paths
-          // reach otherwise, so offline `go build`/`go test` behave the same
-          // whether invoked directly or from inside bash/sh.
-          "bash": { "sandbox": {
-            "fs_read":     ["$WORKDIR", "/nix/store", "/run/current-system/sw",
-                             "~/.local/share/mise", "~/go/pkg/mod",
-                             "~/go/pkg/sumdb", "$XDG_CACHE_HOME/go-build"],
-            "fs_write":    ["$WORKDIR", "/tmp", "~/go/pkg/mod",
-                             "~/go/pkg/sumdb", "$XDG_CACHE_HOME/go-build"],
-            "exec_paths":  ["~/.local/share/mise", "/tmp"],
-            "environment": { "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM",
-                                             "MISE*", "__MISE*"] }
-          } },
-          "sh": { "sandbox": {
-            "fs_read":     ["$WORKDIR", "/nix/store", "/run/current-system/sw",
-                             "~/.local/share/mise", "~/go/pkg/mod",
-                             "~/go/pkg/sumdb", "$XDG_CACHE_HOME/go-build"],
-            "fs_write":    ["$WORKDIR", "/tmp", "~/go/pkg/mod",
-                             "~/go/pkg/sumdb", "$XDG_CACHE_HOME/go-build"],
-            "exec_paths":  ["~/.local/share/mise", "/tmp"],
-            "environment": { "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM",
-                                             "MISE*", "__MISE*"] }
-          } }
-        }
-      },
-
       // The docker daemon is root-equivalent: `docker run -v /:/host` mounts
       // the entire host filesystem into a container the caller then owns.
       // This entry's filesystem grants do not, and cannot, bound what the
@@ -578,23 +501,26 @@
       // matching unix_socket capability", exit 7, both before and after
       // this entry existed. Measured.
       //
-      // But Tool Sandbox's child sandboxes carry NO unix-socket mediation
-      // AT ALL — this is not specific to docker's own entry, and this
-      // entry does not create it. The identical curl command, run through
-      // `bash -c` or `sh -c` (both already-declared commands, each able to
-      // exec `curl` off their own /nix/store or /run/current-system/sw
-      // exec_paths), reaches the daemon and gets a real response, with no
-      // filesystem.unix_socket grant on either entry. This gap predates
-      // this entry — it was introduced the moment bash/sh became declared
-      // commands, not by adding docker here — so do NOT read this entry as
-      // the thing gating daemon access: deleting or narrowing it would not
-      // close that route, and did not open it either. What this entry
-      // actually bounds is narrower and more honest: which command may run
-      // under the *name* docker, with exec_paths that reach the daemon
-      // directly by that name, without first going through bash/sh.
-      // bash/sh being able to exec curl (or any other socket-speaking
-      // binary) off their own exec_paths is part of that picture, and is a
-      // deliberate grant, not a leak of this one. Measured.
+      // This entry IS now the only route to the daemon, which it did not
+      // used to be — read it accordingly. Tool Sandbox's child sandboxes
+      // carry NO unix-socket mediation at all, so while bash, sh and go
+      // were declared, the identical curl through `bash -c` or `sh -c`, and
+      // a raw AF_UNIX connect from a Go program under `go run`, both
+      // reached the daemon with no filesystem.unix_socket grant anywhere.
+      // That gap was never about this entry — it opened the moment any
+      // arbitrary-code command was declared, and it closed when those three
+      // were removed (see the scope rule at the top of command_policies).
+      // Measured, 3/3: with only git, ssh and docker declared, the floor
+      // curl is refused (exit 7) and the Go Dial is denied.
+      //
+      // So the honest reading of this entry changed with that removal.
+      // Before, it bounded only which command could reach the daemon under
+      // the *name* docker while a side route stood open. Now nothing else
+      // reaches the daemon at all, and this entry is the single grant that
+      // does. Deleting it would close daemon access outright; keeping it is
+      // a deliberate decision to leave a root-equivalent capability
+      // reachable from the session, not an artefact. Nothing here inspects
+      // what is asked of docker — see the note below.
       //
       // ~/.docker moved here from the floor's own filesystem.read (it used
       // to sit there next to `~/.orbstack`; neither path exists on this

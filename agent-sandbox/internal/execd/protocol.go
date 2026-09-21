@@ -13,6 +13,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
+	"os"
 	"syscall"
 )
 
@@ -223,4 +225,108 @@ func ReadFrame(r io.Reader) (Frame, error) {
 		return Frame{}, fmt.Errorf("execd: read frame payload: %w", err)
 	}
 	return f, nil
+}
+
+// Stdio is the trio of descriptors a request runs on. It is passed across the
+// socket rather than relayed byte by byte: the command writes to the caller's
+// own files, so there is nothing to frame, nothing to drain, and no EOF for
+// this side to wait on.
+//
+// All three are always present. A caller with no stdin opens /dev/null and
+// passes that; substituting one here would put a branch in the one place the
+// design wants none.
+type Stdio struct {
+	In, Out, Err *os.File
+}
+
+func (s Stdio) files() [3]*os.File { return [3]*os.File{s.In, s.Out, s.Err} }
+
+// Close closes every file in the trio. The receiver owns what it received and
+// must call this when the request ends: while execd holds a copy, a caller
+// that passed the write end of a pipe never sees EOF.
+func (s Stdio) Close() {
+	for _, f := range s.files() {
+		if f != nil {
+			f.Close()
+		}
+	}
+}
+
+// stdioHandshake is the one-byte message the descriptors ride on. A control
+// message is delivered with the first byte of the range it was attached to, so
+// a receiver that reads exactly one byte needs no reasoning about short reads.
+// Attaching the descriptors to the request's own length prefix would bring that
+// reasoning back for nothing.
+const stdioHandshake = 0x01
+
+// SendStdio passes the trio to the peer. It must be called before the request:
+// a request that arrives without descriptors is refused.
+func SendStdio(uc *net.UnixConn, s Stdio) error {
+	fs := s.files()
+	fds := make([]int, 0, len(fs))
+	for i, f := range fs {
+		if f == nil {
+			return fmt.Errorf("execd: stdio[%d] is nil; pass a real file (open %s when there is none)", i, os.DevNull)
+		}
+		fds = append(fds, int(f.Fd()))
+	}
+	if _, _, err := uc.WriteMsgUnix([]byte{stdioHandshake}, syscall.UnixRights(fds...), nil); err != nil {
+		return fmt.Errorf("execd: send stdio: %w", err)
+	}
+	return nil
+}
+
+// RecvStdio reads the handshake and returns the three descriptors it carried.
+func RecvStdio(uc *net.UnixConn) (Stdio, error) {
+	buf := make([]byte, 1)
+	oob := make([]byte, syscall.CmsgSpace(3*4))
+	n, oobn, _, _, err := uc.ReadMsgUnix(buf, oob)
+	if err != nil {
+		return Stdio{}, fmt.Errorf("execd: receive stdio: %w", err)
+	}
+	// The message that should carry the descriptors is one fixed byte. Anything
+	// else means the peer is not speaking this protocol at all — which is what
+	// an older agent-sandbox binary looks like from here, since its first move
+	// is the request itself.
+	noFDs := fmt.Errorf("execd: no file descriptors arrived with the request. " +
+		"This usually means the agent-sandbox binary sending it is older than the " +
+		"execd serving it — restart the session so both come from the same build")
+	if n != 1 || buf[0] != stdioHandshake || oobn == 0 {
+		return Stdio{}, noFDs
+	}
+	// ParseSocketControlMessage is all-or-nothing: on error it discards
+	// anything it already decoded, so there is never a partially-decoded
+	// message this call could leak. Nothing arrived that this function can
+	// identify, so there is nothing to close.
+	scms, err := syscall.ParseSocketControlMessage(oob[:oobn])
+	if err != nil || len(scms) == 0 {
+		return Stdio{}, noFDs
+	}
+	// A peer inside the sandbox controls these bytes; do not assume a single
+	// well-formed message. Decode every control message the kernel handed
+	// back, and if a later one fails to decode, close whatever earlier ones
+	// already gave us real, kernel-installed descriptors for — otherwise a
+	// crafted trailing message would leak them.
+	var fds []int
+	for i := range scms {
+		got, err := syscall.ParseUnixRights(&scms[i])
+		if err != nil {
+			for _, fd := range fds {
+				syscall.Close(fd)
+			}
+			return Stdio{}, fmt.Errorf("execd: decode stdio: %w", err)
+		}
+		fds = append(fds, got...)
+	}
+	if len(fds) != 3 {
+		for _, fd := range fds {
+			syscall.Close(fd)
+		}
+		return Stdio{}, fmt.Errorf("execd: %d descriptors arrived, want exactly 3 (stdin, stdout, stderr)", len(fds))
+	}
+	return Stdio{
+		In:  os.NewFile(uintptr(fds[0]), "stdin"),
+		Out: os.NewFile(uintptr(fds[1]), "stdout"),
+		Err: os.NewFile(uintptr(fds[2]), "stderr"),
+	}, nil
 }

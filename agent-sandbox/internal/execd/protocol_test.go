@@ -4,6 +4,10 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"net"
+	"os"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -149,5 +153,180 @@ func TestSignalFrameRejectsOtherSignals(t *testing.T) {
 	f := execd.Frame{Channel: execd.ChanSignal, Payload: []byte{byte(syscall.SIGUSR1)}}
 	if _, ok := f.Signal(); ok {
 		t.Error("Signal() accepted SIGUSR1; want it refused")
+	}
+}
+
+// socketPair returns the two ends of a connected unix stream socket, which is
+// what lets these tests exercise descriptor passing without a listener.
+func socketPair(t *testing.T) (*net.UnixConn, *net.UnixConn) {
+	t.Helper()
+	fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := func(fd int) *net.UnixConn {
+		f := os.NewFile(uintptr(fd), "socketpair")
+		defer f.Close()
+		c, err := net.FileConn(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		uc, ok := c.(*net.UnixConn)
+		if !ok {
+			t.Fatalf("FileConn returned %T, want *net.UnixConn", c)
+		}
+		t.Cleanup(func() { uc.Close() })
+		return uc
+	}
+	return conn(fds[0]), conn(fds[1])
+}
+
+func TestStdioRoundTripsOverASocket(t *testing.T) {
+	a, b := socketPair(t)
+	path := filepath.Join(t.TempDir(), "out")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	devnull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer devnull.Close()
+
+	// Buffered so the goroutine never blocks handing back its result, and
+	// checked below: silently discarding a SendStdio failure would leave
+	// RecvStdio blocked in ReadMsgUnix with nothing telling us why, which is
+	// the worst failure mode a test can have.
+	sendErr := make(chan error, 1)
+	go func() { sendErr <- execd.SendStdio(a, execd.Stdio{In: devnull, Out: f, Err: f}) }()
+
+	got, err := execd.RecvStdio(b)
+	if err != nil {
+		t.Fatalf("RecvStdio: %v", err)
+	}
+	defer got.Close()
+	if err := <-sendErr; err != nil {
+		t.Fatalf("SendStdio: %v", err)
+	}
+	// The received files are different descriptors for the same open files, so
+	// identity cannot be asserted — what must hold is that writing through the
+	// received end reaches the same file.
+	if _, err := got.Out.WriteString("through the passed descriptor\n"); err != nil {
+		t.Fatal(err)
+	}
+	b2, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b2), "through the passed descriptor") {
+		t.Errorf("file = %q, want the bytes written through the received descriptor", b2)
+	}
+}
+
+func TestRecvStdioRefusesARequestWithNoDescriptors(t *testing.T) {
+	a, b := socketPair(t)
+	// A peer that speaks the old protocol writes the request straight away,
+	// with no control message. Buffered and checked below for the same reason
+	// as TestStdioRoundTripsOverASocket: a silently discarded write failure
+	// here would otherwise leave RecvStdio's failure indistinguishable from a
+	// hang.
+	sendErr := make(chan error, 1)
+	go func() { sendErr <- execd.WriteRequest(a, execd.Request{Command: "true", Cwd: "/tmp"}) }()
+
+	_, err := execd.RecvStdio(b)
+	if err == nil {
+		t.Fatal("RecvStdio accepted a message carrying no descriptors")
+	}
+	if !strings.Contains(err.Error(), "restart the session") {
+		t.Errorf("error = %q, want it to name the likely cause and the remedy", err)
+	}
+	if err := <-sendErr; err != nil {
+		t.Fatalf("WriteRequest: %v", err)
+	}
+}
+
+func TestSendStdioRefusesANilFile(t *testing.T) {
+	a, _ := socketPair(t)
+	f, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := execd.SendStdio(a, execd.Stdio{In: nil, Out: f, Err: f}); err == nil {
+		t.Error("SendStdio accepted a nil file; the caller must pass a real one")
+	}
+}
+
+// TestStdioCloseIsSafeOnAZeroOrPartialValue exercises the shape a failed
+// RecvStdio hands back: a zero Stdio, or (in principle) one where only some
+// fields ended up populated. Close must not panic on either.
+func TestStdioCloseIsSafeOnAZeroOrPartialValue(t *testing.T) {
+	execd.Stdio{}.Close()
+
+	f, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	execd.Stdio{Out: f}.Close()
+}
+
+// openFDCount reports how many descriptors this process currently has open,
+// for leak detection around RecvStdio's error paths. It skips on platforms
+// without /proc rather than failing, since it's a diagnostic aid, not the
+// behaviour under test.
+func openFDCount(t *testing.T) int {
+	t.Helper()
+	entries, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Skip("no /proc/self/fd on this platform; skipping leak check")
+	}
+	return len(entries)
+}
+
+// TestRecvStdioClosesDescriptorsOnWrongCount automates the empirical check
+// the reviewer ran by hand against a71fbcb (sending 4 and 20 descriptors into
+// the 3-slot handshake and confirming none leaked): a peer that hands over
+// the wrong number of descriptors must not cost this process any descriptors
+// once RecvStdio has returned its error.
+func TestRecvStdioClosesDescriptorsOnWrongCount(t *testing.T) {
+	a, b := socketPair(t)
+	d1, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d1.Close()
+	d2, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d2.Close()
+
+	// Snapshot after setup (the socket pair and the sender's own two files
+	// are all open on this side already) so the only thing the before/after
+	// delta can attribute to RecvStdio is the receiver-side descriptors the
+	// kernel installs for the control message below.
+	before := openFDCount(t)
+
+	sendErr := make(chan error, 1)
+	go func() {
+		_, _, err := a.WriteMsgUnix([]byte{1}, syscall.UnixRights(int(d1.Fd()), int(d2.Fd())), nil)
+		sendErr <- err
+	}()
+
+	_, err = execd.RecvStdio(b)
+	if err == nil {
+		t.Fatal("RecvStdio accepted a request with the wrong descriptor count")
+	}
+	if !strings.Contains(err.Error(), "2 descriptors arrived") {
+		t.Errorf("error = %q, want it to name the count that arrived", err)
+	}
+	if err := <-sendErr; err != nil {
+		t.Fatalf("WriteMsgUnix: %v", err)
+	}
+
+	if after := openFDCount(t); after != before {
+		t.Errorf("open descriptor count = %d after RecvStdio's error, want %d (no leak)", after, before)
 	}
 }

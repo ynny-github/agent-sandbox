@@ -302,9 +302,8 @@ func TestExecuteAcceptsAnAbsoluteCwd(t *testing.T) {
 	errf, readErr := outFile(t)
 	code, err := e.Execute(context.Background(),
 		execd.Request{
-			Command:         "echo hi",
-			Cwd:             t.TempDir(),
-			ProtocolVersion: execd.ProtocolVersion,
+			Command: "echo hi",
+			Cwd:     t.TempDir(),
 		}, execd.Stdio{In: devNull(t), Out: out, Err: errf})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -327,9 +326,8 @@ func TestExecuteRejectsANonAbsoluteCwd(t *testing.T) {
 	for _, cwd := range []string{"", "relative/path", "./here"} {
 		_, err := e.Execute(context.Background(),
 			execd.Request{
-				Command:         "echo hi",
-				Cwd:             cwd,
-				ProtocolVersion: execd.ProtocolVersion,
+				Command: "echo hi",
+				Cwd:     cwd,
 			}, execd.Stdio{In: devNull(t), Out: nullOut(t), Err: nullOut(t)})
 		if err == nil {
 			t.Errorf("Execute() with Cwd=%q: error = nil, want a rejection", cwd)
@@ -350,10 +348,9 @@ func TestExecuteTimesOut(t *testing.T) {
 	errf, readErr := outFile(t)
 	start := time.Now()
 	code, err := e.Execute(context.Background(), execd.Request{
-		Command:         "sleep 30",
-		Cwd:             t.TempDir(),
-		TimeoutMs:       400,
-		ProtocolVersion: execd.ProtocolVersion,
+		Command:   "sleep 30",
+		Cwd:       t.TempDir(),
+		TimeoutMs: 400,
 	}, execd.Stdio{In: devNull(t), Out: nullOut(t), Err: errf})
 	if err != nil {
 		t.Fatalf("Execute = %v", err)

@@ -97,10 +97,9 @@ func (c *Client) RunCommand(ctx context.Context, command string,
 	}
 
 	req := Request{
-		Command:         command,
-		Cwd:             workingDir(),
-		ProtocolVersion: ProtocolVersion,
-		TimeoutMs:       opts.TimeoutMs,
+		Command:   command,
+		Cwd:       workingDir(),
+		TimeoutMs: opts.TimeoutMs,
 	}
 	if err := WriteRequest(conn, req); err != nil {
 		return 0, err
@@ -188,13 +187,6 @@ func workingDir() string {
 		return ""
 	}
 	return wd
-}
-
-// CommandRunner executes one command line inside the sandbox. The execd client
-// is the production implementation; tests substitute their own.
-type CommandRunner interface {
-	RunCommand(ctx context.Context, command string, stdio Stdio,
-		opts RunOptions) (int, error)
 }
 
 // SandboxNotRunningHint is the actionable message shown when execd is not

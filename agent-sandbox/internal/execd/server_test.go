@@ -215,9 +215,8 @@ func TestServerCancelsCommandOnClientDisconnect(t *testing.T) {
 	conn := dialWithStdio(t, sock, execd.Stdio{
 		In: devNull(t), Out: nullOut(t), Err: nullOut(t)})
 	if err := execd.WriteRequest(conn, execd.Request{
-		Command:         "sleep",
-		Cwd:             "/",
-		ProtocolVersion: execd.ProtocolVersion,
+		Command: "sleep",
+		Cwd:     "/",
 	}); err != nil {
 		t.Fatalf("WriteRequest() error = %v", err)
 	}
@@ -299,29 +298,6 @@ func TestServerReportsExitWhenStdinNeverCloses(t *testing.T) {
 	}
 }
 
-func TestServerRejectsUnknownProtocolVersion(t *testing.T) {
-	sock := startTestServer(t, &echoExecutor{})
-	conn := dialWithStdio(t, sock, execd.Stdio{
-		In: devNull(t), Out: nullOut(t), Err: nullOut(t)})
-	if err := execd.WriteRequest(conn, execd.Request{
-		Command:         "true",
-		Cwd:             "/tmp",
-		ProtocolVersion: execd.ProtocolVersion + 1,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	f, err := execd.ReadFrame(conn)
-	if err != nil {
-		t.Fatalf("read frame: %v", err)
-	}
-	if f.Channel != execd.ChanError {
-		t.Fatalf("channel = %d, want ChanError", f.Channel)
-	}
-	if !strings.Contains(string(f.Payload), "protocol version") {
-		t.Errorf("payload = %q, want it to name the protocol version", f.Payload)
-	}
-}
-
 // gatedExecutor reports when Execute has started and then blocks until the
 // test releases it. A direction rule can only be enforced while there is a
 // request to enforce it on: against an executor that returns at once, the exit
@@ -351,7 +327,7 @@ func TestServerRefusesAnOutboundChannelFromTheClient(t *testing.T) {
 	conn := dialWithStdio(t, sock, execd.Stdio{
 		In: devNull(t), Out: nullOut(t), Err: nullOut(t)})
 	if err := execd.WriteRequest(conn, execd.Request{
-		Command: "true", Cwd: "/tmp", ProtocolVersion: execd.ProtocolVersion,
+		Command: "true", Cwd: "/tmp",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -360,7 +336,9 @@ func TestServerRefusesAnOutboundChannelFromTheClient(t *testing.T) {
 	<-gated.started
 	defer close(gated.release)
 
-	if err := execd.WriteFrame(conn, execd.ChanStdout, []byte("not mine to send")); err != nil {
+	// ChanExit is a server-to-client channel; a client sending it is exactly
+	// the direction violation this test exists to catch.
+	if err := execd.WriteFrame(conn, execd.ChanExit, []byte("not mine to send")); err != nil {
 		t.Fatal(err)
 	}
 	for {
@@ -417,9 +395,8 @@ func TestServerForwardsSignalToTheCommand(t *testing.T) {
 	pw.Close()
 
 	if err := execd.WriteRequest(conn, execd.Request{
-		Command:         "sh -c 'trap \"exit 42\" TERM; echo ready; sleep 5941 & wait'",
-		Cwd:             t.TempDir(),
-		ProtocolVersion: execd.ProtocolVersion,
+		Command: "sh -c 'trap \"exit 42\" TERM; echo ready; sleep 5941 & wait'",
+		Cwd:     t.TempDir(),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -475,7 +452,7 @@ func TestServerRefusesASignalOutsideTheAllowList(t *testing.T) {
 	conn := dialWithStdio(t, sock, execd.Stdio{
 		In: devNull(t), Out: nullOut(t), Err: nullOut(t)})
 	if err := execd.WriteRequest(conn, execd.Request{
-		Command: "cat", Cwd: "/tmp", ProtocolVersion: execd.ProtocolVersion,
+		Command: "cat", Cwd: "/tmp",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -557,7 +534,7 @@ func TestServerRelaysASignalToAnExecutorThatWantsOne(t *testing.T) {
 	conn := dialWithStdio(t, sock, execd.Stdio{
 		In: devNull(t), Out: nullOut(t), Err: nullOut(t)})
 	if err := execd.WriteRequest(conn, execd.Request{
-		Command: "cat", Cwd: "/tmp", ProtocolVersion: execd.ProtocolVersion,
+		Command: "cat", Cwd: "/tmp",
 	}); err != nil {
 		t.Fatal(err)
 	}

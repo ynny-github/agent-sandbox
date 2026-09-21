@@ -1,11 +1,13 @@
 // Package execd carries command execution across the sandbox boundary. The
-// in-sandbox client sends a command line over a unix socket; the server, which
-// runs outside the agent's own sandbox, interprets the shell language itself
-// and streams the output back.
+// in-sandbox client sends a command line over a unix socket, along with its
+// own stdin, stdout and stderr descriptors; the server, which runs outside
+// the agent's own sandbox, interprets the shell language itself and the
+// command writes through those descriptors directly.
 //
-// The wire format is one request per connection, followed by length-prefixed
-// frames in both directions. Frames keep stdout and stderr separate so a
-// caller can route them independently.
+// The wire format is one request per connection: a descriptor handshake, the
+// request, and then length-prefixed frames in both directions for what is
+// left — a signal from the client, and a terminal exit or error from the
+// server.
 package execd
 
 import (
@@ -22,19 +24,16 @@ import (
 type Channel byte
 
 const (
-	ChanStdout Channel = 1
-	ChanStderr Channel = 2
-	ChanStdin  Channel = 3
-	ChanExit   Channel = 4
-	ChanError  Channel = 5
-	// ChanStdinClose signals end-of-input; a zero-length stdin frame would be
-	// ambiguous with "no bytes available yet".
-	ChanStdinClose Channel = 6
-	// ChanSignal carries a signal from the client to a running command. It is the
-	// only way to interrupt a command short of dropping the connection, which is a
-	// SIGKILL in effect.
+	ChanExit  Channel = 4
+	ChanError Channel = 5
+	// ChanSignal carries a signal from the client to a running command.
 	ChanSignal Channel = 7
 )
+
+// Channels 1, 2, 3 and 6 carried stdout, stderr, stdin and stdin-close before
+// descriptors were passed instead. Their numbers are retired rather than
+// reused: a number that meant two things across versions is a bug waiting in a
+// reader's head.
 
 // deliverableSignals is the set a client may send. It is an allow-list rather
 // than a range check because the number travels across a sandbox boundary: a
@@ -71,19 +70,6 @@ func (f Frame) Signal() (syscall.Signal, bool) {
 // allocate without limit. 1 MiB comfortably exceeds any realistic pipe read.
 const maxPayload = 1 << 20
 
-// ProtocolVersion is the wire contract this binary speaks. The server refuses
-// any other value rather than serving it on a best effort, because
-// encoding/json drops unknown fields: without this check an execd that predates
-// a request field would ignore it silently — a command asking for a timeout
-// would simply run without one. Client and server are the same binary, but the
-// launcher starts execd from its own path while the sandboxed client resolves
-// agent-sandbox through PATH, so a mismatched pair is reachable.
-//
-// It does not protect against an execd built before this constant existed:
-// that server has no check to run. What it does is make every later mismatch
-// loud.
-const ProtocolVersion = 1
-
 // Request is the first message on a connection: what to run and where.
 //
 // It carries a command *line*, not an argv. execd interprets the shell
@@ -96,6 +82,13 @@ const ProtocolVersion = 1
 // A request-supplied environment could not work — the agent's nono profile
 // strips those variables long before they could be reported — and must not
 // work, because the request originates inside the sandbox it would configure.
+//
+// Before adding a field here, check whether a mismatch on it would be caught
+// structurally. It is today only because this protocol's first move is a
+// descriptor handshake an older binary can neither send nor read; that is a
+// property of this protocol, not a general one. If a new field could be
+// dropped silently by a peer that does not know it, bring back a version field
+// with it.
 type Request struct {
 	Command string `json:"command"`
 	// Cwd is client-controlled: it comes straight from the sandboxed agent's
@@ -105,12 +98,6 @@ type Request struct {
 	// any particular root — see ShellExecutor.Execute for where that bound
 	// actually lives.
 	Cwd string `json:"cwd"`
-	// WithStdin is no longer read by either side and no longer set by the
-	// client: every request carries a stdin descriptor, so there is nothing
-	// for it to announce. It stays on the wire only until the retirement of
-	// the byte-relay fields it belongs with.
-	WithStdin       bool `json:"with_stdin"`
-	ProtocolVersion int  `json:"protocol_version"`
 	// TimeoutMs bounds the whole request. Zero means no bound: the caller's own
 	// timeout (the harness's, for an agent's command) is the only one.
 	TimeoutMs int `json:"timeout_ms"`

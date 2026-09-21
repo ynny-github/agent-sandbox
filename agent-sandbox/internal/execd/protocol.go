@@ -17,6 +17,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"runtime"
 	"syscall"
 )
 
@@ -261,7 +262,15 @@ func SendStdio(uc *net.UnixConn, s Stdio) error {
 		}
 		fds = append(fds, int(f.Fd()))
 	}
-	if _, _, err := uc.WriteMsgUnix([]byte{stdioHandshake}, syscall.UnixRights(fds...), nil); err != nil {
+	_, _, err := uc.WriteMsgUnix([]byte{stdioHandshake}, syscall.UnixRights(fds...), nil)
+	// The fds above are bare integers by the time the syscall runs, so nothing
+	// in the call keeps the *os.File values reachable. Every caller today holds
+	// its own references for longer than this, but the doc above asks callers
+	// for real files, not for their lifetime — so pin them here rather than
+	// depend on that, since a finalizer closing one mid-sendmsg would send a
+	// descriptor number that is no longer the caller's file.
+	runtime.KeepAlive(fs)
+	if err != nil {
 		return fmt.Errorf("execd: send stdio: %w", err)
 	}
 	return nil

@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/execd"
 )
 
 // ContextModeEnvVar names the variable context-mode reads to choose where
@@ -90,4 +92,68 @@ func contextModeEnabled() (bool, error) {
 			err, strings.TrimSpace(string(out)))
 	}
 	return ContextModeEnabledIn(out)
+}
+
+// contextModeProbeExpr is evaluated by node inside the agent's sandbox. The
+// separator is "|" rather than a space because Array.prototype.join renders an
+// absent variable as the empty string: space-joined, a stripped backend
+// variable and a socket-only line are the same text, and the error could not
+// say which value is missing.
+var contextModeProbeExpr = "[process.env." + ContextModeEnvVar +
+	", process.env." + execd.SocketEnvVar + "].join(\"|\")"
+
+// probeContextMode proves, before the agent is launched, that a context-mode
+// MCP server born in this sandbox would see the backend selection.
+//
+// It runs node — the binary the plugin manifest names — under the agent's own
+// profile, so it measures the environment the server is actually about to get:
+// same profile, same env filter, same parent. This is probeHook's rationale
+// applied to a second silent failure. Claude Code reports an MCP server that
+// cannot start as nothing but an absent tool, and context-mode reads an absent
+// variable as "local", so neither failure announces itself in a session.
+//
+// --allow-cwd is required because nono refuses working-directory access in
+// non-interactive mode, which is how this runs.
+func probeContextMode(profilePath string) error {
+	nonoPath, err := exec.LookPath("nono")
+	if err != nil {
+		return fmt.Errorf("nono not found in PATH: %w", err)
+	}
+	cmd := exec.Command(nonoPath, "wrap", "--silent", "--allow-cwd",
+		"--profile", profilePath, "--", "node", "-p", contextModeProbeExpr)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, runErr := cmd.Output()
+	if runErr != nil {
+		return fmt.Errorf("node could not run under %s: %v: %s\n"+
+			"context-mode's MCP server is `node <plugin>/start.mjs`, so the agent "+
+			"profile has to be able to execute node", profilePath, runErr,
+			strings.TrimSpace(stderr.String()))
+	}
+	return parseContextModeProbe(string(out))
+}
+
+// parseContextModeProbe interprets what the probe printed.
+func parseContextModeProbe(out string) error {
+	line := strings.TrimSpace(out)
+	backend, socket, found := strings.Cut(line, "|")
+	if !found {
+		return fmt.Errorf("the probe printed unexpected output %q, which is not the expected "+
+			"\"<backend>|<socket>\" pair", line)
+	}
+	if backend == "" {
+		return fmt.Errorf("%s does not reach the sandbox; add it to the agent "+
+			"profile's environment.allow_vars, or context-mode will run commands "+
+			"in the agent's own sandbox instead of under the command profile",
+			ContextModeEnvVar)
+	}
+	if backend != ContextModeExecd {
+		return fmt.Errorf("%s reached the sandbox as %q, want %q",
+			ContextModeEnvVar, backend, ContextModeExecd)
+	}
+	if socket == "" {
+		return fmt.Errorf("%s does not reach the sandbox; context-mode refuses to "+
+			"start with the execd backend and no socket", execd.SocketEnvVar)
+	}
+	return nil
 }

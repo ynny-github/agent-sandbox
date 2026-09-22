@@ -236,6 +236,10 @@ type runDeps struct {
 	// context-mode plugin. Called only when --context-mode was passed, and
 	// before anything is started, so a refusal tears nothing down.
 	contextModeEnabled func() (bool, error)
+	// verifyContextMode proves the backend selection actually reaches the
+	// sandbox. Called only when --context-mode was passed, after execd is up
+	// and the variables are set.
+	verifyContextMode func(profilePath string) error
 	startExecd func(*config.Config) (socket string, cleanup func(), err error)
 	// startShellWrapper writes the shell Claude runs tool commands with. It
 	// returns the wrapper's path and a cleanup that removes it.
@@ -272,6 +276,7 @@ func defaultDeps() runDeps {
 		agentProfile:       defaultAgentProfile,
 		verifyHook:         probeHook,
 		contextModeEnabled: contextModeEnabled,
+		verifyContextMode:  probeContextMode,
 		startExecd:         startExecd,
 		startShellWrapper:  defaultShellWrapper,
 		supervise:          superviseProcess,
@@ -348,6 +353,12 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 	// session made no selection".
 	if opts.ContextMode {
 		os.Setenv(ContextModeEnvVar, ContextModeExecd)
+	}
+
+	if opts.ContextMode {
+		if err := d.verifyContextMode(profilePath); err != nil {
+			return fmt.Errorf("context-mode check: %w", err)
+		}
 	}
 
 	code := d.supervise(nonoPath, nonoArgs)

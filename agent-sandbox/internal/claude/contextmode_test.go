@@ -1,6 +1,9 @@
 package claude
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // The two strings are a contract with context-mode's resolveBackendConfig
 // (src/exec-backend.ts): an unset or empty variable resolves to the "local"
@@ -75,5 +78,51 @@ func TestContextModeEnabledIn_NotJSON(t *testing.T) {
 		t.Error("unparseable output must be an error, not a quiet false: " +
 			"a false would read as \"context-mode is off\" and stop the launch " +
 			"for the wrong reason")
+	}
+}
+
+func TestParseContextModeProbe(t *testing.T) {
+	tests := []struct {
+		name    string
+		out     string
+		wantErr string // "" means the probe must pass
+	}{
+		{name: "both present", out: "execd|/tmp/execd-1.sock\n"},
+		{
+			// Array.join renders an absent variable as the empty string, which is
+			// exactly what a stripped allow_vars entry looks like.
+			name:    "backend stripped",
+			out:     "|/tmp/execd-1.sock\n",
+			wantErr: "CONTEXT_MODE_EXEC_BACKEND",
+		},
+		{
+			name:    "socket stripped",
+			out:     "execd|\n",
+			wantErr: "AGENT_SANDBOX_EXECD_SOCKET",
+		},
+		{
+			name:    "wrong backend",
+			out:     "local|/tmp/execd-1.sock\n",
+			wantErr: "local",
+		},
+		{
+			name:    "not the expected shape",
+			out:     "undefined\n",
+			wantErr: "unexpected",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := parseContextModeProbe(tc.out)
+			switch {
+			case tc.wantErr == "" && err != nil:
+				t.Fatalf("unexpected error: %v", err)
+			case tc.wantErr == "":
+			case err == nil:
+				t.Fatalf("expected an error naming %q, got nil", tc.wantErr)
+			case !strings.Contains(err.Error(), tc.wantErr):
+				t.Errorf("error %q must name %q", err, tc.wantErr)
+			}
+		})
 	}
 }

@@ -94,6 +94,10 @@
     // It is inert without the flag: nothing sets the variable, so nothing is
     // forwarded.
     //
+    // The launcher probes for this before every `--context-mode` launch and
+    // refuses to start when it does not arrive (probeContextMode in
+    // internal/claude/contextmode.go).
+    //
     // --env no longer grants anything. A variable passed that way reaches the
     // agent only if it is listed here (globs like MISE* work).
     "allow_vars": [

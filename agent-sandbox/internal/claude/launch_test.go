@@ -1003,6 +1003,7 @@ func TestRun_SetsContextModeEnvBeforeSupervise(t *testing.T) {
 		},
 		verifyHook:         func(string, string) error { return nil },
 		contextModeEnabled: func() (bool, error) { return true, nil },
+		verifyContextMode:  func(string) error { return nil },
 		startExecd:         testExecdStart("/tmp/test.sock", nil),
 		startShellWrapper:  testWrapperStart("/tmp/test-norc-bash-1", nil),
 		supervise: func(string, []string) int {
@@ -1057,6 +1058,7 @@ func TestRun_ContextModeNotEnabled_DoesNotStartExecd(t *testing.T) {
 		},
 		verifyHook:         func(string, string) error { return nil },
 		contextModeEnabled: func() (bool, error) { return false, nil },
+		verifyContextMode:  func(string) error { return nil },
 		startShellWrapper:  testWrapperStart("/tmp/test-norc-bash-1", nil),
 		startExecd: func(*config.Config) (string, func(), error) {
 			execdCalls++
@@ -1098,5 +1100,59 @@ func TestRun_ContextModeCheckSkippedWithoutTheFlag(t *testing.T) {
 	}
 	if checked {
 		t.Error("a session without the flag must not ask about context-mode at all")
+	}
+}
+
+func TestRun_ContextModeProbeFailure_DoesNotLaunch(t *testing.T) {
+	makeFakeNono(t)
+	superviseCalls := 0
+	err := run(&config.Config{}, Options{ContextMode: true}, runDeps{
+		agentProfile: func(*config.Config) (string, error) {
+			return "/tmp/asb-profile-1.json", nil
+		},
+		verifyHook:         func(string, string) error { return nil },
+		contextModeEnabled: func() (bool, error) { return true, nil },
+		verifyContextMode: func(string) error {
+			return errors.New("the profile does not forward CONTEXT_MODE_EXEC_BACKEND")
+		},
+		startExecd:        testExecdStart("/tmp/test.sock", nil),
+		startShellWrapper: testWrapperStart("/tmp/test-norc-bash-1", nil),
+		supervise:         func(string, []string) int { superviseCalls++; return 0 },
+		exit:              func(int) {},
+	})
+	if err == nil {
+		t.Fatal("expected an error when the probe fails")
+	}
+	if superviseCalls != 0 {
+		t.Errorf("claude was launched %d times despite a failed probe, want 0", superviseCalls)
+	}
+}
+
+// The probe reads the variables out of the sandbox, so they must already be
+// published when it runs.
+func TestRun_ContextModeProbeRunsAfterTheEnvIsSet(t *testing.T) {
+	makeFakeNono(t)
+	t.Setenv(ContextModeEnvVar, "")
+	var seen string
+	err := run(&config.Config{}, Options{ContextMode: true}, runDeps{
+		agentProfile: func(*config.Config) (string, error) {
+			return "/tmp/asb-profile-1.json", nil
+		},
+		verifyHook:         func(string, string) error { return nil },
+		contextModeEnabled: func() (bool, error) { return true, nil },
+		verifyContextMode: func(string) error {
+			seen = os.Getenv(ContextModeEnvVar)
+			return nil
+		},
+		startExecd:        testExecdStart("/tmp/test.sock", nil),
+		startShellWrapper: testWrapperStart("/tmp/test-norc-bash-1", nil),
+		supervise:         func(string, []string) int { return 0 },
+		exit:              func(int) {},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if seen != "execd" {
+		t.Errorf("%s at probe time = %q, want %q", ContextModeEnvVar, seen, "execd")
 	}
 }

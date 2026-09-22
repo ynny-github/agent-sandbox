@@ -119,9 +119,22 @@ for `nono profile show` / `nono why`.
 | `agent-sandbox hook` | PreToolUse adapter, injected at launch and invoked by Claude, not by you |
 
 Global flags: `--config <path>` (default `agent-sandbox.toml`) and `--env <ref>`
-(repeatable). For `claude` and `debug`, only those two may appear before `--`;
-everything after `--` goes to `claude`. `--settings` is reserved — it carries
-the PreToolUse hook — and is rejected as a passthrough option.
+(repeatable). `claude` and `debug` also accept `--context-mode`. Only those may
+appear before `--`; everything after `--` goes to `claude`. `--settings` is
+reserved — it carries the PreToolUse hook — and is rejected as a passthrough
+option.
+
+`--context-mode` selects the execd backend of
+[context-mode](https://github.com/ynny-github/context-mode) for the session, by
+publishing `CONTEXT_MODE_EXEC_BACKEND=execd` to the agent. With it, the code
+`ctx_execute` runs goes through execd and the command profile, like every other
+command; without it, context-mode runs that code as a child of its MCP server,
+inside the agent profile. The launch refuses to start unless Claude Code reports
+an enabled context-mode plugin and the selection is measurably present inside
+the sandbox — an unforwarded variable is not an error on context-mode's side, it
+is a silent fall back to the agent profile. It requires
+`CONTEXT_MODE_EXEC_BACKEND` in the agent profile's `environment.allow_vars` and
+a `node` the agent profile can execute; `agent-sandbox doctor` reports both.
 
 ## Configuration
 

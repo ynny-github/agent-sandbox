@@ -116,9 +116,20 @@ execd 自身のビルトインは 3 つ目の扱いで、execd プロセスの�
 | `agent-sandbox hook` | PreToolUse アダプタ (起動時に注入され、Claude が呼ぶもので、手で叩くものではない) |
 
 グローバルフラグは `--config <path>` (既定 `agent-sandbox.toml`) と `--env <ref>`
-(繰り返し可) の 2 つです。`claude` と `debug` では `--` の前に置けるのはこの 2 つだけで、
-`--` 以降はすべて `claude` に渡ります。`--settings` は PreToolUse フックを載せるために
-予約されており、パススルーとして拒否されます。
+(繰り返し可) の 2 つで、`claude` と `debug` はさらに `--context-mode` を受け取ります。
+`--` の前に置けるのはこれらだけで、`--` 以降はすべて `claude` に渡ります。`--settings`
+は PreToolUse フックを載せるために予約されており、パススルーとして拒否されます。
+
+`--context-mode` は、そのセッションで
+[context-mode](https://github.com/ynny-github/context-mode) の execd バックエンドを
+選びます (`CONTEXT_MODE_EXEC_BACKEND=execd` をエージェントに渡す)。付けた場合、
+`ctx_execute` が動かすコードは他のコマンドと同じく execd とコマンドプロファイルを
+通ります。付けない場合、そのコードは MCP サーバーの子プロセスとしてエージェント
+プロファイルの中で動きます。Claude Code が context-mode プラグインを有効と報告し、
+かつ選択がサンドボックス内で実測できる場合にのみ起動します — 変数が届かないことは
+context-mode 側ではエラーにならず、黙ってエージェントプロファイルでの実行に戻るためです。
+エージェントプロファイルの `environment.allow_vars` に `CONTEXT_MODE_EXEC_BACKEND` が
+必要で、`node` が実行できることも必要です。どちらも `agent-sandbox doctor` が報告します。
 
 ## 設定
 

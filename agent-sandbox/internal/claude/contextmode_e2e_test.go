@@ -1,0 +1,39 @@
+//go:build e2e
+
+// This file proves, with a real nono and a real node, that the agent profile
+// in this repository actually delivers the context-mode backend selection into
+// the sandbox — the one fact no hermetic test can establish, because it
+// depends on a profile this repository deliberately never reads.
+//
+// Run it explicitly:
+//
+//	go test -tags e2e ./agent-sandbox/internal/claude/... -run ContextModeProbe -v
+package claude
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"testing"
+
+	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/execd"
+)
+
+func TestContextModeProbe_AgainstTheRepoProfile(t *testing.T) {
+	if _, err := exec.LookPath("nono"); err != nil {
+		t.Skip("nono not on PATH")
+	}
+	profile, err := filepath.Abs("../../../claude-profile.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, serr := os.Stat(profile); serr != nil {
+		t.Skipf("agent profile not found at %s", profile)
+	}
+	t.Setenv(ContextModeEnvVar, ContextModeExecd)
+	t.Setenv(execd.SocketEnvVar, "/tmp/agent-sandbox-e2e-probe.sock")
+
+	if perr := probeContextMode(profile); perr != nil {
+		t.Fatalf("the repo's agent profile does not satisfy the context-mode probe: %v", perr)
+	}
+}

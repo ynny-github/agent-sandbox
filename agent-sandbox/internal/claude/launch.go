@@ -232,6 +232,10 @@ type runDeps struct {
 	// verifyHook proves the PreToolUse hook can actually run under the agent's
 	// profile. Every session injects that hook, so every launch runs it.
 	verifyHook func(profilePath, selfPath string) error
+	// contextModeEnabled reports whether Claude Code has an enabled
+	// context-mode plugin. Called only when --context-mode was passed, and
+	// before anything is started, so a refusal tears nothing down.
+	contextModeEnabled func() (bool, error)
 	startExecd func(*config.Config) (socket string, cleanup func(), err error)
 	// startShellWrapper writes the shell Claude runs tool commands with. It
 	// returns the wrapper's path and a cleanup that removes it.
@@ -265,12 +269,13 @@ func Run(cfg *config.Config, opts Options) error {
 // the mode it applies to, and only Run builds this set.
 func defaultDeps() runDeps {
 	return runDeps{
-		agentProfile:      defaultAgentProfile,
-		verifyHook:        probeHook,
-		startExecd:        startExecd,
-		startShellWrapper: defaultShellWrapper,
-		supervise:         superviseProcess,
-		exit:              os.Exit,
+		agentProfile:       defaultAgentProfile,
+		verifyHook:         probeHook,
+		contextModeEnabled: contextModeEnabled,
+		startExecd:         startExecd,
+		startShellWrapper:  defaultShellWrapper,
+		supervise:          superviseProcess,
+		exit:               os.Exit,
 	}
 }
 
@@ -286,6 +291,18 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 	}
 	if err := d.verifyHook(profilePath, self); err != nil {
 		return fmt.Errorf("hook check: %w", err)
+	}
+
+	if opts.ContextMode {
+		enabled, cerr := d.contextModeEnabled()
+		if cerr != nil {
+			return fmt.Errorf("context-mode check: %w", cerr)
+		}
+		if !enabled {
+			return fmt.Errorf("context-mode check: --context-mode was passed, but " +
+				"`claude plugin list --json` reports no enabled context-mode plugin; " +
+				"install and enable it, or drop the flag")
+		}
 	}
 
 	// A wrapper that cannot be written costs noise, not safety: Claude falls

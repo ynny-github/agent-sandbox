@@ -1001,9 +1001,10 @@ func TestRun_SetsContextModeEnvBeforeSupervise(t *testing.T) {
 		agentProfile: func(*config.Config) (string, error) {
 			return "/tmp/asb-profile-1.json", nil
 		},
-		verifyHook:        func(string, string) error { return nil },
-		startExecd:        testExecdStart("/tmp/test.sock", nil),
-		startShellWrapper: testWrapperStart("/tmp/test-norc-bash-1", nil),
+		verifyHook:         func(string, string) error { return nil },
+		contextModeEnabled: func() (bool, error) { return true, nil },
+		startExecd:         testExecdStart("/tmp/test.sock", nil),
+		startShellWrapper:  testWrapperStart("/tmp/test-norc-bash-1", nil),
 		supervise: func(string, []string) int {
 			got = os.Getenv(ContextModeEnvVar)
 			return 0
@@ -1029,9 +1030,10 @@ func TestRun_LeavesContextModeEnvUnsetWithoutTheFlag(t *testing.T) {
 		agentProfile: func(*config.Config) (string, error) {
 			return "/tmp/asb-profile-1.json", nil
 		},
-		verifyHook:        func(string, string) error { return nil },
-		startExecd:        testExecdStart("/tmp/test.sock", nil),
-		startShellWrapper: testWrapperStart("/tmp/test-norc-bash-1", nil),
+		verifyHook:         func(string, string) error { return nil },
+		contextModeEnabled: func() (bool, error) { return false, nil },
+		startExecd:         testExecdStart("/tmp/test.sock", nil),
+		startShellWrapper:  testWrapperStart("/tmp/test-norc-bash-1", nil),
 		supervise: func(string, []string) int {
 			got = os.Getenv(ContextModeEnvVar)
 			return 0
@@ -1043,5 +1045,58 @@ func TestRun_LeavesContextModeEnvUnsetWithoutTheFlag(t *testing.T) {
 	}
 	if got != "" {
 		t.Errorf("%s at supervise time = %q, want empty without the flag", ContextModeEnvVar, got)
+	}
+}
+
+func TestRun_ContextModeNotEnabled_DoesNotStartExecd(t *testing.T) {
+	makeFakeNono(t)
+	execdCalls, superviseCalls := 0, 0
+	err := run(&config.Config{}, Options{ContextMode: true}, runDeps{
+		agentProfile: func(*config.Config) (string, error) {
+			return "/tmp/asb-profile-1.json", nil
+		},
+		verifyHook:         func(string, string) error { return nil },
+		contextModeEnabled: func() (bool, error) { return false, nil },
+		startShellWrapper:  testWrapperStart("/tmp/test-norc-bash-1", nil),
+		startExecd: func(*config.Config) (string, func(), error) {
+			execdCalls++
+			return "/tmp/test.sock", func() {}, nil
+		},
+		supervise: func(string, []string) int { superviseCalls++; return 0 },
+		exit:      func(int) {},
+	})
+	if err == nil {
+		t.Fatal("expected an error when context-mode is not enabled")
+	}
+	if !strings.Contains(err.Error(), "context-mode") {
+		t.Errorf("error must name context-mode: %v", err)
+	}
+	if execdCalls != 0 {
+		t.Errorf("execd started %d times; the check must run before it", execdCalls)
+	}
+	if superviseCalls != 0 {
+		t.Errorf("claude was launched %d times, want 0", superviseCalls)
+	}
+}
+
+func TestRun_ContextModeCheckSkippedWithoutTheFlag(t *testing.T) {
+	makeFakeNono(t)
+	checked := false
+	err := run(&config.Config{}, Options{}, runDeps{
+		agentProfile: func(*config.Config) (string, error) {
+			return "/tmp/asb-profile-1.json", nil
+		},
+		verifyHook:         func(string, string) error { return nil },
+		contextModeEnabled: func() (bool, error) { checked = true; return false, nil },
+		startExecd:         testExecdStart("/tmp/test.sock", nil),
+		startShellWrapper:  testWrapperStart("/tmp/test-norc-bash-1", nil),
+		supervise:          func(string, []string) int { return 0 },
+		exit:               func(int) {},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if checked {
+		t.Error("a session without the flag must not ask about context-mode at all")
 	}
 }

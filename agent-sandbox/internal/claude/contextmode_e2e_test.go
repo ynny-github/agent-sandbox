@@ -33,6 +33,16 @@ func TestContextModeProbe_AgainstTheRepoProfile(t *testing.T) {
 	t.Setenv(ContextModeEnvVar, ContextModeExecd)
 	t.Setenv(execd.SocketEnvVar, "/tmp/agent-sandbox-e2e-probe.sock")
 
+	// The probe grants nono the working directory with --allow-cwd, and a real
+	// launch runs from the project root. `go test` runs from the package
+	// directory instead, which is narrower than what the launcher ever grants:
+	// a toolchain manager that walks upward for its config (mise reads the
+	// repo's .mise.toml) is then denied the read and node never starts.
+	// Measured: the same probe passes from the repo root and fails from this
+	// package's directory, against an identical profile. Chdir so the test
+	// measures the profile rather than `go test`'s cwd.
+	t.Chdir(filepath.Dir(profile))
+
 	if perr := probeContextMode(profile); perr != nil {
 		t.Fatalf("the repo's agent profile does not satisfy the context-mode probe: %v", perr)
 	}

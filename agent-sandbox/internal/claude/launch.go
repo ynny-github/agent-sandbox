@@ -348,17 +348,18 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 	if shellWrapper != "" {
 		os.Setenv(ShellEnvVar, shellWrapper)
 	}
-	// Published only when the flag asked for it. context-mode treats an absent
-	// variable as "local", so leaving it unset is the correct way to say "this
-	// session made no selection".
+	// Published only when the flag asked for it, and unset otherwise: with
+	// CONTEXT_MODE_EXEC_BACKEND in the agent profile's allow_vars, a value the
+	// operator exported in their own shell would otherwise be forwarded into a
+	// session that never made this selection and whose probe never verified
+	// it. context-mode treats an absent variable as "local".
 	if opts.ContextMode {
 		os.Setenv(ContextModeEnvVar, ContextModeExecd)
-	}
-
-	if opts.ContextMode {
 		if err := d.verifyContextMode(profilePath); err != nil {
 			return fmt.Errorf("context-mode check: %w", err)
 		}
+	} else {
+		os.Unsetenv(ContextModeEnvVar)
 	}
 
 	code := d.supervise(nonoPath, nonoArgs)

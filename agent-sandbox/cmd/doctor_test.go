@@ -1129,6 +1129,9 @@ func TestCheckProfiles_ReportsContextModeReady(t *testing.T) {
 	if !strings.Contains(joined, "context-mode: plugin enabled, backend var forwarded") {
 		t.Errorf("details must report context-mode readiness: %v", got.details)
 	}
+	if strings.Contains(joined, "needed only for --context-mode") {
+		t.Errorf("the fully-ready case must not carry the optional-gap suffix: %v", got.details)
+	}
 }
 
 // Neither fact is a defect for a session that never passes --context-mode, so

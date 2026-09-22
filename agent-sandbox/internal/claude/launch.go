@@ -29,6 +29,10 @@ const agentName = "claude"
 type Options struct {
 	ClaudeOpts []string
 	EnvRefs    []string
+	// ContextMode reports whether --context-mode was passed. It selects
+	// context-mode's execd backend for this session and nothing else; see
+	// contextmode.go.
+	ContextMode bool
 }
 
 // ParseArgs splits the raw args into the config-file path and the claude
@@ -69,6 +73,8 @@ func ParseArgs(args []string, defaultConfig string) (string, Options, error) {
 			}
 		case strings.HasPrefix(a, "--env="):
 			opts.EnvRefs = append(opts.EnvRefs, strings.TrimPrefix(a, "--env="))
+		case a == "--context-mode":
+			opts.ContextMode = true
 		case a == "--profile" || a == "-p" || strings.HasPrefix(a, "--profile="):
 			return "", Options{}, fmt.Errorf("--profile is no longer accepted; configure the sandbox profile via [agents.<name>].profile in agent-sandbox.toml")
 		default:

@@ -943,3 +943,49 @@ func TestDefaultDeps_EveryDependencyIsWired(t *testing.T) {
 		}
 	}
 }
+
+func TestParseArgs_ContextModeFlag(t *testing.T) {
+	_, opts, err := ParseArgs([]string{"--context-mode", "--", "-p", "hi"}, "cfg.toml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !opts.ContextMode {
+		t.Error("--context-mode before \"--\" must set Options.ContextMode")
+	}
+	if len(opts.ClaudeOpts) != 2 || opts.ClaudeOpts[0] != "-p" {
+		t.Errorf("claude opts = %v, want [-p hi]", opts.ClaudeOpts)
+	}
+}
+
+func TestParseArgs_ContextModeDefaultsOff(t *testing.T) {
+	_, opts, err := ParseArgs([]string{"--", "-p", "hi"}, "cfg.toml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if opts.ContextMode {
+		t.Error("Options.ContextMode must default to false")
+	}
+}
+
+// After "--" the flag belongs to claude, not to agent-sandbox: the launcher
+// must pass it through untouched rather than claim it.
+func TestParseArgs_ContextModeAfterDashIsPassthrough(t *testing.T) {
+	_, opts, err := ParseArgs([]string{"--", "--context-mode"}, "cfg.toml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if opts.ContextMode {
+		t.Error("--context-mode after \"--\" must not set Options.ContextMode")
+	}
+	if len(opts.ClaudeOpts) != 1 || opts.ClaudeOpts[0] != "--context-mode" {
+		t.Errorf("claude opts = %v, want [--context-mode]", opts.ClaudeOpts)
+	}
+}
+
+// Only the bare form is accepted. A value form would suggest the flag can be
+// switched off with "=false", which it cannot.
+func TestParseArgs_ContextModeValueFormRejected(t *testing.T) {
+	if _, _, err := ParseArgs([]string{"--context-mode=true", "--"}, "cfg.toml"); err == nil {
+		t.Error("--context-mode=true must be rejected")
+	}
+}

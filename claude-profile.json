@@ -89,8 +89,7 @@
     // CONTEXT_MODE_EXEC_BACKEND` inside the sandbox prints nothing — and
     // context-mode reads an absent variable as "local", running agent-authored
     // code in this profile instead of under the command profile, with nothing
-    // in the session saying so. The launcher probes for it and refuses to start
-    // when it does not arrive.
+    // in the session saying so.
     //
     // It is inert without the flag: nothing sets the variable, so nothing is
     // forwarded.

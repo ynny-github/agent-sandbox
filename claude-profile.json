@@ -83,11 +83,24 @@
     // with. PATH, already forwarded, decides the same class of thing, so this
     // is not a new kind of inlet — but it is one more.
     //
+    // CONTEXT_MODE_EXEC_BACKEND selects context-mode's execution backend for a
+    // session launched with `--context-mode`. Measured: with the variable set
+    // on the host but absent from this list, `printenv
+    // CONTEXT_MODE_EXEC_BACKEND` inside the sandbox prints nothing — and
+    // context-mode reads an absent variable as "local", running agent-authored
+    // code in this profile instead of under the command profile, with nothing
+    // in the session saying so. The launcher probes for it and refuses to start
+    // when it does not arrive.
+    //
+    // It is inert without the flag: nothing sets the variable, so nothing is
+    // forwarded.
+    //
     // --env no longer grants anything. A variable passed that way reaches the
     // agent only if it is listed here (globs like MISE* work).
     "allow_vars": [
       "PATH", "HOME", "TERM", "LANG", "LC_ALL", "USER",
-      "AGENT_SANDBOX_EXECD_SOCKET", "CLAUDE_CODE_SHELL"
+      "AGENT_SANDBOX_EXECD_SOCKET", "CLAUDE_CODE_SHELL",
+      "CONTEXT_MODE_EXEC_BACKEND"
     ]
   }
 }

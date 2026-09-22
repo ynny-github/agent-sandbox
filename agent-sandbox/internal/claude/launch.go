@@ -326,6 +326,12 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 	if shellWrapper != "" {
 		os.Setenv(ShellEnvVar, shellWrapper)
 	}
+	// Published only when the flag asked for it. context-mode treats an absent
+	// variable as "local", so leaving it unset is the correct way to say "this
+	// session made no selection".
+	if opts.ContextMode {
+		os.Setenv(ContextModeEnvVar, ContextModeExecd)
+	}
 
 	code := d.supervise(nonoPath, nonoArgs)
 

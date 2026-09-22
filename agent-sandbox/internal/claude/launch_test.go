@@ -989,3 +989,59 @@ func TestParseArgs_ContextModeValueFormRejected(t *testing.T) {
 		t.Error("--context-mode=true must be rejected")
 	}
 }
+
+// The launcher hands the backend selection to the agent the same way it hands
+// over the execd socket: by setting it in its own environment before
+// supervise, which the child inherits.
+func TestRun_SetsContextModeEnvBeforeSupervise(t *testing.T) {
+	makeFakeNono(t)
+	t.Setenv(ContextModeEnvVar, "")
+	var got string
+	err := run(&config.Config{}, Options{ContextMode: true}, runDeps{
+		agentProfile: func(*config.Config) (string, error) {
+			return "/tmp/asb-profile-1.json", nil
+		},
+		verifyHook:        func(string, string) error { return nil },
+		startExecd:        testExecdStart("/tmp/test.sock", nil),
+		startShellWrapper: testWrapperStart("/tmp/test-norc-bash-1", nil),
+		supervise: func(string, []string) int {
+			got = os.Getenv(ContextModeEnvVar)
+			return 0
+		},
+		exit: func(int) {},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "execd" {
+		t.Errorf("%s at supervise time = %q, want %q", ContextModeEnvVar, got, "execd")
+	}
+}
+
+// Without the flag the variable must not appear at all: an empty value and an
+// absent one mean the same thing to context-mode, but publishing one anyway
+// would claim a selection this session never made.
+func TestRun_LeavesContextModeEnvUnsetWithoutTheFlag(t *testing.T) {
+	makeFakeNono(t)
+	t.Setenv(ContextModeEnvVar, "")
+	var got string
+	err := run(&config.Config{}, Options{}, runDeps{
+		agentProfile: func(*config.Config) (string, error) {
+			return "/tmp/asb-profile-1.json", nil
+		},
+		verifyHook:        func(string, string) error { return nil },
+		startExecd:        testExecdStart("/tmp/test.sock", nil),
+		startShellWrapper: testWrapperStart("/tmp/test-norc-bash-1", nil),
+		supervise: func(string, []string) int {
+			got = os.Getenv(ContextModeEnvVar)
+			return 0
+		},
+		exit: func(int) {},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "" {
+		t.Errorf("%s at supervise time = %q, want empty without the flag", ContextModeEnvVar, got)
+	}
+}

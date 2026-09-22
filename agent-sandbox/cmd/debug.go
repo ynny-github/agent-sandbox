@@ -76,6 +76,11 @@ func runDebug(cmd *cobra.Command, args []string) error {
 	fmt.Fprintln(cmd.OutOrStdout(), "  "+strings.Join(
 		claude.ExecdArgs(cfg, nonoPathForDisplay(), selfPath, execdSocket, cwd), " "))
 
+	if opts.ContextMode {
+		fmt.Fprintln(cmd.OutOrStdout(),
+			"environment: "+claude.ContextModeEnvVar+"="+claude.ContextModeExecd)
+	}
+
 	return nil
 }
 

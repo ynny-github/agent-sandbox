@@ -160,3 +160,54 @@ func TestRunDebug_PrintsTheConfiguredAgentProfilePath(t *testing.T) {
 		t.Errorf("debug output missing %q; got:\n%s", want, out)
 	}
 }
+
+// debugFixture writes the temp config, command profile and fake nono that
+// runDebug needs, points configPath at them, and returns the config's dir.
+// Mirrors the setup in TestRunDebug_PrintsExecdSocketGrant.
+func debugFixture(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	nono := filepath.Join(dir, "nono")
+	if err := os.WriteFile(nono, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write fake nono: %v", err)
+	}
+	t.Setenv("PATH", dir)
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	if err := os.WriteFile(filepath.Join(dir, "agent-sandbox.toml"), []byte(""), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "command-profile.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatalf("write command profile: %v", err)
+	}
+	orig := configPath
+	configPath = filepath.Join(dir, "agent-sandbox.toml")
+	t.Cleanup(func() { configPath = orig })
+	return dir
+}
+
+// debug prints the invocation a launch would build. --context-mode adds no
+// argument to it — it changes the environment — so debug has to print that,
+// or two different sessions would render identically.
+func TestRunDebug_PrintsContextModeVariable(t *testing.T) {
+	debugFixture(t)
+	out := captureStdout(t, func() {
+		if err := runDebug(debugCmd, []string{"--context-mode", "--"}); err != nil {
+			t.Fatalf("runDebug() error = %v", err)
+		}
+	})
+	if !strings.Contains(out, "environment: CONTEXT_MODE_EXEC_BACKEND=execd") {
+		t.Errorf("debug output must name the published variable:\n%s", out)
+	}
+}
+
+func TestRunDebug_OmitsContextModeVariableWithoutTheFlag(t *testing.T) {
+	debugFixture(t)
+	out := captureStdout(t, func() {
+		if err := runDebug(debugCmd, []string{"--"}); err != nil {
+			t.Fatalf("runDebug() error = %v", err)
+		}
+	})
+	if strings.Contains(out, "CONTEXT_MODE_EXEC_BACKEND") {
+		t.Errorf("debug must not mention the variable without the flag:\n%s", out)
+	}
+}

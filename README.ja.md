@@ -129,7 +129,8 @@ execd 自身のビルトインは 3 つ目の扱いで、execd プロセスの�
 かつ選択がサンドボックス内で実測できる場合にのみ起動します — 変数が届かないことは
 context-mode 側ではエラーにならず、黙ってエージェントプロファイルでの実行に戻るためです。
 エージェントプロファイルの `environment.allow_vars` に `CONTEXT_MODE_EXEC_BACKEND` が
-必要で、`node` が実行できることも必要です。どちらも `agent-sandbox doctor` が報告します。
+必要で、`node` が実行できることも必要です。プラグインの有効状態と変数の転送は
+`agent-sandbox doctor` が報告し、`node` の到達性は起動前の probe が実測します。
 
 ## 設定
 

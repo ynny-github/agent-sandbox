@@ -134,7 +134,9 @@ an enabled context-mode plugin and the selection is measurably present inside
 the sandbox — an unforwarded variable is not an error on context-mode's side, it
 is a silent fall back to the agent profile. It requires
 `CONTEXT_MODE_EXEC_BACKEND` in the agent profile's `environment.allow_vars` and
-a `node` the agent profile can execute; `agent-sandbox doctor` reports both.
+a `node` the agent profile can execute. `agent-sandbox doctor` reports the
+plugin and the variable; node's reachability is what the launch probe
+measures.
 
 ## Configuration
 

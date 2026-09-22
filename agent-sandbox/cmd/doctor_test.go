@@ -1104,3 +1104,85 @@ func TestCheckProfiles_FailsWhenTheShellVarIsNotForwarded(t *testing.T) {
 		t.Error("a stripped shell variable must come with a hint")
 	}
 }
+
+func TestCheckProfiles_ReportsContextModeReady(t *testing.T) {
+	dir := t.TempDir()
+	cfg := configWithBothProfiles(t, dir)
+	restoreRun := stubRunCommand(func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "claude" {
+			return []byte(`[{"id":"context-mode@context-mode","enabled":true}]`), nil
+		}
+		return []byte(`{"status":"denied"}`), nil
+	})
+	defer restoreRun()
+	restoreEnv := stubRunCommandEnv(func(context.Context, []string, string, ...string) ([]byte, error) {
+		return []byte(envProbeValue), nil
+	})
+	defer restoreEnv()
+	defer stubSelfPath("/usr/local/bin/agent-sandbox")()
+
+	got := checkProfiles(context.Background(), cfg)
+	if !got.ok {
+		t.Fatalf("ok = false, want true; details %v hint %q", got.details, got.hint)
+	}
+	joined := strings.Join(got.details, "\n")
+	if !strings.Contains(joined, "context-mode: plugin enabled, backend var forwarded") {
+		t.Errorf("details must report context-mode readiness: %v", got.details)
+	}
+}
+
+// Neither fact is a defect for a session that never passes --context-mode, so
+// the check must not fail on them.
+func TestCheckProfiles_ContextModeNotReadyDoesNotFail(t *testing.T) {
+	dir := t.TempDir()
+	cfg := configWithBothProfiles(t, dir)
+	restoreRun := stubRunCommand(func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "claude" {
+			return []byte(`[]`), nil
+		}
+		return []byte(`{"status":"denied"}`), nil
+	})
+	defer restoreRun()
+	restoreEnv := stubRunCommandEnv(func(_ context.Context, env []string, _ string, _ ...string) ([]byte, error) {
+		// Forward everything except the context-mode variable.
+		for _, e := range env {
+			if strings.HasPrefix(e, claude.ContextModeEnvVar+"=") {
+				return []byte("\n"), nil
+			}
+		}
+		return []byte(envProbeValue), nil
+	})
+	defer restoreEnv()
+	defer stubSelfPath("/usr/local/bin/agent-sandbox")()
+
+	got := checkProfiles(context.Background(), cfg)
+	if !got.ok {
+		t.Fatalf("ok = false, want true: context-mode readiness is optional; details %v", got.details)
+	}
+	joined := strings.Join(got.details, "\n")
+	if !strings.Contains(joined, "context-mode: plugin not enabled, backend var not forwarded") {
+		t.Errorf("details must report both gaps: %v", got.details)
+	}
+	if !strings.Contains(joined, "needed only for --context-mode") {
+		t.Errorf("details must say the gaps are optional: %v", got.details)
+	}
+}
+
+func TestCheckProfiles_SkipsContextModeInsideASession(t *testing.T) {
+	t.Setenv(execd.SocketEnvVar, "/tmp/some-execd.sock")
+	dir := t.TempDir()
+	cfg := configWithBothProfiles(t, dir)
+	restoreRun := stubRunCommand(func(_ context.Context, name string, _ ...string) ([]byte, error) {
+		if name == "claude" {
+			t.Error("doctor must not query plugins from inside a session")
+		}
+		return []byte(`{"status":"denied"}`), nil
+	})
+	defer restoreRun()
+	defer stubSelfPath("/usr/local/bin/agent-sandbox")()
+
+	got := checkProfiles(context.Background(), cfg)
+	if !strings.Contains(strings.Join(got.details, "\n"), "context-mode: skipped") {
+		t.Errorf("details must say the context-mode facts were skipped: %v", got.details)
+	}
+}

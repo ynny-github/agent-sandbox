@@ -153,6 +153,43 @@ func checkShellVar(ctx context.Context, profilePath string) error {
 	return nil
 }
 
+// checkContextModeVar measures whether the agent profile forwards
+// CONTEXT_MODE_EXEC_BACKEND. It is the same probe shape as the two variables
+// above, for the same reason: nono reports nothing about env grants.
+//
+// Unlike those two, a stripped value here is not a defect for every session —
+// only for one launched with --context-mode — so the caller reports it without
+// failing the check.
+func checkContextModeVar(ctx context.Context, profilePath string) error {
+	out, err := runCommandEnv(ctx,
+		[]string{claude.ContextModeEnvVar + "=" + envProbeValue},
+		"nono", "wrap", "--silent", "--allow-cwd", "--profile", profilePath,
+		"--", "sh", "-c", "echo $"+claude.ContextModeEnvVar)
+	if err != nil {
+		return fmt.Errorf("could not run the probe: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	if !strings.Contains(string(out), envProbeValue) {
+		return fmt.Errorf("the profile does not forward %s into the sandbox", claude.ContextModeEnvVar)
+	}
+	return nil
+}
+
+// contextModePluginState renders what Claude Code reports about the plugin.
+func contextModePluginState(ctx context.Context) string {
+	out, err := runCommand(ctx, "claude", "plugin", "list", "--json")
+	if err != nil {
+		return "plugin state unknown (" + firstLine(err.Error()) + ")"
+	}
+	enabled, perr := claude.ContextModeEnabledIn(out)
+	if perr != nil {
+		return "plugin state unknown (" + firstLine(perr.Error()) + ")"
+	}
+	if enabled {
+		return "plugin enabled"
+	}
+	return "plugin not enabled"
+}
+
 func firstLine(s string) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		s = s[:i]
@@ -412,7 +449,8 @@ func checkProfiles(ctx context.Context, cfg *config.Config) checkResult {
 		// another. Say so rather than report a failure nobody can act on.
 		r.details = append(r.details,
 			"execd socket variable: skipped (running inside a session; run doctor on the host)",
-			"agent shell variable: skipped (running inside a session; run doctor on the host)")
+			"agent shell variable: skipped (running inside a session; run doctor on the host)",
+			"context-mode: skipped (running inside a session; run doctor on the host)")
 	default:
 		if err := checkExecdSocketVar(ctx, agentPath); err != nil {
 			r.details = append(r.details, "execd socket variable: "+err.Error())
@@ -432,6 +470,19 @@ func checkProfiles(ctx context.Context, cfg *config.Config) checkResult {
 			return r
 		}
 		r.details = append(r.details, "agent shell variable: forwarded")
+
+		// Neither fact fails the check: a session that never passes
+		// --context-mode needs neither of them.
+		plugin := contextModePluginState(ctx)
+		variable := "backend var not forwarded"
+		if err := checkContextModeVar(ctx, agentPath); err == nil {
+			variable = "backend var forwarded"
+		}
+		line := "context-mode: " + plugin + ", " + variable
+		if plugin != "plugin enabled" || variable != "backend var forwarded" {
+			line += " (needed only for --context-mode)"
+		}
+		r.details = append(r.details, line)
 	}
 
 	self, err := selfPath()

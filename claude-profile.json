@@ -18,7 +18,24 @@
   // /run/current-system/sw symlink farm. nono's base profile grants that tree
   // read but not execute, so without this the agent cannot start at all —
   // execve is refused and the process exits 127 with no output.
-  "groups": { "include": ["nix_runtime"] },
+  // node_runtime and mise_manager are here for the context-mode MCP server. The
+  // agent spawns it as a DIRECT child — the plugin manifest's command is
+  // `node <plugin root>/start.mjs` — so it runs under this profile, not execd's.
+  //
+  // node_runtime is already inherited from the `claude` base profile and covers
+  // nvm/fnm/npm/pnpm, none of which is how node is installed here; it is named
+  // explicitly so the requirement is visible next to its reason. mise_manager is
+  // the one that matters on this host: it grants read on ~/.local/share/mise,
+  // where the real binary lives (installs/node/<version>/bin/node), and a read
+  // grant carries the execute right.
+  //
+  // Measured before adding them: `nono wrap --profile claude-profile.json --
+  // node --version` failed with `Permission denied (os error 13)`, and the same
+  // call through the mise shim failed inside mise itself. That failure is
+  // invisible in a session — Claude Code reports an MCP server that cannot start
+  // as nothing but an absent tool — which is why `--context-mode` probes for it
+  // before launch rather than trusting this entry.
+  "groups": { "include": ["nix_runtime", "node_runtime", "mise_manager"] },
 
   "filesystem": {
     // The agent's file tools write scratch files here and read them back; the

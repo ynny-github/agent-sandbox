@@ -37,12 +37,11 @@ reading the JSON cannot:
   it lists policy-controlled command names, nothing about what any of them
   can reach.
 
-`sh` and `bash` are themselves declared commands with their own child sandbox —
-reachable from the session, confined to the working directory's own data with
-no network, though able to run tools out of the nix store and the mise
-toolchains. There is no `nono why --path` route into a child sandbox's own
-grants (see above); read `nono profile show --json` for either one's
-specifics rather than assume it shares the session's own reach.
+There is no `nono why --path` route into a child sandbox's own grants (see
+above). Read `nono profile show --json` for a policy command's specifics
+rather than assume it shares the session's own reach — and ask which commands
+are policy-controlled rather than carrying a list in your head: that list has
+changed, and this document does not track it.
 
 Neither command reports environment variables: `nono profile show` does not print
 `environment.allow_vars`. If a variable is not arriving, read that list in the
@@ -62,9 +61,9 @@ file itself. `agent-sandbox doctor` measures the one that matters most,
   or binary is outside what the profile grants. Not a rule to phrase around.
 - **`agent-sandbox: refused: this pipeline pipes two or more policy-controlled
   commands together …`, exit 126** — not a nono denial; execd refused it
-  itself, before running anything, because two policy-controlled commands
-  (`git`, `ssh`, `bash`, `sh`) were piped directly together. Run them as
-  separate commands instead.
+  itself, before running anything, because two policy-controlled commands were
+  piped directly together (`nono why --command <name>` says which ones are).
+  Run them as separate commands instead.
 - **`fatal: cannot exec '.git/hooks/commit-msg': Permission denied`** (or any
   other `.git/hooks/*`) — not a policy denial. Git hooks do not execute inside
   this sandbox at all; use `git commit --no-verify`. Because of that,
@@ -72,9 +71,10 @@ file itself. `agent-sandbox doctor` measures the one that matters most,
   to catch a malformed message, so get it right yourself before committing.
   This project follows Conventional Commits; see `.claude/rules/git-commit.md`.
 
-A toolchain that can compile and immediately execute code is bounded only by
-what its own sandbox reaches — not by argv rules, and not by which other tools
-are declared. Ask what its grants are before assuming otherwise.
+A toolchain that can compile and immediately execute code is bounded by
+whichever sandbox it runs in — its own if it is declared, execd's own grants if
+it is not — and never by argv rules. Ask nono which of the two it is, and what
+that sandbox grants, before assuming otherwise.
 
 ## Changing the config
 `{{.ConfigPath}}` names two nono profiles; you may edit all three files.

@@ -51,19 +51,39 @@ go install github.com/ynny-github/agent-sandbox@latest
 
 ## クイックスタート
 
-プロジェクトルートに `agent-sandbox.toml` を書きます。プロファイルのファイル名を
-指すだけで、中身を生成することはありません。
+プロジェクトのルートで `agent-sandbox init` を実行します。このリポジトリの
+`main` ブランチから出発点一式 —— `agent-sandbox.toml`、最小のコマンドプロファイル
+とエージェントプロファイル、プロファイルの育て方を説明する 2 つの skill ——
+をダウンロードし、設定ファイルの隣に書き出します。既存のファイルは決して
+上書きしません。存在するファイルは報告してそのまま残します。
 
-```toml
-[agents.claude]
-profile = "claude-profile.json"
+```bash
+agent-sandbox init
 ```
 
-次に、2 つのプロファイルを nono 自身のスキーマで自分で書きます。
-`claude-profile.json` がエージェントプロセス自身のサンドボックス、
-`command-profile.json` が execd 経由で動くすべてのコマンドのサンドボックスです。
-どちらにも既定値はなく、ファイルが無ければ起動エラーになります。このリポジトリ自身の
-2 ファイルが実例で、各エントリにその理由がコメントで書かれています。
+書き出されるのは出発点であって、完成した境界ではありません。コマンド
+プロファイルはコマンドに `$WORKDIR` の読み書き、GitHub を含む `allow_domain`
+リスト、6 つの環境変数、そして `git` と `ssh` のポリシーを与えます ——
+`ssh` は `git` 経由でのみ到達できます。必要に応じて広げてください。同梱される
+`growing-a-nono-profile` skill が変更の手順を案内します。
+
+**NixOS ではコマンドプロファイルに 1 箇所の編集が必要です。** 実行ファイルは
+`/nix/store` にあり、nono の既定の床はそこを許可しないため、次を追加するまで
+すべてのコマンドが exit 127 で失敗します。
+
+```json
+"groups": { "include": ["nix_runtime"] },
+"filesystem": { "read": ["/nix/store", "/run/current-system/sw"] },
+```
+
+あわせて `git --exec-path` の出力を git の `exec_paths` に追加してください。
+エージェントプロファイルは影響を受けません —— `extends: claude` が既に
+`nix_runtime` を含んでいます。
+
+両方のプロファイルを nono のスキーマで一から書くこともできます。どちらにも
+既定値はなく、ファイルが無ければ起動時エラーになります。このリポジトリ自身の
+2 ファイルは時間をかけて育てたプロファイルの実例で、各エントリがその理由を
+コメントに持っています。`templates/minimal/` は `init` が配る出発点です。
 
 ```bash
 agent-sandbox doctor            # nono、execd ソケット、2 つのプロファイルは使えるか
@@ -107,6 +127,7 @@ execd 自身のビルトインは 3 つ目の扱いで、execd プロセスの�
 
 | コマンド | 内容 |
 |---|---|
+| `agent-sandbox init` | 最小の設定・両プロファイル・プロファイル用 skill をこのプロジェクトにダウンロードする。上書きはしない |
 | `agent-sandbox claude -- [claude の引数...]` | execd を兄弟セッションで動かしつつ、nono 配下で Claude を起動 |
 | `agent-sandbox exec -- <command>` | コマンドを 1 つ execd に送り、出力をストリームする |
 | `agent-sandbox doctor` | 起動が依存するものを一通り確認: サンドボックスエンジン、execd ソケット、両プロファイルとそれが固定しているパス、そしてコマンドプロファイルが execd 自身のバイナリを書き込み可能にしていないこと。終了コード 0 / 1 |
@@ -189,6 +210,13 @@ mise run build        # `go install` でワーキングツリーのビルドを�
 **`go build` や `go run .` ではなく `mise run build` を使ってください。**
 バイナリをこのワーキングツリーの外かつ `PATH` の通った場所に置けるのは `go install`
 だけで、起動にはそこに置かれている必要があります。
+
+`templates/minimal/` には `agent-sandbox init` が配るものが入っています。バイナリに
+埋め込まず実行時に `main` から取得するので、ここへの変更はリリースを挟まずに
+利用者へ届きます —— そして `go test ./...` がそれらのファイルに対して
+`nono profile validate` を実行することだけが、`main` が使える状態に保たれている
+保証です。このリポジトリ自身の `command-profile.json` / `claude-profile.json` と
+混同しないでください。あちらはこのホスト向けに育てたもので、可搬ではありません。
 
 コミットは [Conventional Commits](https://www.conventionalcommits.org/) に従い、
 `lefthook` が `commit-msg` でタイトルを検証します。

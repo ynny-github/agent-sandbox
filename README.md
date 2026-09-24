@@ -51,20 +51,39 @@ a session will not start otherwise. `go install` already does this.
 
 ## Quick start
 
-Write `agent-sandbox.toml` in your project root. It only names the profile
-files; it does not build them.
+Run `agent-sandbox init` in your project root. It downloads a starting point
+from this repository's `main` branch — `agent-sandbox.toml`, a minimal command
+profile and agent profile, and two skills that explain how to grow a profile —
+and writes them beside your config. It never overwrites: a file that already
+exists is reported and left alone.
 
-```toml
-[agents.claude]
-profile = "claude-profile.json"
+```bash
+agent-sandbox init
 ```
 
-Then write both profiles yourself, directly in nono's own schema:
-`claude-profile.json` for the agent process's own sandbox, and
-`command-profile.json` for the sandbox every command execd runs gets. There is no
-default for either — a missing file is a launch error. This repository's own
-two files are worked examples, and each entry carries its reasoning in a
-comment.
+What it writes is a starting point, not a finished boundary. The command
+profile gives commands `$WORKDIR` read/write, an `allow_domain` list covering
+GitHub, six environment variables, and policies for `git` and `ssh` — with
+`ssh` reachable only through `git`. Widen it as you need to; the seeded
+`growing-a-nono-profile` skill walks through each change.
+
+**On NixOS the command profile needs one edit.** Executables live in
+`/nix/store`, which nono's default floor does not grant, so every command
+fails with exit 127 until you add:
+
+```json
+"groups": { "include": ["nix_runtime"] },
+"filesystem": { "read": ["/nix/store", "/run/current-system/sw"] },
+```
+
+and add the output of `git --exec-path` to git's `exec_paths`. The agent
+profile is unaffected — `extends: claude` already carries `nix_runtime`.
+
+You can also write both profiles from scratch, directly in nono's own schema.
+There is no default for either — a missing file is a launch error. This
+repository's own two files are worked examples of a profile grown over time,
+and each entry carries its reasoning in a comment; `templates/minimal/` is the
+starting point `init` serves.
 
 ```bash
 agent-sandbox doctor            # nono, the execd socket, and both profiles all usable?
@@ -110,6 +129,7 @@ for `nono profile show` / `nono why`.
 
 | Command | What it does |
 |---|---|
+| `agent-sandbox init` | Download a minimal config, both profiles, and the profile skills into this project. Never overwrites |
 | `agent-sandbox claude -- [claude args...]` | Launch Claude under nono, with execd running as a sibling session |
 | `agent-sandbox exec -- <command>` | Send one command to execd and stream its output |
 | `agent-sandbox doctor` | Check everything a launch depends on: the sandbox engine, the execd socket, both profiles and the paths they pin, and that the command profile does not leave execd's own binary writable. Exit 0 / 1 |
@@ -196,6 +216,14 @@ mise run build        # install a working-tree build via `go install`
 **Use `mise run build`, not `go build` or `go run .`.** Only `go install`
 puts the binary outside this working tree and on `PATH`, which is where it
 has to be for a launch to work.
+
+`templates/minimal/` holds what `agent-sandbox init` serves. It is fetched from
+`main` at run time rather than embedded, so a change there reaches users
+without a release — and `go test ./...` runs `nono profile validate` against
+those files, which is the only thing guaranteeing `main` stays usable. Do not
+confuse them with this repository's own `command-profile.json` and
+`claude-profile.json`, which are grown for this host and are not portable.
+
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/);
 `lefthook` validates the title on `commit-msg`.
 

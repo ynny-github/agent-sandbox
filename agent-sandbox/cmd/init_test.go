@@ -70,6 +70,16 @@ func TestRunInitWritesEveryAssetBesideTheConfigPath(t *testing.T) {
 			t.Errorf("report missing %q\n%s", want, out)
 		}
 	}
+	// The per-asset lines must name the full URL the bytes were actually
+	// fetched from, not just a static repo-relative filename. runInit also
+	// prints a "fetching from <base>" banner line before the per-asset
+	// loop, so asserting on the base URL alone would pass even if the loop
+	// printed a bare filename; assert on a specific asset's full fetched
+	// URL (base + source path), which can only appear if f.URL was used.
+	wantURL := initBaseURL + "templates/minimal/command-profile.json"
+	if !strings.Contains(out.String(), "http://") || !strings.Contains(out.String(), wantURL) {
+		t.Errorf("report does not contain the fetched URL %q\n%s", wantURL, out)
+	}
 }
 
 func TestRunInitSkipsExistingFilesAndStillSucceeds(t *testing.T) {

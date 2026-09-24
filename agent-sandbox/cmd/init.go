@@ -64,7 +64,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("fetch: %w", err)
 	}
 	for _, f := range fetched {
-		fmt.Fprintf(out, "  %s  %d bytes  %s\n", f.Asset.Source, len(f.Body), f.ETag)
+		fmt.Fprintf(out, "  %s  %d bytes  %s\n", f.URL, len(f.Body), f.ETag)
 	}
 
 	warnings, err := initValidate(fetched)

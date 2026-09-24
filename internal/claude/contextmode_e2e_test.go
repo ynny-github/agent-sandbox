@@ -23,7 +23,7 @@ func TestContextModeProbe_AgainstTheRepoProfile(t *testing.T) {
 	if _, err := exec.LookPath("nono"); err != nil {
 		t.Skip("nono not on PATH")
 	}
-	profile, err := filepath.Abs("../../../claude-profile.json")
+	profile, err := filepath.Abs("../../claude-profile.json")
 	if err != nil {
 		t.Fatal(err)
 	}

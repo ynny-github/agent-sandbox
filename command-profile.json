@@ -143,9 +143,9 @@
     // unless this grant is present — measured true with af_unix_mediation
     // present, and equally true with it absent entirely. It is NOT
     // load-bearing for the one production launch path this repository
-    // actually uses: ExecdArgs (agent-sandbox/internal/claude/launch.go,
-    // around line 511) always passes "--allow-unix-socket-bind" itself, and
-    // through that flag the bind already succeeds with this entry absent —
+    // actually uses: ExecdArgs (internal/claude/launch.go) always passes
+    // "--allow-unix-socket-bind" itself, and through that flag the bind
+    // already succeeds with this entry absent —
     // measured, round trip clean either way. This entry exists so the
     // profile stands on its own for an execd started some other way — by
     // hand, or by something other than `agent-sandbox claude` — where no

@@ -64,11 +64,11 @@ const (
 // execd's own sandbox, not by the agent's.
 type ShellExecutor struct {
 	// pacer is shared by every request this executor serves, which is what
-	// makes it process-wide: internal/cli/execd.go builds exactly one ShellExecutor
-	// and hands it to the server, whose Serve spawns a goroutine per
-	// connection. The budget being paced belongs to the one nono session all
-	// of those goroutines launch into, so a per-request limiter would not
-	// bound anything.
+	// makes it process-wide: internal/cli/execd.go builds exactly one
+	// ShellExecutor and hands it to the server, whose Serve spawns a
+	// goroutine per connection. The budget being paced belongs to the one
+	// nono session all of those goroutines launch into, so a per-request
+	// limiter would not bound anything.
 	pacer *launchPacer
 }
 

@@ -51,7 +51,7 @@ func buildAgentSandbox(t *testing.T, dir string) string {
 		t.Fatalf("module root: %v", err)
 	}
 	out := filepath.Join(dir, "agent-sandbox")
-	cmd := exec.Command("go", "build", "-o", out, ".")
+	cmd := exec.Command("go", "build", "-o", out, "./cmd/agent-sandbox")
 	cmd.Dir = root
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("go build agent-sandbox: %v\n%s", err, output)

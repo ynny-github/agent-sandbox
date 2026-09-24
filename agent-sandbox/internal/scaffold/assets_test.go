@@ -23,6 +23,15 @@ func TestAssetsCoverEveryDestination(t *testing.T) {
 	if len(Assets) != len(want) {
 		t.Fatalf("Assets has %d entries, want %d", len(Assets), len(want))
 	}
+	// The length check above passes just as happily on two duplicate
+	// destinations plus one missing one, since it only counts entries. Check
+	// the reverse direction too: every wanted destination must actually be
+	// present in Assets.
+	for _, w := range want {
+		if !slices.ContainsFunc(Assets, func(a Asset) bool { return a.Dest == w }) {
+			t.Errorf("Assets is missing destination %q", w)
+		}
+	}
 	for _, a := range Assets {
 		if !slices.Contains(want, a.Dest) {
 			t.Errorf("unexpected destination %q", a.Dest)

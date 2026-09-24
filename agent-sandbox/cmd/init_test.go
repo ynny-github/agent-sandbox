@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -40,7 +41,7 @@ func initHarness(t *testing.T) (dir string, out *bytes.Buffer) {
 	t.Cleanup(func() { initBaseURL = origBase })
 
 	origValidate := initValidate
-	initValidate = func(fetched []scaffold.Fetched) ([]string, error) { return nil, nil }
+	initValidate = func(ctx context.Context, fetched []scaffold.Fetched) ([]string, error) { return nil, nil }
 	t.Cleanup(func() { initValidate = origValidate })
 
 	dir = t.TempDir()
@@ -104,7 +105,7 @@ func TestRunInitSkipsExistingFilesAndStillSucceeds(t *testing.T) {
 
 func TestRunInitWritesNothingWhenValidationFails(t *testing.T) {
 	dir, _ := initHarness(t)
-	initValidate = func(fetched []scaffold.Fetched) ([]string, error) {
+	initValidate = func(ctx context.Context, fetched []scaffold.Fetched) ([]string, error) {
 		return nil, errNotValid
 	}
 	if err := runInit(initCmd, nil); err == nil {
@@ -121,7 +122,7 @@ func TestRunInitWritesNothingWhenValidationFails(t *testing.T) {
 
 func TestRunInitPrintsWarningsWithoutFailing(t *testing.T) {
 	_, out := initHarness(t)
-	initValidate = func(fetched []scaffold.Fetched) ([]string, error) {
+	initValidate = func(ctx context.Context, fetched []scaffold.Fetched) ([]string, error) {
 		return []string{"command-profile.json: [warn] [allow_all_network] command 'ssh' from.git allows unrestricted child network"}, nil
 	}
 	if err := runInit(initCmd, nil); err != nil {

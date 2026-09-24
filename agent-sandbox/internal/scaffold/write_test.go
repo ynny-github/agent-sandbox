@@ -64,6 +64,44 @@ func TestWriteNeverOverwrites(t *testing.T) {
 	}
 }
 
+// TestWriteDoesNotWriteThroughADanglingSymlink guards the feature's headline
+// guarantee. os.Stat follows symlinks, so a dangling symlink at a
+// destination used to read as fs.ErrNotExist and a subsequent os.WriteFile
+// would write through it -- potentially outside the project directory
+// entirely, since a symlink's target need not live under dir at all. Write
+// must instead treat the symlink itself as "already exists" and skip it,
+// leaving both the symlink and whatever it points at untouched.
+func TestWriteDoesNotWriteThroughADanglingSymlink(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	target := filepath.Join(outside, "escaped")
+
+	dest := filepath.Join(dir, "command-profile.json")
+	if err := os.Symlink(target, dest); err != nil {
+		t.Fatal(err)
+	}
+
+	written, skipped, err := Write(dir, fetchedBodies())
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if !slices.Contains(skipped, "command-profile.json") {
+		t.Errorf("skipped = %v, want it to contain command-profile.json", skipped)
+	}
+	if slices.Contains(written, "command-profile.json") {
+		t.Errorf("written = %v, must not contain command-profile.json", written)
+	}
+	if _, err := os.Lstat(dest); err != nil {
+		t.Fatalf("the dangling symlink itself was removed or replaced: %v", err)
+	}
+	if fi, err := os.Lstat(dest); err == nil && fi.Mode()&os.ModeSymlink == 0 {
+		t.Error("the destination is no longer a symlink -- Write wrote through it")
+	}
+	if _, err := os.Stat(target); err == nil {
+		t.Errorf("Write created %s outside the project directory by following the dangling symlink", target)
+	}
+}
+
 func TestWriteSkipsAnExistingSkillNestedDeep(t *testing.T) {
 	dir := t.TempDir()
 	dest := ".claude/skills/growing-a-nono-profile/SKILL.md"

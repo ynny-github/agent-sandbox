@@ -30,6 +30,9 @@ func TestValidateRunsNonoOnBothProfilesOnly(t *testing.T) {
 		if name != "nono" {
 			t.Errorf("ran %q, want nono", name)
 		}
+		if len(args) < 2 || args[0] != "profile" || args[1] != "validate" {
+			t.Errorf("ran nono with args %v, want the subcommand \"profile validate\"", args)
+		}
 		seen = append(seen, args[len(args)-1])
 		return []byte("  Result: valid\n"), nil
 	})

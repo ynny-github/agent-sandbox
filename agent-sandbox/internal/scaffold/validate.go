@@ -51,7 +51,7 @@ func Validate(ctx context.Context, fetched []Fetched) ([]string, error) {
 		}
 		out, err := runCommand(ctx, "nono", "profile", "validate", path)
 		if err != nil {
-			return nil, fmt.Errorf("%s: nono profile validate: %s", f.Asset.Dest, strings.TrimSpace(string(out)))
+			return nil, fmt.Errorf("%s: nono profile validate: %w: %s", f.Asset.Dest, err, strings.TrimSpace(string(out)))
 		}
 		for _, line := range strings.Split(string(out), "\n") {
 			if strings.Contains(line, "[warn]") {

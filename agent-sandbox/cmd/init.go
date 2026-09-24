@@ -13,11 +13,13 @@ import (
 )
 
 // Seams for tests: one points the fetch at a local server, the other removes
-// the dependency on nono being installed.
+// the dependency on nono being installed. initValidate takes the command's
+// own context so a cancellation (Ctrl-C, the 60-second timeout below) reaches
+// the nono subprocess instead of stopping short at this seam.
 var (
 	initBaseURL  = scaffold.BaseURL
-	initValidate = func(fetched []scaffold.Fetched) ([]string, error) {
-		return scaffold.Validate(context.Background(), fetched)
+	initValidate = func(ctx context.Context, fetched []scaffold.Fetched) ([]string, error) {
+		return scaffold.Validate(ctx, fetched)
 	}
 )
 
@@ -32,6 +34,10 @@ Nothing is ever overwritten -- a file that already exists is reported and
 left alone, so re-running init is safe and skills you have edited are yours.
 The profiles are handed to ` + "`nono profile validate`" + ` before anything is
 written; if either is rejected, no file is created at all.
+
+Files are written beside the config path under their standard names (for
+example agent-sandbox.toml, command-profile.json) -- ` + "`--config ./cfg/my-sandbox.toml`" + `
+still writes ` + "`./cfg/agent-sandbox.toml`" + `, not a file named after the custom path.
 
 The profiles are a starting point, not a finished boundary. Run
 ` + "`agent-sandbox ai explain`" + ` and read the seeded growing-a-nono-profile skill
@@ -67,7 +73,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(out, "  %s  %d bytes  %s\n", f.URL, len(f.Body), f.ETag)
 	}
 
-	warnings, err := initValidate(fetched)
+	warnings, err := initValidate(ctx, fetched)
 	if err != nil {
 		return fmt.Errorf("profile validation failed, nothing written: %w", err)
 	}
@@ -75,15 +81,18 @@ func runInit(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(out, "warning: %s\n", w)
 	}
 
+	// written and skipped are printed even on failure: scaffold.Write returns
+	// what it accumulated before the error, and a user whose run failed on
+	// file 4 of 5 needs to know the other three already landed on disk.
 	written, skipped, err := scaffold.Write(dir, fetched)
-	if err != nil {
-		return fmt.Errorf("write: %w", err)
-	}
 	for _, p := range written {
 		fmt.Fprintf(out, "wrote %s\n", p)
 	}
 	for _, p := range skipped {
 		fmt.Fprintf(out, "skip  %s (already exists)\n", p)
+	}
+	if err != nil {
+		return fmt.Errorf("write: %w", err)
 	}
 
 	if len(written) == 0 {

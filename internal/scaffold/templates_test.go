@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
+	"github.com/ynny-github/agent-sandbox/internal/config"
 )
 
 // repoRoot walks up from the working directory until it finds go.mod. The

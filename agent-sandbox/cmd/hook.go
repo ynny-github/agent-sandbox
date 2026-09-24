@@ -7,7 +7,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/shellquote"
+	"github.com/ynny-github/agent-sandbox/internal/shellquote"
 )
 
 var hookCmd = &cobra.Command{

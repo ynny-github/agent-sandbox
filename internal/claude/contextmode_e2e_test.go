@@ -7,7 +7,7 @@
 //
 // Run it explicitly:
 //
-//	go test -tags e2e ./agent-sandbox/internal/claude/... -run ContextModeProbe -v
+//	go test -tags e2e ./internal/claude/... -run ContextModeProbe -v
 package claude
 
 import (
@@ -16,7 +16,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/execd"
+	"github.com/ynny-github/agent-sandbox/internal/execd"
 )
 
 func TestContextModeProbe_AgainstTheRepoProfile(t *testing.T) {

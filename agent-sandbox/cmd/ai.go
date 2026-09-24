@@ -4,8 +4,8 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/agentconfig"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
+	"github.com/ynny-github/agent-sandbox/internal/agentconfig"
+	"github.com/ynny-github/agent-sandbox/internal/config"
 )
 
 var aiCmd = &cobra.Command{

@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/agentconfig"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/execd"
+	"github.com/ynny-github/agent-sandbox/internal/agentconfig"
+	"github.com/ynny-github/agent-sandbox/internal/config"
+	"github.com/ynny-github/agent-sandbox/internal/execd"
 )
 
 func TestValidatePassthrough_SettingsBlocked(t *testing.T) {

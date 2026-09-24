@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/agentconfig"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
+	"github.com/ynny-github/agent-sandbox/internal/agentconfig"
+	"github.com/ynny-github/agent-sandbox/internal/config"
 )
 
 func TestPointer_MentionsExplainCommand(t *testing.T) {

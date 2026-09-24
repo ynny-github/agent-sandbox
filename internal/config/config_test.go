@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
+	"github.com/ynny-github/agent-sandbox/internal/config"
 )
 
 // TestMain isolates HOME to an empty temp dir so tests never pick up a real

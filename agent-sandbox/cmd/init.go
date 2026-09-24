@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/scaffold"
+	"github.com/ynny-github/agent-sandbox/internal/scaffold"
 )
 
 // Seams for tests: one points the fetch at a local server, the other removes

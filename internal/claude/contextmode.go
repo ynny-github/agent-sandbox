@@ -1,4 +1,4 @@
-// agent-sandbox/internal/claude/contextmode.go
+// internal/claude/contextmode.go
 package claude
 
 import (
@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/execd"
+	"github.com/ynny-github/agent-sandbox/internal/execd"
 )
 
 // ContextModeEnvVar names the variable context-mode reads to choose where

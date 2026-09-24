@@ -8,9 +8,9 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/claude"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/envflag"
+	"github.com/ynny-github/agent-sandbox/internal/claude"
+	"github.com/ynny-github/agent-sandbox/internal/config"
+	"github.com/ynny-github/agent-sandbox/internal/envflag"
 )
 
 var debugCmd = &cobra.Command{

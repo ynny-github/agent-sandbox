@@ -10,7 +10,7 @@
 // actual agent-sandbox CLI, and reaches out over the network, none of which
 // belong in the default, hermetic test run. Run it explicitly with:
 //
-//	go test -tags e2e ./agent-sandbox/internal/claude/... -run ExecdCommand -v
+//	go test -tags e2e ./internal/claude/... -run ExecdCommand -v
 package claude_test
 
 import (
@@ -24,9 +24,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/claude"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/execd"
+	"github.com/ynny-github/agent-sandbox/internal/claude"
+	"github.com/ynny-github/agent-sandbox/internal/config"
+	"github.com/ynny-github/agent-sandbox/internal/execd"
 )
 
 // buildAgentSandbox compiles the real CLI binary into dir and returns its
@@ -46,7 +46,7 @@ import (
 // does not otherwise need.
 func buildAgentSandbox(t *testing.T, dir string) string {
 	t.Helper()
-	root, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatalf("module root: %v", err)
 	}

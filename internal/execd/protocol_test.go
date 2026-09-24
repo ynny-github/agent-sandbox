@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/execd"
+	"github.com/ynny-github/agent-sandbox/internal/execd"
 )
 
 func TestRequestRoundTripsACommandLine(t *testing.T) {

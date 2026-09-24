@@ -17,10 +17,10 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/claude"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/execd"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/policysnapshot"
+	"github.com/ynny-github/agent-sandbox/internal/claude"
+	"github.com/ynny-github/agent-sandbox/internal/config"
+	"github.com/ynny-github/agent-sandbox/internal/execd"
+	"github.com/ynny-github/agent-sandbox/internal/policysnapshot"
 )
 
 var errDoctorChecksFailed = errors.New("doctor: checks failed")

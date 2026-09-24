@@ -1,10 +1,8 @@
 // main.go
 //
-// The entrypoint lives at the module root so the install path stays short:
-// `go install github.com/ynny-github/agent-sandbox@latest`. Everything else
-// stays under agent-sandbox/, where the internal/ tree remains importable only
-// from within that subtree — this file reaches the CLI through the non-internal
-// cmd package and touches nothing else.
+// The entrypoint. The cobra command tree it runs lives elsewhere in this
+// module; the shared packages live in the module-root internal/ tree, which
+// every main package in this module can import.
 package main
 
 import (

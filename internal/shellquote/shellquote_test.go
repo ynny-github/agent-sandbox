@@ -3,7 +3,7 @@ package shellquote_test
 import (
 	"testing"
 
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/shellquote"
+	"github.com/ynny-github/agent-sandbox/internal/shellquote"
 )
 
 func TestQuote(t *testing.T) {

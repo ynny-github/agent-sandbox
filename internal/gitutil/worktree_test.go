@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/gitutil"
+	"github.com/ynny-github/agent-sandbox/internal/gitutil"
 )
 
 func TestDetectWorktreeGitDir_RegularRepo(t *testing.T) {

@@ -6,7 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/claude"
+	"github.com/ynny-github/agent-sandbox/internal/claude"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -15,8 +15,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/execd"
+	"github.com/ynny-github/agent-sandbox/internal/config"
+	"github.com/ynny-github/agent-sandbox/internal/execd"
 )
 
 // shortStateDir returns a fresh, short-named temp directory suitable for

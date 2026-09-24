@@ -13,11 +13,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/agentconfig"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/execd"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/gitutil"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/policysnapshot"
+	"github.com/ynny-github/agent-sandbox/internal/agentconfig"
+	"github.com/ynny-github/agent-sandbox/internal/config"
+	"github.com/ynny-github/agent-sandbox/internal/execd"
+	"github.com/ynny-github/agent-sandbox/internal/gitutil"
+	"github.com/ynny-github/agent-sandbox/internal/policysnapshot"
 )
 
 // agentName identifies the launched agent for host-policy resolution. Only
@@ -240,7 +240,7 @@ type runDeps struct {
 	// sandbox. Called only when --context-mode was passed, after execd is up
 	// and the variables are set.
 	verifyContextMode func(profilePath string) error
-	startExecd func(*config.Config) (socket string, cleanup func(), err error)
+	startExecd        func(*config.Config) (socket string, cleanup func(), err error)
 	// startShellWrapper writes the shell Claude runs tool commands with. It
 	// returns the wrapper's path and a cleanup that removes it.
 	startShellWrapper func() (path string, cleanup func(), err error)

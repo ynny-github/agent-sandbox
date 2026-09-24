@@ -6,7 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/policysnapshot"
+	"github.com/ynny-github/agent-sandbox/internal/policysnapshot"
 )
 
 // ShellEnvVar names the variable Claude Code reads to pick the shell it runs

@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/output"
+	"github.com/ynny-github/agent-sandbox/internal/output"
 )
 
 func TestCreateFiles_ReturnsDistinctPaths(t *testing.T) {

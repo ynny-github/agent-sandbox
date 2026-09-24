@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/execd"
+	"github.com/ynny-github/agent-sandbox/internal/execd"
 )
 
 // TestWiringDoesNotLeakARedirectToTheCallersWriter checks what this case can

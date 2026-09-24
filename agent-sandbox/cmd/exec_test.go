@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/execd"
+	"github.com/ynny-github/agent-sandbox/internal/execd"
 )
 
 // startFakeExecd starts a real execd server (backed by ShellExecutor) on a

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/claude"
+	"github.com/ynny-github/agent-sandbox/internal/claude"
 )
 
 func TestRunDebug_MissingConfig(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"runtime/debug"
 
 	"github.com/spf13/cobra"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/envflag"
+	"github.com/ynny-github/agent-sandbox/internal/envflag"
 )
 
 var configPath string

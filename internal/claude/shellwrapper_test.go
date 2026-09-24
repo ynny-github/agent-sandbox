@@ -2,7 +2,7 @@ package claude
 
 import (
 	"errors"
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/config"
+	"github.com/ynny-github/agent-sandbox/internal/config"
 	"os"
 	"os/exec"
 	"path/filepath"

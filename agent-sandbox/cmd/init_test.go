@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/internal/scaffold"
+	"github.com/ynny-github/agent-sandbox/internal/scaffold"
 )
 
 // serveTemplates answers every asset with a body naming its source.

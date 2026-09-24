@@ -129,7 +129,7 @@ func (c *Client) RunCommand(ctx context.Context, command string,
 					// in protocol.go). In that case the connection stays
 					// healthy, the read loop sees nothing wrong, and the
 					// signal vanishes with no diagnostic. No production
-					// caller hits this today — cmd/exec.go relays only
+					// caller hits this today — internal/cli/exec.go relays only
 					// SIGINT and SIGTERM, both deliverable — but a library
 					// caller forwarding an arbitrary signal would lose it
 					// silently.

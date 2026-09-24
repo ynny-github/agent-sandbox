@@ -11,7 +11,7 @@ import (
 )
 
 // runCommand is a seam so tests do not need nono installed. It mirrors the
-// same pattern in cmd/doctor.go.
+// same pattern in internal/cli/doctor.go.
 var runCommand = defaultRunCommand
 
 func defaultRunCommand(ctx context.Context, name string, args ...string) ([]byte, error) {

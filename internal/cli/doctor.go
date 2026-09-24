@@ -1,5 +1,5 @@
-// agent-sandbox/cmd/doctor.go
-package cmd
+// internal/cli/doctor.go
+package cli
 
 import (
 	"bytes"

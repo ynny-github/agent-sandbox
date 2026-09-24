@@ -1,5 +1,5 @@
-// agent-sandbox/cmd/profiles.go
-package cmd
+// internal/cli/profiles.go
+package cli
 
 import (
 	"context"

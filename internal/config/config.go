@@ -208,7 +208,7 @@ func validate(cfg *Config) (*Config, error) {
 		// validate failure: doctor's checkProfiles needs
 		// cfg.CommandProfilePath() to report the dedicated, actionable
 		// "write the profile, or point command_profile at it" hint instead of
-		// the generic "fix the config first" one — see cmd/doctor.go.
+		// the generic "fix the config first" one — see internal/cli/doctor.go.
 		return cfg, fmt.Errorf("%w: %s", ErrCommandProfileMissing, cfg.CommandProfilePath())
 	}
 

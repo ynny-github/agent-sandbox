@@ -1,5 +1,5 @@
-// agent-sandbox/cmd/claude.go
-package cmd
+// internal/cli/claude.go
+package cli
 
 import (
 	"fmt"

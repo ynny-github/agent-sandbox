@@ -30,7 +30,7 @@ const (
 	// ChanSignal carries a signal from the client to a running command. It is
 	// the only way to interrupt a command short of dropping the connection,
 	// which is a SIGKILL in effect. That is the rationale for both the
-	// allow-list below and the two-stage interrupt in cmd/exec.go: a client
+	// allow-list below and the two-stage interrupt in internal/cli/exec.go: a client
 	// that wants a command to stop politely has this frame and nothing else.
 	ChanSignal Channel = 7
 )

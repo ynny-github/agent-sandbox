@@ -1,5 +1,5 @@
-// agent-sandbox/cmd/debug.go
-package cmd
+// internal/cli/debug.go
+package cli
 
 import (
 	"fmt"

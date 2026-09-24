@@ -1,5 +1,5 @@
-// agent-sandbox/cmd/root.go
-package cmd
+// internal/cli/root.go
+package cli
 
 import (
 	"runtime/debug"

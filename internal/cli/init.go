@@ -1,5 +1,5 @@
-// agent-sandbox/cmd/init.go
-package cmd
+// internal/cli/init.go
+package cli
 
 import (
 	"context"

@@ -19,3 +19,21 @@ node_modules/
 
 # superpowers scratch (ledgers, task briefs, review packages)
 .superpowers/
+
+# go (from the removed agent-sandbox/ subtree)
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+/vendor/
+config.toml
+
+# editors and OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

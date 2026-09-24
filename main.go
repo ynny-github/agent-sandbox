@@ -8,11 +8,11 @@ package main
 import (
 	"os"
 
-	"github.com/ynny-github/agent-sandbox/agent-sandbox/cmd"
+	"github.com/ynny-github/agent-sandbox/internal/cli"
 )
 
 func main() {
-	if err := cmd.Execute(); err != nil {
+	if err := cli.Execute(); err != nil {
 		os.Exit(1)
 	}
 }

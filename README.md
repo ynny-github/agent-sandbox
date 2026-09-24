@@ -35,7 +35,7 @@ Run `agent-sandbox doctor` to verify.
 ## Install
 
 ```bash
-go install github.com/ynny-github/agent-sandbox@latest
+go install github.com/ynny-github/agent-sandbox/cmd/agent-sandbox@latest
 ```
 
 Or with [mise](https://mise.jdx.dev/):
@@ -43,7 +43,7 @@ Or with [mise](https://mise.jdx.dev/):
 ```toml
 # .mise.toml
 [tools]
-"go:github.com/ynny-github/agent-sandbox" = "latest"
+"go:github.com/ynny-github/agent-sandbox/cmd/agent-sandbox" = "latest"
 ```
 
 **Install outside every path the command profile grants write access to** —
@@ -213,7 +213,7 @@ mise run build        # install a working-tree build via `go install`
 ```
 
 
-**Use `mise run build`, not `go build` or `go run .`.** Only `go install`
+**Use `mise run build`, not `go build` or `go run ./cmd/agent-sandbox`.** Only `go install`
 puts the binary outside this working tree and on `PATH`, which is where it
 has to be for a launch to work.
 

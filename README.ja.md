@@ -35,7 +35,7 @@ launcher
 ## インストール
 
 ```bash
-go install github.com/ynny-github/agent-sandbox@latest
+go install github.com/ynny-github/agent-sandbox/cmd/agent-sandbox@latest
 ```
 
 [mise](https://mise.jdx.dev/) を使う場合:
@@ -43,7 +43,7 @@ go install github.com/ynny-github/agent-sandbox@latest
 ```toml
 # .mise.toml
 [tools]
-"go:github.com/ynny-github/agent-sandbox" = "latest"
+"go:github.com/ynny-github/agent-sandbox/cmd/agent-sandbox" = "latest"
 ```
 
 **コマンドプロファイルが書き込みを許可するどのパスの外にも置いてください** —
@@ -207,7 +207,7 @@ go build ./...
 mise run build        # `go install` でワーキングツリーのビルドを入れる
 ```
 
-**`go build` や `go run .` ではなく `mise run build` を使ってください。**
+**`go build` や `go run ./cmd/agent-sandbox` ではなく `mise run build` を使ってください。**
 バイナリをこのワーキングツリーの外かつ `PATH` の通った場所に置けるのは `go install`
 だけで、起動にはそこに置かれている必要があります。
 

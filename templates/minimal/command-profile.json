@@ -1,0 +1,96 @@
+{
+  "meta": { "name": "agent-sandbox commands (minimal)" },
+
+  // Commands get the working directory and nothing else writable beyond
+  // nono's own floor, which already grants read on /bin and /usr/bin.
+  "workdir": { "access": "readwrite" },
+
+  // This is the floor for commands that have NO entry in command_policies
+  // below -- it is not a ceiling. A declared command carries its own network
+  // grant and is not bounded by this list. Measured: a policy with
+  // network.allow_all reaches the internet even when this says block.
+  //
+  // It is an allow_domain list rather than "block": true because git's policy
+  // below is proxy-routed, and nono's proxy only exists when the session
+  // declares network. With "block": true, git fails at sandbox init with
+  // "proxy-routed network policy was granted but no loopback proxy env was
+  // present" -- every git command, local ones included.
+  "network": {
+    "allow_domain": ["github.com", "*.githubusercontent.com"]
+  },
+
+  // DO NOT DELETE THIS BLOCK. Without an allow_vars list nono forwards the
+  // environment as-is -- measured: 84 host variables reached the command,
+  // SSH_AUTH_SOCK and CLAUDE_CODE_MESSAGING_TOKEN among them.
+  //
+  // AGENT_SANDBOX_EXECD_SOCKET must never be added here, under any name or
+  // wildcard. A command that can reach the execd socket can recurse into
+  // execd, which spawns handlers with no concurrency cap. Omitting it only
+  // works while this block exists; delete the block and it is forwarded.
+  //
+  // No proxy variables here: nono injects its own at this level. They ARE
+  // required inside a command policy -- see git below.
+  "environment": {
+    "allow_vars": ["PATH", "HOME", "USER", "TERM", "LANG", "LC_ALL"]
+  },
+
+  "command_policies": {
+    "commands": {
+      // git gets its own child sandbox. Without an entry here git is not
+      // merely unconfined, it is broken: at execd's own grants it cannot read
+      // ~/.gitconfig and every invocation dies with
+      // "fatal: unknown error occurred while reading the configuration files".
+      "git": {
+        // ssh is reachable THROUGH git and only through git; see below.
+        // nono rejects the profile if the named command has no entry.
+        "can_use": ["ssh"],
+        "from": {
+          "session": { "sandbox": {
+            // @git: tokens are resolved by nono per repository. Include
+            // scopes are excluded, so a repository cannot grant itself host
+            // access through its own .git/config.
+            "fs_read_file": ["@git:config-files"],
+            "fs_read":      ["@git:hooks-path", "$WORKDIR"],
+            // @git:common-dir covers the object store when $WORKDIR is a
+            // linked worktree; @git:worktree covers the main repo root,
+            // without which `git worktree add` fails at getcwd() with EPERM.
+            "fs_write":     ["$WORKDIR", "@git:common-dir", "@git:worktree", "@git:toplevel"],
+            // git-remote-https and the other subcommands live here. nono
+            // SKIPS entries that do not exist, so a wrong path costs
+            // availability, silently. On NixOS add the output of
+            // `git --exec-path`; these two cover ordinary Linux.
+            "exec_paths":   ["/usr/lib/git-core", "/usr/libexec/git-core"],
+            "network":      { "allow_domain": ["github.com", "*.githubusercontent.com"] },
+            // The proxy variables are load-bearing HERE, unlike at session
+            // level. Measured: without them `git ls-remote https://...` fails
+            // with "unable to access"; with them it returns the ref.
+            "environment":  { "allow_vars": [
+              "PATH", "HOME", "USER", "TERM", "LANG", "LC_ALL",
+              "http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY",
+              "no_proxy", "NO_PROXY"
+            ] }
+          } }
+        }
+      },
+
+      // ssh exists only so that git can use an SSH remote. "session": "deny"
+      // means the agent cannot invoke ssh itself -- only git can reach it.
+      "ssh": {
+        "from": {
+          "session": "deny",
+          "git": { "sandbox": {
+            // The whole key directory, reachable only through git.
+            "fs_read":       ["~/.ssh"],
+            "fs_write_file": ["~/.ssh/known_hosts"],
+            // `nono profile validate` warns [allow_all_network] here, and the
+            // warning is accepted: ssh cannot be routed through nono's HTTP
+            // proxy, and allow_domain without an enforceable proxy is
+            // rejected outright. There is no narrower form.
+            "network":       { "allow_all": true },
+            "environment":   { "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM"] }
+          } }
+        }
+      }
+    }
+  }
+}

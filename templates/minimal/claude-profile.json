@@ -1,0 +1,37 @@
+{
+  // nono's packaged profile for Claude Code. It is a strict allowlist --
+  // measured: on its own it forwards only PATH, BROWSER and NONO_CAP_FILE,
+  // not even HOME.
+  "extends": "claude",
+  "meta": { "name": "agent-sandbox agent (minimal)" },
+
+  // The agent's file tools write scratch files and read them back. The floor
+  // grants /tmp write-only, which fails on the read-back.
+  //
+  // A docker-based MCP server (added via `claude --mcp-config`) runs as a
+  // direct child of the agent and works here unchanged: nono leaves unix
+  // socket mediation off by default, so /var/run/docker.sock is reachable
+  // without a grant. ~/.docker is only for registry credentials, and is not
+  // what makes docker work.
+  "filesystem": { "allow": ["/tmp"] },
+
+  // Network is deliberately NOT blocked here: Claude cannot reach its API
+  // without it. The command side is what is confined.
+  "environment": {
+    "allow_vars": [
+      "PATH", "HOME", "USER", "TERM", "LANG", "LC_ALL",
+
+      // Load-bearing. Stripped, the agent never reaches execd and every
+      // command fails with an error that names nothing.
+      "AGENT_SANDBOX_EXECD_SOCKET",
+
+      // Names the --norc bash wrapper the launcher generates. Stripped,
+      // Claude falls back to the login shell, which sources ~/.bashrc, which
+      // no profile grants -- every tool result is then prefixed with a
+      // permission error. Costs noise, not access.
+      "CLAUDE_CODE_SHELL"
+
+      // Add "CONTEXT_MODE_EXEC_BACKEND" here to use `claude --context-mode`.
+    ]
+  }
+}

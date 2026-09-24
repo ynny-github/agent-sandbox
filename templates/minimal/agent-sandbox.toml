@@ -1,0 +1,7 @@
+# The nono profile execd runs every command under.
+command_profile = "command-profile.json"
+
+# The nono profile the agent process itself runs under. Shell commands do not
+# run in it -- they go to execd, under command_profile.
+[agents.claude]
+profile = "claude-profile.json"

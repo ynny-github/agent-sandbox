@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -1177,47 +1178,87 @@ func TestRun_ContextModeProbeRunsAfterTheEnvIsSet(t *testing.T) {
 	}
 }
 
-// runCapturingHerdrAgent runs the launcher with every dependency stubbed and
-// returns HERDR_AGENT as the supervised child would inherit it.
-func runCapturingHerdrAgent(t *testing.T) string {
+// herdrRun runs the launcher with every dependency stubbed. It reports
+// whether run re-exec'd, the environment it re-exec'd with, and whether it
+// went on to start execd.
+func herdrRun(t *testing.T) (reexeced bool, env []string, started bool) {
 	t.Helper()
 	makeFakeNono(t)
-	var got string
 	err := run(&config.Config{}, Options{}, runDeps{
 		agentProfile: func(*config.Config) (string, error) {
 			return "/tmp/asb-profile-1.json", nil
 		},
 		verifyHook:         func(string, string) error { return nil },
 		contextModeEnabled: func() (bool, error) { return false, nil },
-		startExecd:         testExecdStart("/tmp/test.sock", nil),
-		startShellWrapper:  testWrapperStart("/tmp/test-norc-bash-1", nil),
-		supervise: func(string, []string) int {
-			got = os.Getenv(HerdrAgentEnvVar)
-			return 0
+		startExecd: func(*config.Config) (string, func(), error) {
+			started = true
+			return "/tmp/test.sock", func() {}, nil
 		},
-		exit: func(int) {},
+		startShellWrapper: testWrapperStart("/tmp/test-norc-bash-1", nil),
+		reexec: func(_ string, _ []string, e []string) error {
+			reexeced, env = true, e
+			return nil
+		},
+		supervise: func(string, []string) int { return 0 },
+		exit:      func(int) {},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	return got
+	return reexeced, env, started
 }
 
-// Under `nono run` claude lives on nono's own pty, so herdr sees only nono in
-// the pane's foreground job and cannot name the agent. HERDR_AGENT on the nono
-// process is herdr's documented hint for exactly that case.
-func TestRun_SetsHerdrAgentHintBeforeSupervise(t *testing.T) {
+// Under `nono run` claude lives on nono's own pty, so herdr sees only the
+// launcher and nono in the pane's foreground job. herdr reads HERDR_AGENT from
+// /proc/<pid>/environ, which shows a process's environment as of its execve:
+// nono soon makes its own unreadable, and an os.Setenv in the launcher never
+// appears there. So inside herdr the launcher re-execs itself with the hint,
+// before it starts anything.
+func TestRun_ReexecsWithHerdrHintInsideHerdr(t *testing.T) {
+	t.Setenv(herdrPaneEnvVar, "w1:p1")
 	t.Setenv(HerdrAgentEnvVar, "")
 	os.Unsetenv(HerdrAgentEnvVar)
-	if got := runCapturingHerdrAgent(t); got != "claude" {
-		t.Errorf("%s at supervise time = %q, want %q", HerdrAgentEnvVar, got, "claude")
+	reexeced, env, started := herdrRun(t)
+	if !reexeced {
+		t.Fatal("run did not re-exec inside herdr without HERDR_AGENT")
+	}
+	if !slices.Contains(env, HerdrAgentEnvVar+"=claude") {
+		t.Errorf("re-exec env lacks %s=claude: %v", HerdrAgentEnvVar, env)
+	}
+	if started {
+		t.Error("run started execd before re-exec'ing; the re-exec'd launcher would start a second one")
 	}
 }
 
-// An operator who already exported the hint keeps their value.
-func TestRun_KeepsOperatorHerdrAgentHint(t *testing.T) {
+// An operator-set hint wins, and it also ends the re-exec: the re-exec'd
+// launcher sees the hint and carries on.
+func TestRun_NoReexecWhenHerdrHintPresent(t *testing.T) {
+	t.Setenv(herdrPaneEnvVar, "w1:p1")
 	t.Setenv(HerdrAgentEnvVar, "custom")
-	if got := runCapturingHerdrAgent(t); got != "custom" {
-		t.Errorf("%s at supervise time = %q, want %q", HerdrAgentEnvVar, got, "custom")
+	reexeced, _, started := herdrRun(t)
+	if reexeced {
+		t.Error("run re-exec'd although HERDR_AGENT was already set")
+	}
+	if !started {
+		t.Error("run did not go on to launch")
+	}
+}
+
+// Outside herdr nothing reads the hint, so the launcher neither re-execs nor
+// publishes it.
+func TestRun_NoReexecOutsideHerdr(t *testing.T) {
+	t.Setenv(herdrPaneEnvVar, "")
+	os.Unsetenv(herdrPaneEnvVar)
+	t.Setenv(HerdrAgentEnvVar, "")
+	os.Unsetenv(HerdrAgentEnvVar)
+	reexeced, _, started := herdrRun(t)
+	if reexeced {
+		t.Error("run re-exec'd outside herdr")
+	}
+	if !started {
+		t.Error("run did not go on to launch")
+	}
+	if v, ok := os.LookupEnv(HerdrAgentEnvVar); ok {
+		t.Errorf("%s = %q outside herdr, want unset", HerdrAgentEnvVar, v)
 	}
 }

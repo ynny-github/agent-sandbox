@@ -159,13 +159,22 @@ func probeHook(profilePath, self string) error {
 }
 
 // HerdrAgentEnvVar is herdr's foreground-process hint. Under `nono run`,
-// claude runs on a pty nono allocates, so herdr sees only nono in the pane's
-// foreground job and cannot identify the agent by name. herdr reads this
-// variable from /proc/<pid>/environ of a process in that job instead.
-// Measured with herdr 0.9.1: without it the pane reports no agent; with
-// HERDR_AGENT=claude on nono it reports claude and tracks its state. The
+// claude runs on a pty nono allocates, so herdr sees only the launcher and
+// nono in the pane's foreground job and cannot identify the agent by name.
+// herdr reads this variable from /proc/<pid>/environ of a process in that job
+// instead — and that file shows the environment as of execve. nono soon makes
+// its own environ unreadable, and an os.Setenv in the launcher never shows up
+// there, so the hint has to be in the launcher's own exec-time environment:
+// see herdrReexecEnv. Measured with herdr 0.9.1: set by os.Setenv, herdr found
+// the agent only when it polled before nono locked its environ (4 of 5
+// launches); present at the launcher's exec, it found it every time. The
 // agent profile does not forward it, so it never reaches claude itself.
 const HerdrAgentEnvVar = "HERDR_AGENT"
+
+// herdrPaneEnvVar is set by herdr in every pane it runs. The launcher re-execs
+// with HerdrAgentEnvVar only when it is present: outside herdr nothing reads
+// the hint.
+const herdrPaneEnvVar = "HERDR_PANE_ID"
 
 // BuildArgs constructs the nono executable path and the argv used to launch
 // Claude under the sandbox for cfg. It injects the operator's profile at
@@ -264,8 +273,11 @@ type runDeps struct {
 	// startShellWrapper writes the shell Claude runs tool commands with. It
 	// returns the wrapper's path and a cleanup that removes it.
 	startShellWrapper func() (path string, cleanup func(), err error)
-	supervise         func(path string, args []string) int
-	exit              func(code int)
+	// reexec replaces the launcher with a fresh copy of itself (syscall.Exec);
+	// it returns only on failure.
+	reexec    func(path string, argv, env []string) error
+	supervise func(path string, args []string) int
+	exit      func(code int)
 }
 
 // defaultAgentProfile resolves the launched agent's profile path from cfg and
@@ -299,12 +311,42 @@ func defaultDeps() runDeps {
 		verifyContextMode:  probeContextMode,
 		startExecd:         startExecd,
 		startShellWrapper:  defaultShellWrapper,
+		reexec:             syscall.Exec,
 		supervise:          superviseProcess,
 		exit:               os.Exit,
 	}
 }
 
+// herdrReexecEnv returns environ plus HerdrAgentEnvVar=claude, and true, when
+// the launcher runs inside a herdr pane without the hint. An operator-set hint
+// wins, and it is also what stops the re-exec'd launcher from re-exec'ing.
+func herdrReexecEnv(environ []string) ([]string, bool) {
+	if os.Getenv(herdrPaneEnvVar) == "" || os.Getenv(HerdrAgentEnvVar) != "" {
+		return nil, false
+	}
+	env := make([]string, 0, len(environ)+1)
+	for _, kv := range environ {
+		if !strings.HasPrefix(kv, HerdrAgentEnvVar+"=") {
+			env = append(env, kv)
+		}
+	}
+	return append(env, HerdrAgentEnvVar+"=claude"), true
+}
+
 func run(cfg *config.Config, opts Options, d runDeps) error {
+	// First, before anything is started: the re-exec'd launcher runs all of
+	// this again, and anything started here would be orphaned.
+	if env, ok := herdrReexecEnv(os.Environ()); ok {
+		self, err := launcherPath()
+		if err != nil {
+			return err
+		}
+		if err := d.reexec(self, os.Args, env); err != nil {
+			return fmt.Errorf("re-exec with %s: %w", HerdrAgentEnvVar, err)
+		}
+		return nil
+	}
+
 	profilePath, err := d.agentProfile(cfg)
 	if err != nil {
 		return err
@@ -365,10 +407,6 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 	// superviseProcess inherits the launcher's environment, so setting it here
 	// is the simplest correct way to hand the execd socket path to the child.
 	os.Setenv(execd.SocketEnvVar, execdSocket)
-	// An operator-set hint wins; see HerdrAgentEnvVar.
-	if os.Getenv(HerdrAgentEnvVar) == "" {
-		os.Setenv(HerdrAgentEnvVar, "claude")
-	}
 	if shellWrapper != "" {
 		os.Setenv(ShellEnvVar, shellWrapper)
 	}

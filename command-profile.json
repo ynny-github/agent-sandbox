@@ -411,8 +411,27 @@
             // include.path / includeIf.*.path in those scopes. local and worktree
             // scopes are deliberately excluded by nono, so a repository cannot
             // grant itself host access through its own .git/config.
-            "fs_read_file": ["@git:config-files"],
-            "fs_read":      ["@git:hooks-path", "$WORKDIR"],
+            //
+            // The system CA bundle is for HTTPS transport: without it
+            // git-remote-https fails with "Problem with the SSL CA cert".
+            "fs_read_file": ["@git:config-files", "/etc/ssl/certs/ca-certificates.crt"],
+            // The last three entries are HTTPS transport too. nono stacks two
+            // Landlock layers on a child: its fs grants (where a read grant
+            // carries execute) and an execute allowlist (exec_paths below,
+            // plus the command's own ELF closure). A helper must pass BOTH, so
+            // exec_paths alone does not make git-remote-https runnable. On
+            // NixOS the /nix/store read grant that used to sit here covered
+            // helper, libraries and certificates at once; on Ubuntu each is
+            // named. Measured on nono 0.78.0, dropping one at a time:
+            //   - no git-core dir:   "cannot exec 'remote-https': Permission denied"
+            //   - no library dir:    "libcurl-gnutls.so.4: cannot open shared
+            //                        object file" (git's own closure does not
+            //                        include the helper's libraries)
+            // The library directory is read-only here: it is not in exec_paths,
+            // so nothing in it becomes executable through this grant.
+            "fs_read":      ["@git:hooks-path", "$WORKDIR",
+                             "/usr/lib/git-core", "/usr/libexec/git-core",
+                             "/usr/lib/x86_64-linux-gnu"],
             // @git:common-dir covers the object store when $WORKDIR is a linked
             // worktree; @git:worktree covers the main repo root, without which
             // `git worktree add` fails at getcwd() with EPERM.
@@ -420,7 +439,8 @@
             // Needed ONLY for HTTPS transport: git-remote-https is a separate
             // binary under libexec/git-core. Without this, local operations and
             // SSH remotes still work and HTTPS fails with
-            // "fatal: cannot exec 'remote-https': Permission denied".
+            // "fatal: cannot exec 'remote-https': Permission denied". It is
+            // necessary but not sufficient — see the fs_read grants above.
             // nono SKIPS exec_paths entries that do not exist, so a git whose
             // exec path moves breaks HTTPS here silently. doctor checks for
             // that. `git --exec-path` is /usr/lib/git-core on this (Ubuntu)
@@ -505,6 +525,12 @@
             // Note the residual above: a forwarded agent is in fact reachable
             // from this sandbox already, just not as a declared credential.
             "fs_read":       ["~/.ssh"],
+            // GitHub's host key lives in the system-wide known_hosts on this
+            // host, not in ~/.ssh/known_hosts (which does not exist). Without
+            // this grant every SSH remote fails with "hostkeys_foreach failed
+            // for /etc/ssh/ssh_known_hosts: Permission denied" / "Host key
+            // verification failed". Measured on nono 0.78.0.
+            "fs_read_file":  ["/etc/ssh/ssh_known_hosts"],
             // UserKnownHostsFile resolves to ~/.ssh/known_hosts AND
             // ~/.ssh/known_hosts2 on this host; only the first is writable
             // here, which is the one OpenSSH writes to. Whether a host key
@@ -582,6 +608,13 @@
       // that re-execs `libexec/docker/docker` by absolute path, and that
       // store path goes stale on every docker update.
       //
+      // The same two directories are also in fs_read, for the reason given
+      // at git's fs_read: a child needs a read grant (which carries execute)
+      // AND an exec_paths entry before it can run a helper. Measured on nono
+      // 0.78.0: with exec_paths alone, `docker compose version` reports
+      // "unknown command: docker compose" — docker cannot run the plugin to
+      // discover it.
+      //
       // No argv-level policy either: this entry execs the real docker
       // binary directly, the same shape as git's own entry above. Nothing
       // inspects what is asked of docker — `--privileged`, a host-path or
@@ -590,7 +623,7 @@
       // of that sandbox is the whole boundary here.
       "docker": {
         "from": { "session": { "sandbox": {
-          "fs_read":    ["$WORKDIR", "~/.docker"],
+          "fs_read":    ["$WORKDIR", "~/.docker", "/usr/libexec/docker", "/usr/lib/docker"],
           "fs_write":   ["$WORKDIR"],
           "exec_paths": ["/usr/libexec/docker", "/usr/lib/docker"],
           "environment": { "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM"] }

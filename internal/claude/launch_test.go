@@ -1160,3 +1160,48 @@ func TestRun_ContextModeProbeRunsAfterTheEnvIsSet(t *testing.T) {
 		t.Errorf("%s at probe time = %q, want %q", ContextModeEnvVar, seen, "execd")
 	}
 }
+
+// runCapturingHerdrAgent runs the launcher with every dependency stubbed and
+// returns HERDR_AGENT as the supervised child would inherit it.
+func runCapturingHerdrAgent(t *testing.T) string {
+	t.Helper()
+	makeFakeNono(t)
+	var got string
+	err := run(&config.Config{}, Options{}, runDeps{
+		agentProfile: func(*config.Config) (string, error) {
+			return "/tmp/asb-profile-1.json", nil
+		},
+		verifyHook:         func(string, string) error { return nil },
+		contextModeEnabled: func() (bool, error) { return false, nil },
+		startExecd:         testExecdStart("/tmp/test.sock", nil),
+		startShellWrapper:  testWrapperStart("/tmp/test-norc-bash-1", nil),
+		supervise: func(string, []string) int {
+			got = os.Getenv(HerdrAgentEnvVar)
+			return 0
+		},
+		exit: func(int) {},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	return got
+}
+
+// Under `nono run` claude lives on nono's own pty, so herdr sees only nono in
+// the pane's foreground job and cannot name the agent. HERDR_AGENT on the nono
+// process is herdr's documented hint for exactly that case.
+func TestRun_SetsHerdrAgentHintBeforeSupervise(t *testing.T) {
+	t.Setenv(HerdrAgentEnvVar, "")
+	os.Unsetenv(HerdrAgentEnvVar)
+	if got := runCapturingHerdrAgent(t); got != "claude" {
+		t.Errorf("%s at supervise time = %q, want %q", HerdrAgentEnvVar, got, "claude")
+	}
+}
+
+// An operator who already exported the hint keeps their value.
+func TestRun_KeepsOperatorHerdrAgentHint(t *testing.T) {
+	t.Setenv(HerdrAgentEnvVar, "custom")
+	if got := runCapturingHerdrAgent(t); got != "custom" {
+		t.Errorf("%s at supervise time = %q, want %q", HerdrAgentEnvVar, got, "custom")
+	}
+}

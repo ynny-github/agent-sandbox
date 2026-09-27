@@ -158,6 +158,15 @@ func probeHook(profilePath, self string) error {
 	return nil
 }
 
+// HerdrAgentEnvVar is herdr's foreground-process hint. Under `nono run`,
+// claude runs on a pty nono allocates, so herdr sees only nono in the pane's
+// foreground job and cannot identify the agent by name. herdr reads this
+// variable from /proc/<pid>/environ of a process in that job instead.
+// Measured with herdr 0.9.1: without it the pane reports no agent; with
+// HERDR_AGENT=claude on nono it reports claude and tracks its state. The
+// agent profile does not forward it, so it never reaches claude itself.
+const HerdrAgentEnvVar = "HERDR_AGENT"
+
 // BuildArgs constructs the nono executable path and the argv used to launch
 // Claude under the sandbox for cfg. It injects the operator's profile at
 // profilePath via `--profile` (no user nono options are forwarded) and the
@@ -351,6 +360,10 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 	// superviseProcess inherits the launcher's environment, so setting it here
 	// is the simplest correct way to hand the execd socket path to the child.
 	os.Setenv(execd.SocketEnvVar, execdSocket)
+	// An operator-set hint wins; see HerdrAgentEnvVar.
+	if os.Getenv(HerdrAgentEnvVar) == "" {
+		os.Setenv(HerdrAgentEnvVar, "claude")
+	}
 	if shellWrapper != "" {
 		os.Setenv(ShellEnvVar, shellWrapper)
 	}

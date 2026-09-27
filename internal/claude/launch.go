@@ -184,7 +184,12 @@ func BuildArgs(cfg *config.Config, opts Options,
 	// session env directory ...: Permission denied". run keeps nono resident
 	// as claude's parent; it forwards SIGTERM/SIGHUP to claude and exits with
 	// claude's status, so superviseProcess still sees claude's exit code.
-	args := []string{"nono", "run"}
+	//
+	// --allow-cwd shares the working directory without nono's interactive
+	// "Share <cwd> with read+write access? [y/N]" prompt, which the
+	// nolabs-ai/claude base profile otherwise triggers on every launch. The
+	// access level still comes from the profile.
+	args := []string{"nono", "run", "--allow-cwd"}
 
 	// The agent runs `agent-sandbox hook` as its own direct child — inside its
 	// own sandbox, not through execd — so the launcher's binary has to be

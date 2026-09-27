@@ -333,6 +333,22 @@ func TestParseArgs_EnvRefs(t *testing.T) {
 	}
 }
 
+// Without --allow-cwd, nono asks "Share <cwd> with read+write access? [y/N]"
+// on every launch, because the nolabs-ai/claude base profile requests the
+// working directory. The operator has chosen to share it unprompted.
+func TestBuildArgs_AllowsCwdWithoutPrompt(t *testing.T) {
+	makeFakeNono(t)
+	_, args, err := BuildArgs(&config.Config{}, Options{}, "", "", "")
+	if err != nil {
+		t.Fatalf("BuildArgs() error = %v", err)
+	}
+	fi := argsIndex(args, "--allow-cwd")
+	ci := argsIndex(args, "claude")
+	if fi < 0 || ci < 0 || fi > ci {
+		t.Errorf("--allow-cwd must appear before claude; got %v", args)
+	}
+}
+
 func TestBuildArgs_GrantsExecdSocket(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{}

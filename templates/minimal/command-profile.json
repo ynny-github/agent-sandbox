@@ -3,7 +3,13 @@
 
   // Commands get the working directory and nothing else writable beyond
   // nono's own floor, which already grants read on /bin and /usr/bin.
-  "workdir": { "access": "readwrite" },
+  //
+  // $WORKDIR as a path grant, not "workdir": { "access": "readwrite" }.
+  // The workdir key makes nono ask before sharing the directory, and execd
+  // runs under --silent, where nono refuses to ask. Measured on nono 0.78.0:
+  // with the workdir key, execd's session exits 1 with "CWD access requires
+  // --allow-cwd in non-interactive mode" before any command runs.
+  "filesystem": { "allow": ["$WORKDIR"] },
 
   // This is the floor for commands that have NO entry in command_policies
   // below -- it is not a ceiling. A declared command carries its own network
@@ -49,8 +55,26 @@
             // @git: tokens are resolved by nono per repository. Include
             // scopes are excluded, so a repository cannot grant itself host
             // access through its own .git/config.
-            "fs_read_file": ["@git:config-files"],
-            "fs_read":      ["@git:hooks-path", "$WORKDIR"],
+            //
+            // HTTPS transport also needs the system CA bundle. The two
+            // paths are Debian/Ubuntu and Fedora/Arch; nono skips an entry
+            // that does not exist.
+            "fs_read_file": ["@git:config-files",
+                             "/etc/ssl/certs/ca-certificates.crt",
+                             "/etc/pki/tls/certs/ca-bundle.crt"],
+            // A helper under exec_paths below runs only if it is ALSO
+            // readable here, because a read grant is what carries execute
+            // in a child sandbox. Its shared libraries (libcurl for
+            // git-remote-https) must be readable too; git's own library
+            // closure does not cover them. Measured on nono 0.78.0: without
+            // the git-core dir, "cannot exec 'remote-https': Permission
+            // denied"; without the library dir, "libcurl-gnutls.so.4: cannot
+            // open shared object file". Missing entries are skipped, so the
+            // list covers x86_64/aarch64 Debian-style and lib64 layouts.
+            "fs_read":      ["@git:hooks-path", "$WORKDIR",
+                             "/usr/lib/git-core", "/usr/libexec/git-core",
+                             "/usr/lib/x86_64-linux-gnu", "/usr/lib/aarch64-linux-gnu",
+                             "/usr/lib64"],
             // @git:common-dir covers the object store when $WORKDIR is a
             // linked worktree; @git:worktree covers the main repo root,
             // without which `git worktree add` fails at getcwd() with EPERM.
@@ -58,7 +82,8 @@
             // git-remote-https and the other subcommands live here. nono
             // SKIPS entries that do not exist, so a wrong path costs
             // availability, silently. On NixOS add the output of
-            // `git --exec-path`; these two cover ordinary Linux.
+            // `git --exec-path` (here AND in fs_read above); these two cover
+            // ordinary Linux.
             "exec_paths":   ["/usr/lib/git-core", "/usr/libexec/git-core"],
             "network":      { "allow_domain": ["github.com", "*.githubusercontent.com"] },
             // The proxy variables are load-bearing HERE, unlike at session
@@ -81,6 +106,10 @@
           "git": { "sandbox": {
             // The whole key directory, reachable only through git.
             "fs_read":       ["~/.ssh"],
+            // Host keys installed system-wide are read from here, not from
+            // ~/.ssh. Without it such a host fails "Host key verification
+            // failed" (measured, nono 0.78.0). Skipped if absent.
+            "fs_read_file":  ["/etc/ssh/ssh_known_hosts"],
             "fs_write_file": ["~/.ssh/known_hosts"],
             // `nono profile validate` warns [allow_all_network] here, and the
             // warning is accepted: ssh cannot be routed through nono's HTTP

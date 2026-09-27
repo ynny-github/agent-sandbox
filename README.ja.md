@@ -76,7 +76,8 @@ agent-sandbox init
 "filesystem": { "read": ["/nix/store", "/run/current-system/sw"] },
 ```
 
-あわせて `git --exec-path` の出力を git の `exec_paths` に追加してください。
+あわせて `git --exec-path` の出力を git の `exec_paths` と `fs_read` の両方に追加して
+ください（子サンドボックスがヘルパーを実行するには両方が必要です）。
 エージェントプロファイルは影響を受けません —— ベースの `nolabs-ai/claude` が既に
 `nix_runtime` を含んでいます。
 

@@ -76,7 +76,8 @@ fails with exit 127 until you add:
 "filesystem": { "read": ["/nix/store", "/run/current-system/sw"] },
 ```
 
-and add the output of `git --exec-path` to git's `exec_paths`. The agent
+and add the output of `git --exec-path` to both git's `exec_paths` and its
+`fs_read` (a child sandbox needs both to run a helper). The agent
 profile is unaffected — its `nolabs-ai/claude` base already carries
 `nix_runtime`.
 

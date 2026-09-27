@@ -11,7 +11,13 @@
   // so it must be able to exec that binary — but only the launcher knows where
   // it lives (a mise-managed toolchain puts the Go version in the path), so it
   // passes `--read-file <its own path>` on the nono command line instead.
-  "extends": "claude",
+  //
+  // The base is the nolabs-ai/claude registry pack (profile `claude-code`,
+  // installed with `nono pull nolabs-ai/claude`). nono 0.78.0 no longer
+  // compiles a `claude` profile in, so the old `"extends": "claude"` fails
+  // validate with "base profile 'claude' not found". Pulling the pack also
+  // wires its `nono@nolabs-ai` plugin into ~/.claude/settings.json.
+  "extends": "nolabs-ai/claude",
   "meta": { "name": "custom claude" },
 
   // node_runtime and mise_manager are here for the context-mode MCP server. The

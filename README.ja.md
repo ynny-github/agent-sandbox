@@ -77,8 +77,21 @@ agent-sandbox init
 ```
 
 あわせて `git --exec-path` の出力を git の `exec_paths` に追加してください。
-エージェントプロファイルは影響を受けません —— `extends: claude` が既に
+エージェントプロファイルは影響を受けません —— ベースの `nolabs-ai/claude` が既に
 `nix_runtime` を含んでいます。
+
+**エージェントプロファイルはレジストリの pack を extends します。** テンプレートも
+このリポジトリ自身の `claude-profile.json` も `nolabs-ai/claude` を extends して
+おり、nono 0.78 にはこれが組み込まれていません。初回起動の前に一度インストール
+してください。
+
+```bash
+nono pull nolabs-ai/claude
+```
+
+pull すると、pack の Claude Code プラグイン `nono@nolabs-ai` も
+`~/.claude/settings.json` で有効になります。`nono remove nolabs-ai/claude` で
+両方とも元に戻ります。
 
 両方のプロファイルを nono のスキーマで一から書くこともできます。どちらにも
 既定値はなく、ファイルが無ければ起動時エラーになります。このリポジトリ自身の

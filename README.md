@@ -77,7 +77,19 @@ fails with exit 127 until you add:
 ```
 
 and add the output of `git --exec-path` to git's `exec_paths`. The agent
-profile is unaffected — `extends: claude` already carries `nix_runtime`.
+profile is unaffected — its `nolabs-ai/claude` base already carries
+`nix_runtime`.
+
+**The agent profile extends a registry pack.** Both the template and this
+repository's own `claude-profile.json` extend `nolabs-ai/claude`, which nono
+0.78 no longer ships built in. Install it once before the first launch:
+
+```bash
+nono pull nolabs-ai/claude
+```
+
+Pulling it also enables the pack's `nono@nolabs-ai` Claude Code plugin in
+`~/.claude/settings.json`; `nono remove nolabs-ai/claude` undoes both.
 
 You can also write both profiles from scratch, directly in nono's own schema.
 There is no default for either — a missing file is a launch error. This

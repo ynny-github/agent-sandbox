@@ -1,8 +1,11 @@
 {
-  // nono's packaged profile for Claude Code. It is a strict allowlist --
-  // measured: on its own it forwards only PATH, BROWSER and NONO_CAP_FILE,
-  // not even HOME.
-  "extends": "claude",
+  // nono's packaged profile for Claude Code, distributed as the
+  // nolabs-ai/claude registry pack: run `nono pull nolabs-ai/claude` once
+  // before launching (nono 0.78.0 no longer compiles a `claude` profile in).
+  // Pulling it also wires the pack's `nono@nolabs-ai` plugin into
+  // ~/.claude/settings.json. It is a strict allowlist -- measured: on its
+  // own it forwards only PATH, BROWSER and NONO_CAP_FILE, not even HOME.
+  "extends": "nolabs-ai/claude",
   "meta": { "name": "agent-sandbox agent (minimal)" },
 
   // The agent's file tools write scratch files and read them back. The floor

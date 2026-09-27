@@ -117,7 +117,11 @@ func argsIndex(args []string, target string) int {
 	return -1
 }
 
-func TestBuildArgs_AlwaysUsesWrap(t *testing.T) {
+// The agent runs under supervised `nono run`, not `nono wrap`. On nono 0.78.0
+// wrap applies the sandbox to nono itself before running the profile's
+// session_hooks.before, so the nolabs-ai/claude pack's before-hook fails with
+// "Failed to create session env directory ...: Permission denied".
+func TestBuildArgs_AlwaysUsesRun(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{}
 	_, args, err := BuildArgs(cfg, Options{}, "", "", "")
@@ -130,8 +134,8 @@ func TestBuildArgs_AlwaysUsesWrap(t *testing.T) {
 	if args[0] != "nono" {
 		t.Errorf("args[0] = %q, want \"nono\"; full args: %v", args[0], args)
 	}
-	if args[1] != "wrap" {
-		t.Errorf("args[1] = %q, want \"wrap\"; full args: %v", args[1], args)
+	if args[1] != "run" {
+		t.Errorf("args[1] = %q, want \"run\"; full args: %v", args[1], args)
 	}
 }
 

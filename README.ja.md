@@ -16,7 +16,7 @@ AI コーディングエージェント (Claude Code) を [nono](https://github.
 
 ```
 launcher
-├── nono wrap  --profile <エージェントプロファイル>  -- claude …   ここにコマンド制御はない
+├── nono run   --profile <エージェントプロファイル>  -- claude …   ここにコマンド制御はない
 └── nono run   --profile <コマンドプロファイル>      -- agent-sandbox execd
                                                │
                                                ├─ exec git → shim → git 専用の子サンドボックス

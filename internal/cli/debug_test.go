@@ -20,7 +20,7 @@ func TestRunDebug_MissingConfig(t *testing.T) {
 }
 
 // debug must print the same invocation the launcher builds, including the
-// execd socket grant — otherwise it misrepresents the wrap command in exactly
+// execd socket grant — otherwise it misrepresents the agent's nono command in exactly
 // the place a user looks when a command run through execd fails.
 func TestRunDebug_PrintsExecdSocketGrant(t *testing.T) {
 	dir := t.TempDir()

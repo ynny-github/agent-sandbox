@@ -44,7 +44,7 @@ func runDebug(cmd *cobra.Command, args []string) error {
 
 	// debug exists to show the exact invocation the launcher builds, so it must
 	// include the execd socket grant; passing "" here would hide the only thing
-	// execd adds to the wrap invocation.
+	// execd adds to the agent's nono invocation.
 	execdSocket, err := claude.ExecdSocketPath()
 	if err != nil {
 		return err

@@ -1,5 +1,5 @@
 // Package claude builds and runs the sandboxed `claude` command: it parses the
-// launcher's arguments, constructs the `nono wrap … claude …` invocation
+// launcher's arguments, constructs the `nono run … claude …` invocation
 // (including the injected PreToolUse hook settings), and executes it.
 package claude
 
@@ -169,7 +169,13 @@ func BuildArgs(cfg *config.Config, opts Options,
 	if err != nil {
 		return "", nil, fmt.Errorf("nono not found in PATH: %w", err)
 	}
-	args := []string{"nono", "wrap"}
+	// Supervised `nono run`, not `nono wrap`: on nono 0.78.0 wrap sandboxes
+	// nono itself before it runs the profile's session_hooks.before, so the
+	// nolabs-ai/claude pack's before-hook fails with "Failed to create
+	// session env directory ...: Permission denied". run keeps nono resident
+	// as claude's parent; it forwards SIGTERM/SIGHUP to claude and exits with
+	// claude's status, so superviseProcess still sees claude's exit code.
+	args := []string{"nono", "run"}
 
 	// The agent runs `agent-sandbox hook` as its own direct child — inside its
 	// own sandbox, not through execd — so the launcher's binary has to be

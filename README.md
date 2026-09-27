@@ -16,7 +16,7 @@ denial rather than an unexplained failure worth retrying.
 
 ```
 launcher
-├── nono wrap  --profile <agent profile>    -- claude …         no command control here
+├── nono run   --profile <agent profile>    -- claude …         no command control here
 └── nono run   --profile <command profile>  -- agent-sandbox execd
                                                │
                                                ├─ exec git → shim → git, its own child sandbox

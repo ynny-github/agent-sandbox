@@ -7,8 +7,10 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"sync"
 	"syscall"
+	"time"
 )
 
 // Executor runs one command line. The production implementation is
@@ -110,6 +112,7 @@ func (s *Server) handle(conn net.Conn) {
 		WriteError(conn, err.Error())
 		return
 	}
+	s.touchLastUsed()
 
 	// The child must die when the client goes away. Closing the connection is
 	// the client's cancellation signal, so a reader runs for every request —
@@ -230,4 +233,14 @@ func (f *frameWriter) writeError(msg string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	WriteError(f.w, msg)
+}
+
+// touchLastUsed records a served request for `execd gc`'s idle judgement. It
+// runs only after a request has been read, so a liveness probe that connects
+// and hangs up is not use. It only updates an existing file: a server outside
+// an execd session directory creates nothing beside its socket. A failure is
+// ignored; it only affects gc.
+func (s *Server) touchLastUsed() {
+	now := time.Now()
+	os.Chtimes(filepath.Join(filepath.Dir(s.sockPath), "last-used"), now, now)
 }

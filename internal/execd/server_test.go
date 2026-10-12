@@ -707,3 +707,50 @@ func TestServerRefusesARequestThatArrivesWithNoDescriptors(t *testing.T) {
 			"only remedy", f.Payload)
 	}
 }
+
+// lastUsedBeside creates last-used next to sock, dated a week ago.
+func lastUsedBeside(t *testing.T, sock string) string {
+	t.Helper()
+	p := filepath.Join(filepath.Dir(sock), "last-used")
+	if err := os.WriteFile(p, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-7 * 24 * time.Hour)
+	if err := os.Chtimes(p, old, old); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestServe_ARequestUpdatesLastUsed(t *testing.T) {
+	sock := startTestServer(t, execd.NewShellExecutor())
+	p := lastUsedBeside(t, sock)
+	out, _ := outFile(t)
+	errFile, _ := outFile(t)
+	if _, err := execd.NewClient(sock).RunCommand(context.Background(), "true",
+		execd.Stdio{In: devNull(t), Out: out, Err: errFile}, execd.RunOptions{}); err != nil {
+		t.Fatalf("RunCommand: %v", err)
+	}
+	info, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(info.ModTime()) > time.Minute {
+		t.Errorf("last-used mtime = %v, want it updated by the request", info.ModTime())
+	}
+}
+
+func TestServe_AProbeConnectionDoesNotCountAsUse(t *testing.T) {
+	sock := startTestServer(t, execd.NewShellExecutor())
+	p := lastUsedBeside(t, sock)
+	c, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Close()
+	time.Sleep(100 * time.Millisecond)
+	info, _ := os.Stat(p)
+	if time.Since(info.ModTime()) < time.Hour {
+		t.Errorf("a connection without a request updated last-used to %v", info.ModTime())
+	}
+}

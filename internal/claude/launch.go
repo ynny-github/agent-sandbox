@@ -4,7 +4,6 @@
 package claude
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -462,15 +461,26 @@ func startExecd(cfg *config.Config) (string, func(), error) {
 	if err != nil {
 		return "", nil, err
 	}
-	// A socket left by a killed run would make execd's bind fail forever.
-	if rmErr := os.Remove(sockPath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
-		return "", nil, fmt.Errorf("remove stale socket: %w", rmErr)
+	// The socket gets a directory of its own because the bind grant for a
+	// socket that does not exist yet makes nono allow its whole parent
+	// directory to execd's session. Measured on nono 0.78.0: with the socket
+	// directly in the state dir, a command run through execd could rewrite the
+	// agent's shell wrapper there — even one created after the session started
+	// — and run code at the agent profile's reach on the next Bash call. A
+	// directory left by a killed run with the same pid is replaced, not reused.
+	sockDir := filepath.Dir(sockPath)
+	if rmErr := os.RemoveAll(sockDir); rmErr != nil {
+		return "", nil, fmt.Errorf("remove stale socket directory: %w", rmErr)
+	}
+	if mkErr := os.Mkdir(sockDir, 0o700); mkErr != nil {
+		return "", nil, fmt.Errorf("create socket directory: %w", mkErr)
 	}
 
 	args := ExecdArgs(cfg, nonoPath, selfPath, sockPath, cwd)
 	cmd := exec.Command(nonoPath, args[1:]...)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	if err := cmd.Start(); err != nil {
+		os.RemoveAll(sockDir)
 		return "", nil, fmt.Errorf("start exec daemon: %w", err)
 	}
 
@@ -492,13 +502,13 @@ func startExecd(cfg *config.Config) (string, func(), error) {
 			cmd.Process.Kill()
 			<-waitExited
 		}
-		os.Remove(sockPath)
+		os.RemoveAll(sockDir)
 		return "", nil, err
 	}
 
 	cleanup := func() {
 		if cmd.Process == nil {
-			os.Remove(sockPath)
+			os.RemoveAll(sockDir)
 			return
 		}
 		if sigErr := cmd.Process.Signal(syscall.SIGTERM); sigErr != nil {
@@ -524,7 +534,7 @@ func startExecd(cfg *config.Config) (string, func(), error) {
 			}
 			<-waitExited
 		}
-		os.Remove(sockPath)
+		os.RemoveAll(sockDir)
 	}
 	return sockPath, cleanup, nil
 }
@@ -629,5 +639,5 @@ func ExecdSocketPath() (string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create state dir: %w", err)
 	}
-	return filepath.Join(dir, fmt.Sprintf("execd-%d.sock", os.Getpid())), nil
+	return filepath.Join(dir, fmt.Sprintf("execd-%d", os.Getpid()), "execd.sock"), nil
 }

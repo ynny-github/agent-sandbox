@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -387,4 +388,59 @@ func waitGone(pid int, d time.Duration) bool {
 		time.Sleep(25 * time.Millisecond)
 	}
 	return !processExists(pid)
+}
+
+// GC cleans up every session under the root: a dead one is removed, one
+// whose owner shell is gone or whose last-used is older than idle is downed,
+// anything else is kept. dryRun only reports. One session failing does not
+// stop the rest.
+func GC(idle time.Duration, dryRun bool, w io.Writer) error {
+	root, err := Root()
+	if err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	failed := 0
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dir := filepath.Join(root, e.Name())
+		sock := filepath.Join(dir, sockName)
+		action, reason := judge(dir, idle)
+		fmt.Fprintf(w, "%s %s (%s)\n", action, sock, reason)
+		if dryRun || action == "keep" {
+			continue
+		}
+		// Down rechecks liveness under the key's lock, so a session that
+		// changed state since judge is still handled safely.
+		if err := Down(sock); err != nil {
+			fmt.Fprintf(w, "  failed: %v\n", err)
+			failed++
+		}
+	}
+	if failed > 0 {
+		return fmt.Errorf("%d session(s) could not be cleaned up", failed)
+	}
+	return nil
+}
+
+func judge(dir string, idle time.Duration) (action, reason string) {
+	if !alive(dir) {
+		return "remove", "not running"
+	}
+	if owner, err := readInt(filepath.Join(dir, "owner")); err == nil &&
+		errors.Is(syscall.Kill(owner, 0), syscall.ESRCH) {
+		return "down", "its shell is gone"
+	}
+	if info, err := os.Stat(filepath.Join(dir, "last-used")); err == nil && time.Since(info.ModTime()) > idle {
+		return "down", "unused since " + info.ModTime().Format(time.RFC3339)
+	}
+	return "keep", "in use"
 }

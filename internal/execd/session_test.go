@@ -1,6 +1,7 @@
 package execd
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -364,5 +365,66 @@ func TestDown_RefusesAPathOutsideTheRoot(t *testing.T) {
 	}
 	if _, err := os.Stat(victim); err != nil {
 		t.Errorf("a refused Down removed %s: %v", victim, err)
+	}
+}
+
+// gcFixture builds four sessions: dead, owner gone, idle, and fresh.
+func gcFixture(t *testing.T) (dead, ownerGone, idle, fresh string) {
+	t.Helper()
+	stateHome(t)
+	fakeNono(t, passthroughNono)
+	profile := writeProfile(t, "{}")
+
+	withSession(t, 2001)
+	dead, _ = SessionSocket(profile, t.TempDir())
+	if err := os.MkdirAll(filepath.Dir(dead), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(filepath.Dir(dead), "pid"), []byte(strconv.Itoa(deadPID(t))), 0o600)
+
+	withSession(t, 2002)
+	ownerGone = upForTest(t, profile)
+	os.WriteFile(filepath.Join(filepath.Dir(ownerGone), "owner"), []byte(strconv.Itoa(deadPID(t))), 0o600)
+
+	withSession(t, os.Getpid()) // an owner that exists
+	idle = upForTest(t, profile)
+	old := time.Now().Add(-8 * 24 * time.Hour)
+	os.Chtimes(filepath.Join(filepath.Dir(idle), "last-used"), old, old)
+
+	withSession(t, os.Getpid())
+	fresh, _ = Up(profile, t.TempDir())
+	t.Cleanup(func() { killSession(fresh) })
+	return dead, ownerGone, idle, fresh
+}
+
+func TestGC_DownsASessionWhoseOwnerIsGone(t *testing.T) {
+	dead, ownerGone, idle, fresh := gcFixture(t)
+	var out bytes.Buffer
+	if err := GC(168*time.Hour, false, &out); err != nil {
+		t.Fatalf("GC() error = %v\n%s", err, out.String())
+	}
+	for _, gone := range []string{dead, ownerGone, idle} {
+		if _, err := os.Stat(filepath.Dir(gone)); !os.IsNotExist(err) {
+			t.Errorf("GC left %s (stat err %v)\n%s", gone, err, out.String())
+		}
+	}
+	if !alive(filepath.Dir(fresh)) {
+		t.Errorf("GC stopped the fresh session %s\n%s", fresh, out.String())
+	}
+}
+
+func TestGC_DryRunChangesNothing(t *testing.T) {
+	dead, ownerGone, idle, fresh := gcFixture(t)
+	var out bytes.Buffer
+	if err := GC(168*time.Hour, true, &out); err != nil {
+		t.Fatalf("GC(dry run) error = %v", err)
+	}
+	for _, s := range []string{dead, ownerGone, idle, fresh} {
+		if _, err := os.Stat(filepath.Dir(s)); err != nil {
+			t.Errorf("dry run removed %s: %v", s, err)
+		}
+		if !strings.Contains(out.String(), s) {
+			t.Errorf("dry run output does not list %s:\n%s", s, out.String())
+		}
 	}
 }

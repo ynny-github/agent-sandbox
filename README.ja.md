@@ -17,7 +17,7 @@ AI コーディングエージェント (Claude Code) を [nono](https://github.
 ```
 launcher
 ├── nono run   --profile <エージェントプロファイル>  -- claude …   ここにコマンド制御はない
-└── nono run   --profile <コマンドプロファイル>      -- agent-sandbox execd
+└── nono run   --profile <コマンドプロファイル>      -- execd serve
                                                │
                                                ├─ exec git → shim → git 専用の子サンドボックス
                                                │                     └─ exec ssh → shim → ssh 専用
@@ -35,8 +35,10 @@ launcher
 ## インストール
 
 ```bash
-go install github.com/ynny-github/agent-sandbox/cmd/agent-sandbox@latest
+go install github.com/ynny-github/agent-sandbox/cmd/...@latest
 ```
+
+`agent-sandbox` と `execd` の両方が入ります。ランチャーは `execd` を `PATH` から探します。
 
 [mise](https://mise.jdx.dev/) を使う場合:
 
@@ -44,6 +46,7 @@ go install github.com/ynny-github/agent-sandbox/cmd/agent-sandbox@latest
 # .mise.toml
 [tools]
 "go:github.com/ynny-github/agent-sandbox/cmd/agent-sandbox" = "latest"
+"go:github.com/ynny-github/agent-sandbox/cmd/execd" = "latest"
 ```
 
 **コマンドプロファイルが書き込みを許可するどのパスの外にも置いてください** —
@@ -112,7 +115,7 @@ execd を片付けます。
 ## 仕組み
 
 **兄弟セッションが 2 つ、入れ子にはしない。** 一方はエージェントプロファイルで
-Claude Code を包み、もう一方はコマンドプロファイルで `agent-sandbox execd` を
+Claude Code を包み、もう一方はコマンドプロファイルで `execd serve` を
 動かします。サンドボックスは入れ子にできないので、execd はエージェントの
 セッションの中では動きません。
 
@@ -143,12 +146,18 @@ execd 自身のビルトインは 3 つ目の扱いで、execd プロセスの�
 |---|---|
 | `agent-sandbox init` | 最小の設定・両プロファイル・プロファイル用 skill をこのプロジェクトにダウンロードする。上書きはしない |
 | `agent-sandbox claude -- [claude の引数...]` | execd を兄弟セッションで動かしつつ、nono 配下で Claude を起動 |
-| `agent-sandbox exec -- <command>` | コマンドを 1 つ execd に送り、出力をストリームする |
-| `agent-sandbox doctor` | 起動が依存するものを一通り確認: サンドボックスエンジン、execd ソケット、両プロファイルとそれが固定しているパス、そしてコマンドプロファイルが execd 自身のバイナリを書き込み可能にしていないこと。終了コード 0 / 1 |
+| `agent-sandbox doctor` | 起動が依存するものを一通り確認: サンドボックスエンジン、execd ソケット、両プロファイルとそれが固定しているパス、そしてコマンドプロファイルが `execd` と `agent-sandbox` のどちらも書き込み可能にしていないこと。終了コード 0 / 1 |
 | `agent-sandbox debug -- [claude の引数...]` | 実行はせずに、両セッション分の `nono` コマンドを表示 |
 | `agent-sandbox ai explain` | エージェント向けのサンドボックス説明: コマンドの実行経路、2 つの層、拒否の理由 |
 | `agent-sandbox ai config-check` | `agent-sandbox.toml` と 2 つの nono プロファイルを、起動時と同じ読み方で検証 |
 | `agent-sandbox hook` | PreToolUse アダプタ (起動時に注入され、Claude が呼ぶもので、手で叩くものではない) |
+
+`execd` は独立したバイナリで、設定ファイルを持ちません。
+
+| コマンド | 内容 |
+|---|---|
+| `execd serve --socket <path>` | ソケットでコマンドを受け付ける。`agent-sandbox claude` がコマンドプロファイルのセッション内で起動する。受け取ったものをそのまま実行するので、sandbox の外では動かさないこと |
+| `execd exec [--timeout d] -- <command>` | `AGENT_SANDBOX_EXECD_SOCKET` のソケットにコマンドを 1 つ送り、出力をストリームする |
 
 グローバルフラグは `--config <path>` (既定 `agent-sandbox.toml`) と `--env <ref>`
 (繰り返し可) の 2 つで、`claude` と `debug` はさらに `--context-mode` を受け取ります。
@@ -177,8 +186,8 @@ profile = "claude-profile.json"          # 既定の名前: "<agent>-profile.jso
 ```
 
 Bash と Monitor は有効なままです。起動時に `claude --settings` で PreToolUse
-フックを注入し、各コマンドを `agent-sandbox exec -- <command>` に書き換えます。
-`.claude/settings.json` には何も書きません。`agent-sandbox` が `PATH` に必要です。
+フックを注入し、各コマンドを `execd exec -- <command>` に書き換えます。
+`.claude/settings.json` には何も書きません。`agent-sandbox` と `execd` が `PATH` に必要です。
 制御を渡す前に、ランチャーがプローブ用のペイロードでフックを 1 回実行し、コマンドが
 書き換わって返ってこなければ起動を拒否します — Claude Code は起動できないフックを
 非ブロッキングのエラーとして扱い、そのままコマンドを実行してしまうので、それは
@@ -218,7 +227,7 @@ execd は同時実行の上限なしにハンドラを起動します。
 mise install          # Go と lefthook
 go test ./...         # ユニット + 統合テスト
 go build ./...
-mise run build        # `go install` でワーキングツリーのビルドを入れる
+mise run build        # `go install` で両バイナリのワーキングツリービルドを入れる
 ```
 
 **`go build` や `go run ./cmd/agent-sandbox` ではなく `mise run build` を使ってください。**

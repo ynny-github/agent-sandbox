@@ -17,7 +17,7 @@ denial rather than an unexplained failure worth retrying.
 ```
 launcher
 ├── nono run   --profile <agent profile>    -- claude …         no command control here
-└── nono run   --profile <command profile>  -- agent-sandbox execd
+└── nono run   --profile <command profile>  -- execd serve
                                                │
                                                ├─ exec git → shim → git, its own child sandbox
                                                │                     └─ exec ssh → shim → ssh, its own
@@ -35,8 +35,10 @@ Run `agent-sandbox doctor` to verify.
 ## Install
 
 ```bash
-go install github.com/ynny-github/agent-sandbox/cmd/agent-sandbox@latest
+go install github.com/ynny-github/agent-sandbox/cmd/...@latest
 ```
+
+This installs both `agent-sandbox` and `execd`; the launcher finds `execd` on `PATH`.
 
 Or with [mise](https://mise.jdx.dev/):
 
@@ -44,6 +46,7 @@ Or with [mise](https://mise.jdx.dev/):
 # .mise.toml
 [tools]
 "go:github.com/ynny-github/agent-sandbox/cmd/agent-sandbox" = "latest"
+"go:github.com/ynny-github/agent-sandbox/cmd/execd" = "latest"
 ```
 
 **Install outside every path the command profile grants write access to** —
@@ -111,7 +114,7 @@ tears execd down when Claude exits.
 ## How it works
 
 **Two sibling sessions, never nested.** One wraps Claude Code under the agent
-profile; the other runs `agent-sandbox execd` under the command profile.
+profile; the other runs `execd serve` under the command profile.
 Sandboxes cannot nest, which is why execd does not run inside the
 agent's session.
 
@@ -144,12 +147,18 @@ for `nono profile show` / `nono why`.
 |---|---|
 | `agent-sandbox init` | Download a minimal config, both profiles, and the profile skills into this project. Never overwrites |
 | `agent-sandbox claude -- [claude args...]` | Launch Claude under nono, with execd running as a sibling session |
-| `agent-sandbox exec -- <command>` | Send one command to execd and stream its output |
-| `agent-sandbox doctor` | Check everything a launch depends on: the sandbox engine, the execd socket, both profiles and the paths they pin, and that the command profile does not leave execd's own binary writable. Exit 0 / 1 |
+| `agent-sandbox doctor` | Check everything a launch depends on: the sandbox engine, the execd socket, both profiles and the paths they pin, and that the command profile leaves neither `execd` nor `agent-sandbox` writable. Exit 0 / 1 |
 | `agent-sandbox debug -- [claude args...]` | Print the `nono` invocations for both sessions — without running anything |
 | `agent-sandbox ai explain` | Agent-facing description of the sandbox: how commands run, both tiers, and every denial's reason |
 | `agent-sandbox ai config-check` | Validate `agent-sandbox.toml` and both nono profiles the way launch reads them |
 | `agent-sandbox hook` | PreToolUse adapter, injected at launch and invoked by Claude, not by you |
+
+`execd` is its own binary and takes no config file:
+
+| Command | What it does |
+|---|---|
+| `execd serve --socket <path>` | Serve commands on the socket. Started by `agent-sandbox claude` inside the command-profile session; never run it unsandboxed, it executes whatever it is sent |
+| `execd exec [--timeout d] -- <command>` | Send one command to the socket named by `AGENT_SANDBOX_EXECD_SOCKET` and stream its output |
 
 Global flags: `--config <path>` (default `agent-sandbox.toml`) and `--env <ref>`
 (repeatable). `claude` and `debug` also accept `--context-mode`. Only those may
@@ -181,9 +190,9 @@ profile = "claude-profile.json"          # default name: "<agent>-profile.json"
 ```
 
 Bash and Monitor stay enabled, and a PreToolUse hook injected at launch via
-`claude --settings` rewrites each command to `agent-sandbox exec -- <command>`.
-Nothing is written to `.claude/settings.json`, and `agent-sandbox` must be on
-`PATH`. Before handing over control the launcher runs the hook once with a
+`claude --settings` rewrites each command to `execd exec -- <command>`.
+Nothing is written to `.claude/settings.json`, and `agent-sandbox` and `execd` must
+be on `PATH`. Before handing over control the launcher runs the hook once with a
 probe payload and refuses to launch unless the command comes back rewritten —
 Claude Code treats a hook that cannot start as a non-blocking error and runs
 the command anyway, which would be a bypass rather than a degraded mode.
@@ -222,7 +231,7 @@ execd, which spawns handlers with no concurrency cap.
 mise install          # Go + lefthook
 go test ./...         # unit + integration tests
 go build ./...
-mise run build        # install a working-tree build via `go install`
+mise run build        # install working-tree builds of both binaries via go install
 ```
 
 

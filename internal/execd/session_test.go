@@ -1,0 +1,278 @@
+package execd
+
+import (
+	"os"
+	"os/exec"
+	"os/signal"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+)
+
+// TestMain lets the test binary stand in for execd under a fake nono: Up
+// starts `<os.Executable()> serve --socket <path>`, which here is this
+// binary. EXECD_TEST_WEDGED makes it ignore SIGTERM, for Down's escalation.
+func TestMain(m *testing.M) {
+	if len(os.Args) == 4 && os.Args[1] == "serve" && os.Args[2] == "--socket" {
+		srv, err := NewServer(os.Args[3], NewShellExecutor())
+		if err != nil {
+			os.Exit(1)
+		}
+		if os.Getenv("EXECD_TEST_WEDGED") != "" {
+			signal.Ignore(syscall.SIGTERM)
+			srv.Serve()
+			os.Exit(0)
+		}
+		sigs := make(chan os.Signal, 1)
+		signal.Notify(sigs, syscall.SIGTERM)
+		go func() { <-sigs; srv.Close() }()
+		srv.Serve()
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+// passthroughNono records its argv in <dir>/calls, then runs what follows --.
+const passthroughNono = "#!/bin/sh\n" +
+	"echo \"$@\" >> \"$(dirname \"$0\")/calls\"\n" +
+	"while [ \"$1\" != \"--\" ]; do shift; done\nshift\nexec \"$@\"\n"
+
+// rejectingNono stands in for nono refusing the profile.
+const rejectingNono = "#!/bin/sh\necho 'profile rejected' >&2\nexit 1\n"
+
+// fakeNono puts a nono script first on PATH and returns its directory.
+func fakeNono(t *testing.T, script string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "nono"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return dir
+}
+
+// stateHome points XDG_STATE_HOME at a short temp dir: socket paths are
+// capped near 104 bytes, and t.TempDir embeds the test name.
+func stateHome(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "xd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Setenv("XDG_STATE_HOME", dir)
+	return dir
+}
+
+func writeProfile(t *testing.T, body string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "command-profile.json")
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func withSession(t *testing.T, sid int) {
+	t.Helper()
+	prev := callerSession
+	callerSession = func() (int, error) { return sid, nil }
+	t.Cleanup(func() { callerSession = prev })
+}
+
+// killSession SIGKILLs a session started by a test. It is test cleanup, not
+// Down: Down is Task 2's subject and must not be what keeps other tests tidy.
+func killSession(sock string) {
+	if pid, err := readInt(filepath.Join(filepath.Dir(sock), "pid")); err == nil {
+		syscall.Kill(pid, syscall.SIGKILL)
+	}
+}
+
+// upForTest runs Up and registers killSession for cleanup.
+func upForTest(t *testing.T, profile string) string {
+	t.Helper()
+	sock, err := Up(profile, t.TempDir())
+	if err != nil {
+		t.Fatalf("Up() error = %v", err)
+	}
+	t.Cleanup(func() { killSession(sock) })
+	return sock
+}
+
+func countCalls(t *testing.T, nonoDir string) int {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(nonoDir, "calls"))
+	if os.IsNotExist(err) {
+		return 0
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Count(string(b), "\n")
+}
+
+// deadPID returns the pid of a process that has exited and been reaped.
+func deadPID(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command("true")
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	return cmd.Process.Pid
+}
+
+func TestUp_StartsAndReturnsALiveSocket(t *testing.T) {
+	stateHome(t)
+	fakeNono(t, passthroughNono)
+	sock := upForTest(t, writeProfile(t, "{}"))
+
+	root, _ := Root()
+	if filepath.Dir(filepath.Dir(sock)) != root || filepath.Base(sock) != sockName {
+		t.Errorf("socket %s is not <root>/<key>/%s under %s", sock, sockName, root)
+	}
+	if !alive(filepath.Dir(sock)) {
+		t.Error("the session is not alive after Up")
+	}
+	info, err := os.Stat(filepath.Dir(sock))
+	if err != nil || info.Mode().Perm() != 0o700 {
+		t.Errorf("session dir mode = %v (err %v), want 0700", info.Mode().Perm(), err)
+	}
+	for _, f := range []string{"pid", "owner", "profile.sha256", "log", "last-used"} {
+		if _, err := os.Stat(filepath.Join(filepath.Dir(sock), f)); err != nil {
+			t.Errorf("session file %s missing: %v", f, err)
+		}
+	}
+}
+
+func TestUp_SecondCallReusesTheSession(t *testing.T) {
+	stateHome(t)
+	nono := fakeNono(t, passthroughNono)
+	profile := writeProfile(t, "{}")
+	workdir := t.TempDir()
+
+	first, err := Up(profile, workdir)
+	if err != nil {
+		t.Fatalf("Up() error = %v", err)
+	}
+	t.Cleanup(func() { killSession(first) })
+	second, err := Up(profile, workdir)
+	if err != nil {
+		t.Fatalf("second Up() error = %v", err)
+	}
+	if first != second {
+		t.Errorf("second Up() = %s, want the running session's %s", second, first)
+	}
+	if n := countCalls(t, nono); n != 1 {
+		t.Errorf("nono started %d times, want 1", n)
+	}
+}
+
+func TestUp_ConcurrentCallsStartOneSession(t *testing.T) {
+	stateHome(t)
+	nono := fakeNono(t, passthroughNono)
+	profile := writeProfile(t, "{}")
+	workdir := t.TempDir()
+
+	var wg sync.WaitGroup
+	socks := make([]string, 4)
+	for i := range socks {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			s, err := Up(profile, workdir)
+			if err != nil {
+				t.Errorf("Up() error = %v", err)
+			}
+			socks[i] = s
+		}(i)
+	}
+	wg.Wait()
+	t.Cleanup(func() { killSession(socks[0]) })
+	for _, s := range socks[1:] {
+		if s != socks[0] {
+			t.Errorf("concurrent Up() returned %s and %s", socks[0], s)
+		}
+	}
+	if n := countCalls(t, nono); n != 1 {
+		t.Errorf("nono started %d times, want 1", n)
+	}
+}
+
+func TestUp_ChangedProfileFails(t *testing.T) {
+	stateHome(t)
+	fakeNono(t, passthroughNono)
+	profile := writeProfile(t, "{}")
+	workdir := t.TempDir()
+	sock, err := Up(profile, workdir)
+	if err != nil {
+		t.Fatalf("Up() error = %v", err)
+	}
+	t.Cleanup(func() { killSession(sock) })
+
+	if err := os.WriteFile(profile, []byte(`{"changed":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = Up(profile, workdir)
+	if err == nil || !strings.Contains(err.Error(), "execd down "+sock) {
+		t.Fatalf("Up() after a profile change error = %v, want one naming `execd down %s`", err, sock)
+	}
+}
+
+func TestUp_ReplacesADeadLeftover(t *testing.T) {
+	stateHome(t)
+	nono := fakeNono(t, passthroughNono)
+	profile := writeProfile(t, "{}")
+	workdir := t.TempDir()
+	sock, err := SessionSocket(profile, workdir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Dir(sock)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "pid"), []byte(strconv.Itoa(deadPID(t))), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Up(profile, workdir)
+	if err != nil {
+		t.Fatalf("Up() error = %v", err)
+	}
+	t.Cleanup(func() { killSession(got) })
+	if got != sock || !alive(dir) || countCalls(t, nono) != 1 {
+		t.Errorf("Up() = %s alive=%v starts=%d, want a fresh session at %s", got, alive(dir), countCalls(t, nono), sock)
+	}
+}
+
+func TestSessionSocket_DependsOnTheCallerSession(t *testing.T) {
+	stateHome(t)
+	profile := writeProfile(t, "{}")
+	workdir := t.TempDir()
+	withSession(t, 1001)
+	a, _ := SessionSocket(profile, workdir)
+	withSession(t, 1002)
+	b, _ := SessionSocket(profile, workdir)
+	if a == b {
+		t.Errorf("two caller sessions share socket %s", a)
+	}
+}
+
+func TestUp_ChildExitingEarlyFailsWithTheLog(t *testing.T) {
+	stateHome(t)
+	fakeNono(t, rejectingNono)
+	profile := writeProfile(t, "{}")
+	workdir := t.TempDir()
+
+	_, err := Up(profile, workdir)
+	if err == nil || !strings.Contains(err.Error(), "profile rejected") {
+		t.Fatalf("Up() error = %v, want it to carry nono's log", err)
+	}
+	sock, _ := SessionSocket(profile, workdir)
+	if _, statErr := os.Stat(filepath.Dir(sock)); !os.IsNotExist(statErr) {
+		t.Errorf("session dir left behind after a failed Up (stat err %v)", statErr)
+	}
+}

@@ -480,3 +480,36 @@ func TestGC_JudgesUnderTheKeyLock(t *testing.T) {
 		t.Error("GC stopped a session that finished starting while GC waited")
 	}
 }
+
+func TestDownOwned_StopsOnlyThisShellsSessions(t *testing.T) {
+	stateHome(t)
+	fakeNono(t, passthroughNono)
+	profile := writeProfile(t, "{}")
+	withSession(t, 5001)
+	mine := upForTest(t, profile)
+	withSession(t, 5002)
+	theirs := upForTest(t, profile)
+
+	withSession(t, 5001)
+	var out bytes.Buffer
+	if err := DownOwned(&out); err != nil {
+		t.Fatalf("DownOwned() error = %v", err)
+	}
+	if _, err := os.Stat(sessionOf(mine)); !os.IsNotExist(err) {
+		t.Errorf("this shell's session %s survived (stat err %v)", mine, err)
+	}
+	if !alive(sessionOf(theirs)) {
+		t.Errorf("another shell's session %s was stopped", theirs)
+	}
+	if !strings.Contains(out.String(), mine) || strings.Contains(out.String(), theirs) {
+		t.Errorf("DownOwned output = %q, want only %s", out.String(), mine)
+	}
+}
+
+func TestDownOwned_NothingToStopSucceeds(t *testing.T) {
+	stateHome(t)
+	var out bytes.Buffer
+	if err := DownOwned(&out); err != nil || out.Len() != 0 {
+		t.Errorf("DownOwned() = %v, output %q; want nil and nothing printed", err, out.String())
+	}
+}

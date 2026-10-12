@@ -477,3 +477,50 @@ func judge(dir string, idle time.Duration) (action, reason string) {
 
 // sessionOf is the session directory a socket path belongs to.
 func sessionOf(sock string) string { return filepath.Dir(filepath.Dir(sock)) }
+
+// DownOwned stops every session this shell started: those whose owner is the
+// caller's session id. It prints each stopped session's socket. None is
+// success.
+func DownOwned(w io.Writer) error {
+	sid, err := callerSession()
+	if err != nil {
+		return fmt.Errorf("session id: %w", err)
+	}
+	root, err := Root()
+	if err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	failed := 0
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dir := filepath.Join(root, e.Name())
+		if owner, err := readInt(filepath.Join(dir, "owner")); err != nil || owner != sid {
+			continue
+		}
+		unlock, err := lockKey(dir)
+		if err != nil {
+			return err
+		}
+		err = downLocked(dir)
+		unlock()
+		if err != nil {
+			fmt.Fprintf(w, "failed %s: %v\n", dir, err)
+			failed++
+			continue
+		}
+		fmt.Fprintln(w, filepath.Join(dir, sockSubdir, sockName))
+	}
+	if failed > 0 {
+		return fmt.Errorf("%d session(s) could not be stopped", failed)
+	}
+	return nil
+}

@@ -95,7 +95,7 @@ itself.
 | Command | Behaviour |
 | --- | --- |
 | `execd up --profile <p> [--workdir <d>]` | Start or reuse the session; print its socket path on one stdout line |
-| `execd down <socket>` | Stop that session and remove its directory; success if already gone |
+| `execd down [<socket>]` | Stop that session and remove its directory; success if already gone. Without a socket, stop every session whose `owner` is this shell's session id; none is success |
 | `execd gc [--idle <d>] [--dry-run]` | Clean up sessions (below); `--idle` defaults to 168h |
 | `execd serve --socket <path>` | Unchanged; what `up` runs under nono, still usable directly |
 | `execd exec [--timeout d] -- <cmd>` | Unchanged |

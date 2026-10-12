@@ -68,8 +68,8 @@ func TestUp_RequiresProfile(t *testing.T) {
 	}
 }
 
-func TestDown_RequiresExactlyOneSocket(t *testing.T) {
-	for _, args := range [][]string{{"down"}, {"down", "a", "b"}} {
+func TestDown_TakesAtMostOneSocket(t *testing.T) {
+	for _, args := range [][]string{{"down", "a", "b"}} {
 		if code := run(args); code != 2 {
 			t.Errorf("run(%v) = %d, want 2", args, code)
 		}
@@ -93,5 +93,12 @@ func TestGC_EmptyRootSucceeds(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	if code := run([]string{"gc", "--dry-run"}); code != 0 {
 		t.Errorf("run(gc --dry-run) on an empty root = %d, want 0", code)
+	}
+}
+
+func TestDown_WithoutASocketSucceedsWhenNothingIsRunning(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	if code := run([]string{"down"}); code != 0 {
+		t.Errorf("run(down) = %d, want 0", code)
 	}
 }

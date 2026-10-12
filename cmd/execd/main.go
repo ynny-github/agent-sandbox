@@ -2,7 +2,7 @@
 // them to it.
 //
 //	execd up --profile <p> [--workdir d] start or reuse this shell's session; print its socket
-//	execd down <socket>                  stop that session and remove its directory
+//	execd down [<socket>]                stop that session, or every session this shell started
 //	execd gc [--idle d] [--dry-run]      clean up dead, orphaned and idle sessions
 //	execd serve --socket <path>          serve until SIGTERM/SIGINT
 //	execd exec [--timeout d] -- <cmd>    send one command line, exit with its status
@@ -27,7 +27,7 @@ import (
 
 const usage = `usage:
   execd up --profile <path> [--workdir <dir>]
-  execd down <socket>
+  execd down [<socket>]
   execd gc [--idle <duration>] [--dry-run]
   execd serve --socket <path>
   execd exec [--timeout d] -- <command>`
@@ -157,8 +157,16 @@ func up(args []string) int {
 }
 
 func down(args []string) int {
-	if len(args) != 1 {
-		fmt.Fprintln(os.Stderr, "execd down: takes exactly one socket path")
+	switch len(args) {
+	case 0:
+		if err := execd.DownOwned(os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "execd down: %v\n", err)
+			return 1
+		}
+		return 0
+	case 1:
+	default:
+		fmt.Fprintln(os.Stderr, "execd down: takes at most one socket path")
 		return 2
 	}
 	if err := execd.Down(args[0]); err != nil {

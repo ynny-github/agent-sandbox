@@ -66,15 +66,19 @@ session is `<root>/<key>/`, mode 0700:
 
 | File | Written by | Content |
 | --- | --- | --- |
-| `execd.sock` | serve | the socket |
+| `sock/execd.sock` | serve | the socket |
+| `sock/last-used` | serve | mtime touched on every request |
 | `pid` | up | pid of the `nono run` process |
 | `owner` | up | the caller session id |
 | `profile.sha256` | up | SHA-256 of the profile's content at start |
 | `log` | nono, serve | the session's stdout and stderr |
-| `last-used` | serve | mtime touched on every request |
 
-The socket's directory holds nothing but this session, so the bind grant's
-implied parent-directory access reaches nothing else.
+The socket's bind grant makes its directory (`sock/`) writable to the
+sandbox, so that directory holds only what serve itself writes. The files up,
+down and gc trust from outside the sandbox sit one level up: beside the
+socket, a command could write another process's pid into `pid` and have the
+next `execd down` SIGKILL it (found in final review; measured on nono 0.78.0
+that `<key>/pid` is not writable from the session).
 
 **`--workdir` is optional** and defaults to the current directory, made
 absolute. It is always passed to nono explicitly, never left to nono's
@@ -115,8 +119,8 @@ All of `up` and `down` for one key run under an exclusive `flock` on
 4. Start, in a new session (`setsid`), stdin `/dev/null`, stdout and stderr to
    `log`:
    `nono run --silent --profile <p> --workdir <d> --read-file <execd>
-   --allow-unix-socket-bind <dir>/execd.sock -- <execd> serve --socket
-   <dir>/execd.sock`, where `<execd>` is this binary's own path with symlinks
+   --allow-unix-socket-bind <dir>/sock/execd.sock -- <execd> serve --socket
+   <dir>/sock/execd.sock`, where `<execd>` is this binary's own path with symlinks
    resolved. Write `pid`.
 5. Wait until the socket appears or the child exits, at most 15 s (the
    launcher's `waitForSocketOrExit` and `execdStartTimeout`, moved).
@@ -126,8 +130,8 @@ All of `up` and `down` for one key run under an exclusive `flock` on
 
 ## `down <socket>`
 
-1. Refuse unless `<socket>` is `<root>/<key>/execd.sock` for a key directory
-   directly under the root. `down` removes a directory tree; it must not be
+1. Refuse unless `<socket>` is `<root>/<key>/sock/execd.sock` for a key
+   directory directly under the root. `down` removes a directory tree; it must not be
    aimed at an arbitrary path.
 2. If the socket does not accept a connection, the session is already dead:
    remove the directory and succeed, without signalling `pid` (a dead
@@ -154,7 +158,7 @@ status is then 1.
 ## `serve`
 
 On every request, `serve` touches `last-used` in its socket's directory
-(`filepath.Dir(socket)`). It already has write access there through the bind
+(`filepath.Dir(socket)`, i.e. `sock/`). It already has write access there through the bind
 grant. A failed touch is ignored: it only affects `gc`'s idle judgement.
 
 ## agent-sandbox

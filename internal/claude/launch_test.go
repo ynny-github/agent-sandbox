@@ -52,7 +52,7 @@ func TestValidatePassthrough_AllowsMCPConfig(t *testing.T) {
 func TestBuildArgs_NonoNotInPath(t *testing.T) {
 	t.Setenv("PATH", "")
 	cfg := &config.Config{}
-	if _, _, err := BuildArgs(cfg, Options{}, "", "", ""); err == nil {
+	if _, _, err := BuildArgs(cfg, Options{}, "", "", "", ""); err == nil {
 		t.Fatal("expected error when nono not in PATH, got nil")
 	}
 }
@@ -62,6 +62,9 @@ func makeFakeNono(t *testing.T) string {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nono")
 	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "execd"), []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir)
@@ -97,6 +100,9 @@ while :; do :; done
 	if err := os.WriteFile(path, []byte(script), 0755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(dir, "execd"), []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("PATH", dir)
 }
 
@@ -125,7 +131,7 @@ func argsIndex(args []string, target string) int {
 func TestBuildArgs_AlwaysUsesRun(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{}
-	_, args, err := BuildArgs(cfg, Options{}, "", "", "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -145,7 +151,7 @@ func TestBuildArgs_AlwaysUsesRun(t *testing.T) {
 func TestBuildArgs_InjectsHookSettings(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{}
-	_, args, err := BuildArgs(cfg, Options{}, "", "", "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -182,7 +188,7 @@ func TestBuildArgs_GrantsOnlyTheLauncherBinary(t *testing.T) {
 	makeFakeNono(t)
 	self := pinExecutablePath(t)
 	cfg := &config.Config{}
-	_, args, err := BuildArgs(cfg, Options{}, "", "", "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -200,7 +206,7 @@ func TestBuildArgs_GrantsOnlyTheLauncherBinary(t *testing.T) {
 func TestBuildArgs_InjectsProfileBeforeClaude(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{}
-	_, args, err := BuildArgs(cfg, Options{}, "/tmp/asb-profile-1.json", "", "")
+	_, args, err := BuildArgs(cfg, Options{}, "/tmp/asb-profile-1.json", "", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -217,7 +223,7 @@ func TestBuildArgs_InjectsProfileBeforeClaude(t *testing.T) {
 func TestBuildArgs_ClaudeOptsAfterClaude(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{}
-	_, args, err := BuildArgs(cfg, Options{ClaudeOpts: []string{"--model", "opus"}}, "", "", "")
+	_, args, err := BuildArgs(cfg, Options{ClaudeOpts: []string{"--model", "opus"}}, "", "", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -234,7 +240,7 @@ func TestBuildArgs_ClaudeOptsAfterClaude(t *testing.T) {
 func TestBuildArgs_InjectsSystemPrompt(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{}
-	_, args, err := BuildArgs(cfg, Options{}, "", "", "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -256,7 +262,7 @@ func TestBuildArgs_InjectsSystemPrompt(t *testing.T) {
 func TestBuildArgs_InjectsNoMCPFlags(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{}
-	_, args, err := BuildArgs(cfg, Options{}, "", "", "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -339,7 +345,7 @@ func TestParseArgs_EnvRefs(t *testing.T) {
 // working directory. The operator has chosen to share it unprompted.
 func TestBuildArgs_AllowsCwdWithoutPrompt(t *testing.T) {
 	makeFakeNono(t)
-	_, args, err := BuildArgs(&config.Config{}, Options{}, "", "", "")
+	_, args, err := BuildArgs(&config.Config{}, Options{}, "", "", "", "")
 	if err != nil {
 		t.Fatalf("BuildArgs() error = %v", err)
 	}
@@ -353,7 +359,7 @@ func TestBuildArgs_AllowsCwdWithoutPrompt(t *testing.T) {
 func TestBuildArgs_GrantsExecdSocket(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{}
-	_, args, err := BuildArgs(cfg, Options{}, "", "/tmp/b.sock", "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "/tmp/b.sock", "", "")
 	if err != nil {
 		t.Fatalf("BuildArgs() error = %v", err)
 	}
@@ -384,9 +390,11 @@ func hasFlagValue(args []string, flag, value string) bool {
 // the execd-focused tests below; startExecd replaces the deleted ensureUp
 // field everywhere else.
 
-func testExecdStart(sock string, cleaned *int) func(*config.Config) (string, func(), error) {
-	return func(*config.Config) (string, func(), error) {
-		return sock, func() {
+const testExecdPath = "/opt/bin/execd"
+
+func testExecdStart(sock string, cleaned *int) func(*config.Config) (string, string, func(), error) {
+	return func(*config.Config) (string, string, func(), error) {
+		return sock, testExecdPath, func() {
 			if cleaned != nil {
 				*cleaned++
 			}
@@ -404,8 +412,8 @@ func TestRun_StartExecdFailure_DoesNotLaunch(t *testing.T) {
 		},
 		verifyHook:        func(string, string) error { return nil },
 		startShellWrapper: testWrapperStart("/tmp/test-norc-bash-1", nil),
-		startExecd: func(*config.Config) (string, func(), error) {
-			return "", nil, errors.New("execd start error")
+		startExecd: func(*config.Config) (string, string, func(), error) {
+			return "", "", nil, errors.New("execd start error")
 		},
 		supervise: func(string, []string) int { superviseCalls++; return 0 },
 		exit:      func(int) { exitCalls++ },
@@ -502,7 +510,7 @@ func TestRun_SetsExecdSocketEnvBeforeSupervise(t *testing.T) {
 // attempting to start a session it cannot run.
 func TestStartExecd_NonoNotInPath(t *testing.T) {
 	t.Setenv("PATH", "")
-	sock, cleanup, err := startExecd(&config.Config{})
+	sock, _, cleanup, err := startExecd(&config.Config{})
 	if err == nil {
 		t.Fatal("startExecd() error = nil, want error when nono is not in PATH")
 	}
@@ -528,7 +536,7 @@ func TestStartExecd_ReportsChildExitBeforeBinding(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 
 	start := time.Now()
-	sock, cleanup, err := startExecd(&config.Config{})
+	sock, _, cleanup, err := startExecd(&config.Config{})
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
 		t.Errorf("startExecd() took %s, want it to fail fast once the child exits", elapsed)
 	}
@@ -560,7 +568,7 @@ func TestStartExecd_CleanupKillsAWedgedExecd(t *testing.T) {
 	makeFakeNonoWedged(t)
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 
-	sock, cleanup, err := startExecd(&config.Config{})
+	sock, _, cleanup, err := startExecd(&config.Config{})
 	if err != nil {
 		t.Fatalf("startExecd() error = %v", err)
 	}
@@ -589,7 +597,7 @@ func TestExecdArgsRunsExecdUnderTheCommandProfile(t *testing.T) {
 	}
 	cfg := loadConfigWithCommandProfile(t, dir, profile)
 
-	args := ExecdArgs(cfg, "/usr/bin/nono", "/opt/agent-sandbox/bin/agent-sandbox",
+	args := ExecdArgs(cfg, "/usr/bin/nono", "/opt/bin/execd",
 		"/run/b.sock", "/work/project")
 
 	joined := strings.Join(args, " ")
@@ -598,8 +606,8 @@ func TestExecdArgsRunsExecdUnderTheCommandProfile(t *testing.T) {
 		"--profile " + profile,
 		"--workdir /work/project",
 		"--allow-unix-socket-bind /run/b.sock",
-		"--read-file /opt/agent-sandbox/bin/agent-sandbox",
-		"-- /opt/agent-sandbox/bin/agent-sandbox execd --socket /run/b.sock",
+		"--read-file /opt/bin/execd",
+		"-- /opt/bin/execd serve --socket /run/b.sock",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("ExecdArgs() = %q\nmissing %q", joined, want)
@@ -630,9 +638,9 @@ func TestExecdArgsGrantsItsOwnBinaryAndInvokesItAbsolutely(t *testing.T) {
 		t.Fatalf("write profile: %v", err)
 	}
 	cfg := loadConfigWithCommandProfile(t, dir, profile)
-	const self = "/opt/agent-sandbox/bin/agent-sandbox"
+	const execdPath = "/opt/bin/execd"
 
-	args := ExecdArgs(cfg, "/usr/bin/nono", self, "/run/b.sock", "/work/project")
+	args := ExecdArgs(cfg, "/usr/bin/nono", execdPath, "/run/b.sock", "/work/project")
 
 	readFile := -1
 	dashIdx := -1
@@ -646,8 +654,8 @@ func TestExecdArgsGrantsItsOwnBinaryAndInvokesItAbsolutely(t *testing.T) {
 			}
 		}
 	}
-	if readFile < 0 || readFile+1 >= len(args) || args[readFile+1] != self {
-		t.Errorf("ExecdArgs() = %v, want --read-file %s so the profile need not grant execd's own binary", args, self)
+	if readFile < 0 || readFile+1 >= len(args) || args[readFile+1] != execdPath {
+		t.Errorf("ExecdArgs() = %v, want --read-file %s so the profile need not grant execd's own binary", args, execdPath)
 	}
 	if readFile > dashIdx {
 		t.Errorf("ExecdArgs() puts --read-file after --, where nono would pass it to execd instead of reading it")
@@ -655,8 +663,11 @@ func TestExecdArgsGrantsItsOwnBinaryAndInvokesItAbsolutely(t *testing.T) {
 	if dashIdx < 0 || dashIdx+1 >= len(args) {
 		t.Fatalf("ExecdArgs() = %v, no entrypoint after --", args)
 	}
-	if got := args[dashIdx+1]; got != self {
-		t.Errorf("entrypoint = %q, want selfPath's absolute form %q", got, self)
+	if got := args[dashIdx+1]; got != execdPath {
+		t.Errorf("entrypoint = %q, want execd's absolute path %q", got, execdPath)
+	}
+	if got := args[dashIdx+2:]; strings.Join(got, " ") != "serve --socket /run/b.sock" {
+		t.Errorf("after the entrypoint = %v, want serve --socket /run/b.sock", got)
 	}
 }
 
@@ -673,7 +684,7 @@ func TestExecdArgsUsesTheResolvedNonoPath(t *testing.T) {
 	}
 	cfg := loadConfigWithCommandProfile(t, dir, profile)
 
-	args := ExecdArgs(cfg, "/opt/nono/bin/nono", "/opt/agent-sandbox/bin/agent-sandbox",
+	args := ExecdArgs(cfg, "/opt/nono/bin/nono", "/opt/bin/execd",
 		"/run/b.sock", "/work/project")
 
 	if len(args) == 0 || args[0] != "/opt/nono/bin/nono" {
@@ -858,7 +869,7 @@ func TestBuildArgs_GrantsTheLauncherBinaryToTheAgent(t *testing.T) {
 	self := pinExecutablePath(t)
 
 	cfg := &config.Config{}
-	_, args, err := BuildArgs(cfg, Options{}, "/tmp/p.json", "", "")
+	_, args, err := BuildArgs(cfg, Options{}, "/tmp/p.json", "", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -881,7 +892,7 @@ func TestBuildArgs_FailsWhenItsOwnPathIsUnknown(t *testing.T) {
 	t.Cleanup(func() { executablePath = prev })
 
 	cfg := &config.Config{}
-	if _, _, err := BuildArgs(cfg, Options{}, "/tmp/p.json", "", ""); err == nil {
+	if _, _, err := BuildArgs(cfg, Options{}, "/tmp/p.json", "", "", ""); err == nil {
 		t.Fatal("expected an error when the launcher cannot locate its own binary, got nil")
 	}
 }
@@ -1081,9 +1092,9 @@ func TestRun_ContextModeNotEnabled_DoesNotStartExecd(t *testing.T) {
 		contextModeEnabled: func() (bool, error) { return false, nil },
 		verifyContextMode:  func(string) error { return nil },
 		startShellWrapper:  testWrapperStart("/tmp/test-norc-bash-1", nil),
-		startExecd: func(*config.Config) (string, func(), error) {
+		startExecd: func(*config.Config) (string, string, func(), error) {
 			execdCalls++
-			return "/tmp/test.sock", func() {}, nil
+			return "/tmp/test.sock", testExecdPath, func() {}, nil
 		},
 		supervise: func(string, []string) int { superviseCalls++; return 0 },
 		exit:      func(int) {},
@@ -1190,9 +1201,9 @@ func herdrRun(t *testing.T) (reexeced bool, env []string, started bool) {
 		},
 		verifyHook:         func(string, string) error { return nil },
 		contextModeEnabled: func() (bool, error) { return false, nil },
-		startExecd: func(*config.Config) (string, func(), error) {
+		startExecd: func(*config.Config) (string, string, func(), error) {
 			started = true
-			return "/tmp/test.sock", func() {}, nil
+			return "/tmp/test.sock", testExecdPath, func() {}, nil
 		},
 		startShellWrapper: testWrapperStart("/tmp/test-norc-bash-1", nil),
 		reexec: func(_ string, _ []string, e []string) error {
@@ -1260,5 +1271,102 @@ func TestRun_NoReexecOutsideHerdr(t *testing.T) {
 	}
 	if v, ok := os.LookupEnv(HerdrAgentEnvVar); ok {
 		t.Errorf("%s = %q outside herdr, want unset", HerdrAgentEnvVar, v)
+	}
+}
+
+func TestBuildArgs_GrantsTheExecdBinary(t *testing.T) {
+	makeFakeNono(t)
+	_, args, err := BuildArgs(&config.Config{}, Options{}, "", "", "", "/opt/bin/execd")
+	if err != nil {
+		t.Fatalf("BuildArgs() error = %v", err)
+	}
+	if !slices.Contains(argPairs(args, "--read-file"), "/opt/bin/execd") {
+		t.Errorf("BuildArgs() = %v, want --read-file /opt/bin/execd so the agent can run execd exec", args)
+	}
+}
+
+// argPairs returns every value that directly follows flag in args.
+func argPairs(args []string, flag string) []string {
+	var out []string
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == flag {
+			out = append(out, args[i+1])
+		}
+	}
+	return out
+}
+
+func TestResolveExecd_NotOnPath(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	_, err := ResolveExecd()
+	if err == nil || !strings.Contains(err.Error(), "go install github.com/ynny-github/agent-sandbox/cmd/execd@latest") {
+		t.Fatalf("ResolveExecd() error = %v, want the install hint", err)
+	}
+}
+
+func TestResolveExecd_ResolvesSymlinks(t *testing.T) {
+	real := filepath.Join(t.TempDir(), "execd-real")
+	if err := os.WriteFile(real, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	if err := os.Symlink(real, filepath.Join(bin, "execd")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	got, err := ResolveExecd()
+	if err != nil {
+		t.Fatalf("ResolveExecd() error = %v", err)
+	}
+	want, _ := filepath.EvalSymlinks(real)
+	if got != want {
+		t.Errorf("ResolveExecd() = %q, want the symlink target %q (Landlock checks the target)", got, want)
+	}
+}
+
+func TestStartExecd_ExecdNotInPath(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "nono"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	_, _, cleanup, err := startExecd(&config.Config{})
+	if err == nil || !strings.Contains(err.Error(), "cmd/execd@latest") {
+		t.Fatalf("startExecd() error = %v, want the execd install hint", err)
+	}
+	if cleanup != nil {
+		t.Error("cleanup should be nil on error")
+	}
+}
+
+// A missing execd must stop the launch before claude starts, and must still
+// remove the shell wrapper written earlier in the launch.
+func TestRun_ExecdMissing_DoesNotLaunch(t *testing.T) {
+	makeFakeNono(t)
+	superviseCalls, wrapperCleaned := 0, 0
+	err := run(&config.Config{}, Options{}, runDeps{
+		agentProfile: func(*config.Config) (string, error) {
+			return "/tmp/asb-profile-1.json", nil
+		},
+		verifyHook: func(string, string) error { return nil },
+		startShellWrapper: func() (string, func(), error) {
+			return "/tmp/w", func() { wrapperCleaned++ }, nil
+		},
+		startExecd: func(*config.Config) (string, string, func(), error) {
+			return "", "", nil, errors.New("execd not found in PATH; install it with " +
+				"`go install github.com/ynny-github/agent-sandbox/cmd/execd@latest`")
+		},
+		supervise: func(string, []string) int { superviseCalls++; return 0 },
+		exit:      func(int) {},
+	})
+	if err == nil || !strings.Contains(err.Error(), "cmd/execd@latest") {
+		t.Fatalf("run() error = %v, want the execd install hint", err)
+	}
+	if superviseCalls != 0 {
+		t.Errorf("claude was launched without execd (supervise called %d times)", superviseCalls)
+	}
+	if wrapperCleaned != 1 {
+		t.Errorf("shell wrapper cleanup ran %d times, want 1", wrapperCleaned)
 	}
 }

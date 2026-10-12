@@ -103,7 +103,7 @@ func TestBuildArgs_GrantsTheShellWrapperToTheAgentSandbox(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{}
 
-	_, args, err := BuildArgs(cfg, Options{}, "", "", "/state/norc-bash-1")
+	_, args, err := BuildArgs(cfg, Options{}, "", "", "/state/norc-bash-1", "")
 	if err != nil {
 		t.Fatalf("BuildArgs() error = %v", err)
 	}
@@ -119,7 +119,7 @@ func TestBuildArgs_OmitsTheShellWrapperGrantWhenThereIsNoWrapper(t *testing.T) {
 	makeFakeNono(t)
 	cfg := &config.Config{}
 
-	_, args, err := BuildArgs(cfg, Options{}, "", "", "")
+	_, args, err := BuildArgs(cfg, Options{}, "", "", "", "")
 	if err != nil {
 		t.Fatalf("BuildArgs() error = %v", err)
 	}

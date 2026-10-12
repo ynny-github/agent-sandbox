@@ -29,13 +29,10 @@ import (
 	"github.com/ynny-github/agent-sandbox/internal/execd"
 )
 
-// buildAgentSandbox compiles the real CLI binary into dir and returns its
-// path. A test's own os.Executable() resolves to the compiled test binary,
-// not a cobra-driven CLI that understands `execd --socket`, so
-// startExecd itself cannot be exercised here (see its own doc
-// comment); this suite drives claude.ExecdArgs — the pure function
-// startExecd calls — against a binary that can actually serve the
-// `execd` subcommand instead.
+// buildExecd compiles the real execd binary into dir and returns its path.
+// startExecd itself resolves execd on PATH, which a test does not control, so
+// this suite drives claude.ExecdArgs — the pure function startExecd calls —
+// against a freshly built binary instead.
 //
 // dir must be a path the execd session's own profile grants: nono refuses to
 // exec a binary out of a directory it has not been told to trust, and unlike
@@ -44,17 +41,17 @@ import (
 // of its own. Passing workdir — already granted by writeFixtureProfile's
 // filesystem.allow — sidesteps that without this test inventing a grant it
 // does not otherwise need.
-func buildAgentSandbox(t *testing.T, dir string) string {
+func buildExecd(t *testing.T, dir string) string {
 	t.Helper()
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatalf("module root: %v", err)
 	}
-	out := filepath.Join(dir, "agent-sandbox")
-	cmd := exec.Command("go", "build", "-o", out, "./cmd/agent-sandbox")
+	out := filepath.Join(dir, "execd")
+	cmd := exec.Command("go", "build", "-o", out, "./cmd/execd")
 	cmd.Dir = root
 	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("go build agent-sandbox: %v\n%s", err, output)
+		t.Fatalf("go build execd: %v\n%s", err, output)
 	}
 	return out
 }
@@ -62,7 +59,7 @@ func buildAgentSandbox(t *testing.T, dir string) string {
 // startExecdSession starts a real execd inside a real nono run session,
 // built exactly as claude.ExecdArgs describes it, and returns the socket
 // path. Teardown (SIGTERM, Wait, socket removal) is registered via t.Cleanup.
-func startExecdSession(t *testing.T, nonoPath, selfPath string, cfg *config.Config, workdir string) string {
+func startExecdSession(t *testing.T, nonoPath, execdPath string, cfg *config.Config, workdir string) string {
 	t.Helper()
 	// A short, unrelated temp dir for the socket: t.TempDir() embeds the
 	// (potentially long) test name in the path, which can push a unix socket
@@ -74,7 +71,7 @@ func startExecdSession(t *testing.T, nonoPath, selfPath string, cfg *config.Conf
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	sock := filepath.Join(dir, "e.sock")
 
-	args := claude.ExecdArgs(cfg, nonoPath, selfPath, sock, workdir)
+	args := claude.ExecdArgs(cfg, nonoPath, execdPath, sock, workdir)
 	// Captured rather than sent straight to the test binary's own stdout/stderr
 	// so a failure to start reports nono's own diagnostic (e.g. "directory is
 	// not readable inside the sandbox" for a binary outside every grant)
@@ -184,10 +181,10 @@ func runExecded(t *testing.T, allowDomains []string, command string) int {
 	}
 
 	workdir := t.TempDir()
-	selfPath := buildAgentSandbox(t, workdir)
+	execdPath := buildExecd(t, workdir)
 	cfg := &config.Config{CommandProfile: writeFixtureProfile(t, workdir, allowDomains)}
 
-	sock := startExecdSession(t, nonoPath, selfPath, cfg, workdir)
+	sock := startExecdSession(t, nonoPath, execdPath, cfg, workdir)
 
 	// The client sends its own working directory as the request's Cwd (see
 	// execd.Client.RunCommand's workingDir helper), so this test's cwd must

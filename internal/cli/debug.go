@@ -58,23 +58,28 @@ func runDebug(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	_, nonoArgs, err := claude.BuildArgs(cfg, opts, profilePath, execdSocket, shellWrapper)
+	execdPath, execdErr := claude.ResolveExecd()
+	grant := execdPath // "" when unresolved: the launch would refuse anyway
+
+	_, nonoArgs, err := claude.BuildArgs(cfg, opts, profilePath, execdSocket, shellWrapper, grant)
 	if err != nil {
 		return err
 	}
 	fmt.Println(strings.Join(nonoArgs, " "))
 
-	selfPath, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("locate agent-sandbox: %w", err)
-	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("getwd: %w", err)
 	}
+	if execdErr != nil {
+		execdPath = "execd"
+	}
 	fmt.Fprintln(cmd.OutOrStdout(), "exec daemon:")
 	fmt.Fprintln(cmd.OutOrStdout(), "  "+strings.Join(
-		claude.ExecdArgs(cfg, nonoPathForDisplay(), selfPath, execdSocket, cwd), " "))
+		claude.ExecdArgs(cfg, nonoPathForDisplay(), execdPath, execdSocket, cwd), " "))
+	if execdErr != nil {
+		fmt.Fprintln(cmd.OutOrStdout(), "  ("+execdErr.Error()+")")
+	}
 
 	if opts.ContextMode {
 		fmt.Fprintln(cmd.OutOrStdout(),

@@ -117,6 +117,22 @@ func launcherPath() (string, error) {
 	return self, nil
 }
 
+// ResolveExecd finds the execd binary on PATH and resolves symlinks, because
+// Landlock checks the target and a grant has to name it. startExecd calls it
+// once per launch and run feeds the same path to both sessions, so they cannot
+// disagree about which execd they run.
+func ResolveExecd() (string, error) {
+	p, err := exec.LookPath("execd")
+	if err != nil {
+		return "", fmt.Errorf("execd not found in PATH; install it with "+
+			"`go install github.com/ynny-github/agent-sandbox/cmd/execd@latest`: %w", err)
+	}
+	if resolved, rerr := filepath.EvalSymlinks(p); rerr == nil {
+		return resolved, nil
+	}
+	return p, nil
+}
+
 // hookProbePayload is a minimal PreToolUse payload; hookProbeWant is what the
 // hook must rewrite it into. The command is `true` so that nothing runs even if
 // the response were somehow acted on.
@@ -182,7 +198,7 @@ const herdrPaneEnvVar = "HERDR_PANE_ID"
 // PreToolUse hook via `claude --settings`. The injected settings carry the
 // hook only; the profile contributes nothing to them.
 func BuildArgs(cfg *config.Config, opts Options,
-	profilePath, execdSocket, shellWrapper string) (string, []string, error) {
+	profilePath, execdSocket, shellWrapper, execdPath string) (string, []string, error) {
 	nonoPath, err := exec.LookPath("nono")
 	if err != nil {
 		return "", nil, fmt.Errorf("nono not found in PATH: %w", err)
@@ -214,6 +230,13 @@ func BuildArgs(cfg *config.Config, opts Options,
 		return "", nil, selfErr
 	}
 	args = append(args, "--read-file", self)
+
+	// The hook rewrites every command to `execd exec -- …`, which the agent
+	// runs as its own child, so execd's binary needs the same read grant as
+	// the launcher's own, for the same reason.
+	if execdPath != "" {
+		args = append(args, "--read-file", execdPath)
+	}
 
 	// The agent's shell is a generated wrapper (see shellwrapper.go), reached
 	// the same way and for the same reason as the launcher's own binary: only
@@ -269,7 +292,7 @@ type runDeps struct {
 	// sandbox. Called only when --context-mode was passed, after execd is up
 	// and the variables are set.
 	verifyContextMode func(profilePath string) error
-	startExecd        func(*config.Config) (socket string, cleanup func(), err error)
+	startExecd        func(*config.Config) (socket, execdPath string, cleanup func(), err error)
 	// startShellWrapper writes the shell Claude runs tool commands with. It
 	// returns the wrapper's path and a cleanup that removes it.
 	startShellWrapper func() (path string, cleanup func(), err error)
@@ -389,7 +412,7 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 		}
 	}()
 
-	execdSocket, cleanupExecd, err := d.startExecd(cfg)
+	execdSocket, execdPath, cleanupExecd, err := d.startExecd(cfg)
 	if err != nil {
 		return fmt.Errorf("exec daemon: %w", err)
 	}
@@ -399,7 +422,7 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 		}
 	}()
 
-	nonoPath, nonoArgs, err := BuildArgs(cfg, opts, profilePath, execdSocket, shellWrapper)
+	nonoPath, nonoArgs, err := BuildArgs(cfg, opts, profilePath, execdSocket, shellWrapper, execdPath)
 	if err != nil {
 		return err
 	}
@@ -438,40 +461,41 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 	return nil
 }
 
-// startExecd launches execd in its own nono session and returns
-// the socket path plus a cleanup that stops it.
+// startExecd launches the execd binary found on PATH in its own nono session
+// and returns the socket path, the resolved execd path, and a cleanup that
+// stops it.
 //
 // execd no longer runs in this process. It runs inside a sandbox whose
 // command policies govern everything it executes, which is the whole point: a
 // process outside the sandbox would execute commands with the launcher's own
 // reach.
-func startExecd(cfg *config.Config) (string, func(), error) {
+func startExecd(cfg *config.Config) (string, string, func(), error) {
 	nonoPath, err := exec.LookPath("nono")
 	if err != nil {
-		return "", nil, fmt.Errorf("nono not found in PATH: %w", err)
+		return "", "", nil, fmt.Errorf("nono not found in PATH: %w", err)
 	}
-	selfPath, err := os.Executable()
+	execdPath, err := ResolveExecd()
 	if err != nil {
-		return "", nil, fmt.Errorf("locate agent-sandbox: %w", err)
+		return "", "", nil, err
 	}
 	cwd, err := os.Getwd()
 	if err != nil {
-		return "", nil, fmt.Errorf("getwd: %w", err)
+		return "", "", nil, fmt.Errorf("getwd: %w", err)
 	}
 	sockPath, err := ExecdSocketPath()
 	if err != nil {
-		return "", nil, err
+		return "", "", nil, err
 	}
 	// A socket left by a killed run would make execd's bind fail forever.
 	if rmErr := os.Remove(sockPath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
-		return "", nil, fmt.Errorf("remove stale socket: %w", rmErr)
+		return "", "", nil, fmt.Errorf("remove stale socket: %w", rmErr)
 	}
 
-	args := ExecdArgs(cfg, nonoPath, selfPath, sockPath, cwd)
+	args := ExecdArgs(cfg, nonoPath, execdPath, sockPath, cwd)
 	cmd := exec.Command(nonoPath, args[1:]...)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	if err := cmd.Start(); err != nil {
-		return "", nil, fmt.Errorf("start exec daemon: %w", err)
+		return "", "", nil, fmt.Errorf("start exec daemon: %w", err)
 	}
 
 	// waitExited carries cmd.Wait's result exactly once. Starting it here,
@@ -493,7 +517,7 @@ func startExecd(cfg *config.Config) (string, func(), error) {
 			<-waitExited
 		}
 		os.Remove(sockPath)
-		return "", nil, err
+		return "", "", nil, err
 	}
 
 	cleanup := func() {
@@ -526,7 +550,7 @@ func startExecd(cfg *config.Config) (string, func(), error) {
 		}
 		os.Remove(sockPath)
 	}
-	return sockPath, cleanup, nil
+	return sockPath, execdPath, cleanup, nil
 }
 
 // execdStartTimeout bounds how long the launcher waits for execd's socket
@@ -587,9 +611,9 @@ func waitForSocketOrExit(path string, timeout time.Duration, exited <-chan error
 //
 // Everything execd needs in order to *start* is granted here, on the
 // command line, rather than being left to the operator's profile. --read-file
-// covers its own binary (a read grant carries the execute right), and
+// covers the execd binary (a read grant carries the execute right), and
 // --allow-unix-socket-bind covers the socket. Measured: under a profile that
-// grants neither, an absolute-path invocation of this binary exits 127 with no
+// grants neither, an absolute-path invocation of that binary exits 127 with no
 // output; adding --read-file alone makes the same invocation run. Keeping these
 // on the launcher's side means an operator narrowing what *commands* may reach
 // cannot accidentally stop execd from starting, and it removes the
@@ -603,15 +627,15 @@ func waitForSocketOrExit(path string, timeout time.Duration, exited <-chan error
 // and only base-name resolution's own hazard would remain: nono resolves the
 // bare name through this launcher's PATH, so a different, stale copy earlier on
 // PATH would silently become execd instead of this one.
-func ExecdArgs(cfg *config.Config, nonoPath, selfPath, sockPath, workdir string) []string {
+func ExecdArgs(cfg *config.Config, nonoPath, execdPath, sockPath, workdir string) []string {
 	return []string{
 		nonoPath, "run", "--silent",
 		"--profile", cfg.CommandProfilePath(),
 		"--workdir", workdir,
-		"--read-file", selfPath,
+		"--read-file", execdPath,
 		"--allow-unix-socket-bind", sockPath,
 		"--",
-		selfPath, "execd", "--socket", sockPath,
+		execdPath, "serve", "--socket", sockPath,
 	}
 }
 

@@ -2,6 +2,7 @@ package execd
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -88,7 +89,7 @@ func withSession(t *testing.T, sid int) {
 // killSession SIGKILLs a session started by a test. It is test cleanup, not
 // Down: Down is Task 2's subject and must not be what keeps other tests tidy.
 func killSession(sock string) {
-	if pid, err := readInt(filepath.Join(filepath.Dir(sock), "pid")); err == nil {
+	if pid, err := readInt(filepath.Join(sessionOf(sock), "pid")); err == nil {
 		syscall.Kill(pid, syscall.SIGKILL)
 	}
 }
@@ -132,20 +133,23 @@ func TestUp_StartsAndReturnsALiveSocket(t *testing.T) {
 	sock := upForTest(t, writeProfile(t, "{}"))
 
 	root, _ := Root()
-	if filepath.Dir(filepath.Dir(sock)) != root || filepath.Base(sock) != sockName {
+	if filepath.Dir(sessionOf(sock)) != root || filepath.Base(sock) != sockName {
 		t.Errorf("socket %s is not <root>/<key>/%s under %s", sock, sockName, root)
 	}
-	if !alive(filepath.Dir(sock)) {
+	if !alive(sessionOf(sock)) {
 		t.Error("the session is not alive after Up")
 	}
-	info, err := os.Stat(filepath.Dir(sock))
+	info, err := os.Stat(sessionOf(sock))
 	if err != nil || info.Mode().Perm() != 0o700 {
 		t.Errorf("session dir mode = %v (err %v), want 0700", info.Mode().Perm(), err)
 	}
-	for _, f := range []string{"pid", "owner", "profile.sha256", "log", "last-used"} {
-		if _, err := os.Stat(filepath.Join(filepath.Dir(sock), f)); err != nil {
+	for _, f := range []string{"pid", "owner", "profile.sha256", "log"} {
+		if _, err := os.Stat(filepath.Join(sessionOf(sock), f)); err != nil {
 			t.Errorf("session file %s missing: %v", f, err)
 		}
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(sock), "last-used")); err != nil {
+		t.Errorf("last-used missing beside the socket: %v", err)
 	}
 }
 
@@ -232,7 +236,7 @@ func TestUp_ReplacesADeadLeftover(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir := filepath.Dir(sock)
+	dir := sessionOf(sock)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +278,7 @@ func TestUp_ChildExitingEarlyFailsWithTheLog(t *testing.T) {
 		t.Fatalf("Up() error = %v, want it to carry nono's log", err)
 	}
 	sock, _ := SessionSocket(profile, workdir)
-	if _, statErr := os.Stat(filepath.Dir(sock)); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(sessionOf(sock)); !os.IsNotExist(statErr) {
 		t.Errorf("session dir left behind after a failed Up (stat err %v)", statErr)
 	}
 }
@@ -282,7 +286,7 @@ func TestDown_StopsAndRemovesTheSession(t *testing.T) {
 	stateHome(t)
 	fakeNono(t, passthroughNono)
 	sock := upForTest(t, writeProfile(t, "{}"))
-	pid, _ := readInt(filepath.Join(filepath.Dir(sock), "pid"))
+	pid, _ := readInt(filepath.Join(sessionOf(sock), "pid"))
 
 	if err := Down(sock); err != nil {
 		t.Fatalf("Down() error = %v", err)
@@ -290,7 +294,7 @@ func TestDown_StopsAndRemovesTheSession(t *testing.T) {
 	if processExists(pid) {
 		t.Errorf("session process %d still running after Down", pid)
 	}
-	if _, err := os.Stat(filepath.Dir(sock)); !os.IsNotExist(err) {
+	if _, err := os.Stat(sessionOf(sock)); !os.IsNotExist(err) {
 		t.Errorf("session dir still exists after Down (stat err %v)", err)
 	}
 }
@@ -303,7 +307,7 @@ func TestDown_KillsAServerThatIgnoresSIGTERM(t *testing.T) {
 	StopTimeout = 200 * time.Millisecond
 	t.Cleanup(func() { StopTimeout = prev })
 	sock := upForTest(t, writeProfile(t, "{}"))
-	pid, _ := readInt(filepath.Join(filepath.Dir(sock), "pid"))
+	pid, _ := readInt(filepath.Join(sessionOf(sock), "pid"))
 
 	start := time.Now()
 	if err := Down(sock); err != nil {
@@ -326,7 +330,7 @@ func TestDown_DeadSessionIsRemovedWithoutSignalling(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir := filepath.Dir(sock)
+	dir := sessionOf(sock)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -377,14 +381,14 @@ func gcFixture(t *testing.T) (dead, ownerGone, idle, fresh string) {
 
 	withSession(t, 2001)
 	dead, _ = SessionSocket(profile, t.TempDir())
-	if err := os.MkdirAll(filepath.Dir(dead), 0o700); err != nil {
+	if err := os.MkdirAll(sessionOf(dead), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	os.WriteFile(filepath.Join(filepath.Dir(dead), "pid"), []byte(strconv.Itoa(deadPID(t))), 0o600)
+	os.WriteFile(filepath.Join(sessionOf(dead), "pid"), []byte(strconv.Itoa(deadPID(t))), 0o600)
 
 	withSession(t, 2002)
 	ownerGone = upForTest(t, profile)
-	os.WriteFile(filepath.Join(filepath.Dir(ownerGone), "owner"), []byte(strconv.Itoa(deadPID(t))), 0o600)
+	os.WriteFile(filepath.Join(sessionOf(ownerGone), "owner"), []byte(strconv.Itoa(deadPID(t))), 0o600)
 
 	withSession(t, os.Getpid()) // an owner that exists
 	idle = upForTest(t, profile)
@@ -404,11 +408,11 @@ func TestGC_DownsASessionWhoseOwnerIsGone(t *testing.T) {
 		t.Fatalf("GC() error = %v\n%s", err, out.String())
 	}
 	for _, gone := range []string{dead, ownerGone, idle} {
-		if _, err := os.Stat(filepath.Dir(gone)); !os.IsNotExist(err) {
+		if _, err := os.Stat(sessionOf(gone)); !os.IsNotExist(err) {
 			t.Errorf("GC left %s (stat err %v)\n%s", gone, err, out.String())
 		}
 	}
-	if !alive(filepath.Dir(fresh)) {
+	if !alive(sessionOf(fresh)) {
 		t.Errorf("GC stopped the fresh session %s\n%s", fresh, out.String())
 	}
 }
@@ -420,11 +424,59 @@ func TestGC_DryRunChangesNothing(t *testing.T) {
 		t.Fatalf("GC(dry run) error = %v", err)
 	}
 	for _, s := range []string{dead, ownerGone, idle, fresh} {
-		if _, err := os.Stat(filepath.Dir(s)); err != nil {
+		if _, err := os.Stat(sessionOf(s)); err != nil {
 			t.Errorf("dry run removed %s: %v", s, err)
 		}
 		if !strings.Contains(out.String(), s) {
 			t.Errorf("dry run output does not list %s:\n%s", s, out.String())
 		}
+	}
+}
+
+// The socket's bind grant makes its directory writable to the sandbox, so the
+// files up, down and gc trust from outside it must live elsewhere. Otherwise a
+// command could write another process's pid into `pid` and have the next
+// `execd down` SIGKILL it.
+func TestUp_ControlFilesAreOutsideTheSocketDirectory(t *testing.T) {
+	stateHome(t)
+	fakeNono(t, passthroughNono)
+	sock := upForTest(t, writeProfile(t, "{}"))
+	for _, f := range []string{"pid", "owner", "profile.sha256", "log"} {
+		if _, err := os.Stat(filepath.Join(filepath.Dir(sock), f)); err == nil {
+			t.Errorf("%s sits beside the socket, where the sandbox can rewrite it", f)
+		}
+		if _, err := os.Stat(filepath.Join(sessionOf(sock), f)); err != nil {
+			t.Errorf("%s missing from the session dir: %v", f, err)
+		}
+	}
+}
+
+// gc must judge a session under its key's lock: judged mid-up as "not
+// running", then downed once up finishes, it would stop a session that just
+// started.
+func TestGC_JudgesUnderTheKeyLock(t *testing.T) {
+	stateHome(t)
+	fakeNono(t, passthroughNono)
+	sock := upForTest(t, writeProfile(t, "{}"))
+	dir := sessionOf(sock)
+	pidFile := filepath.Join(dir, "pid")
+	realPID, _ := os.ReadFile(pidFile)
+
+	// Stand in for an up in progress: hold the lock with no live pid yet.
+	unlock, err := lockKey(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(pidFile, []byte(strconv.Itoa(deadPID(t))), 0o600)
+	done := make(chan error, 1)
+	go func() { done <- GC(168*time.Hour, false, io.Discard) }()
+	time.Sleep(200 * time.Millisecond)
+	os.WriteFile(pidFile, realPID, 0o600) // up finishes
+	unlock()
+	if err := <-done; err != nil {
+		t.Fatalf("GC() error = %v", err)
+	}
+	if !alive(dir) {
+		t.Error("GC stopped a session that finished starting while GC waited")
 	}
 }

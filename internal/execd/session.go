@@ -18,8 +18,19 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// sockName is the socket's file name inside a session directory.
-const sockName = "execd.sock"
+// sockName is the socket's file name; sockSubdir is the directory it sits in,
+// inside the session directory.
+//
+// The socket gets a directory of its own because its bind grant makes that
+// whole directory writable to the sandbox. The files up, down and gc trust
+// from outside it (pid, owner, profile.sha256, log) therefore live one level
+// up: beside the socket, a command could write another process's pid into
+// `pid` and have the next `execd down` SIGKILL it. Only last-used, which serve
+// itself writes and which only steers gc's idle judgement, sits beside it.
+const (
+	sockName   = "execd.sock"
+	sockSubdir = "sock"
+)
 
 // startTimeout bounds how long Up waits for the socket. A sandbox that
 // cannot start fails here rather than leaving its caller waiting on an execd
@@ -86,7 +97,7 @@ func SessionSocket(profile, workdir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, sockName), nil
+	return filepath.Join(dir, sockSubdir, sockName), nil
 }
 
 // Up starts the session for (caller session, workdir, profile), or returns the
@@ -121,7 +132,7 @@ func Up(profile, workdir string) (string, error) {
 	}
 	defer unlock()
 
-	sock := filepath.Join(dir, sockName)
+	sock := filepath.Join(dir, sockSubdir, sockName)
 	if _, statErr := os.Stat(dir); statErr == nil {
 		if alive(dir) {
 			running, _ := os.ReadFile(filepath.Join(dir, "profile.sha256"))
@@ -138,8 +149,13 @@ func Up(profile, workdir string) (string, error) {
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create session dir: %w", err)
 	}
+	if err := os.Mkdir(filepath.Join(dir, sockSubdir), 0o700); err != nil {
+		os.RemoveAll(dir)
+		return "", fmt.Errorf("create socket dir: %w", err)
+	}
 	for name, content := range map[string]string{
-		"owner": strconv.Itoa(sid), "profile.sha256": sum, "last-used": "",
+		"owner": strconv.Itoa(sid), "profile.sha256": sum,
+		filepath.Join(sockSubdir, "last-used"): "",
 	} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
 			os.RemoveAll(dir)
@@ -231,7 +247,7 @@ func alive(dir string) bool {
 	if err != nil || !processExists(pid) {
 		return false
 	}
-	c, err := net.DialTimeout("unix", filepath.Join(dir, sockName), time.Second)
+	c, err := net.DialTimeout("unix", filepath.Join(dir, sockSubdir, sockName), time.Second)
 	if err != nil {
 		return false
 	}
@@ -345,8 +361,9 @@ func Down(sock string) error {
 	if err != nil {
 		return err
 	}
-	dir := filepath.Dir(sock)
-	if filepath.Base(sock) != sockName || filepath.Dir(dir) != root {
+	dir := sessionOf(sock)
+	if filepath.Base(sock) != sockName || filepath.Base(filepath.Dir(sock)) != sockSubdir ||
+		filepath.Dir(dir) != root {
 		return fmt.Errorf("%s is not an execd session socket under %s", sock, root)
 	}
 	unlock, err := lockKey(dir)
@@ -354,6 +371,11 @@ func Down(sock string) error {
 		return err
 	}
 	defer unlock()
+	return downLocked(dir)
+}
+
+// downLocked stops dir's session and removes it; the caller holds its lock.
+func downLocked(dir string) error {
 	if _, statErr := os.Stat(dir); errors.Is(statErr, os.ErrNotExist) {
 		return nil
 	}
@@ -412,15 +434,7 @@ func GC(idle time.Duration, dryRun bool, w io.Writer) error {
 			continue
 		}
 		dir := filepath.Join(root, e.Name())
-		sock := filepath.Join(dir, sockName)
-		action, reason := judge(dir, idle)
-		fmt.Fprintf(w, "%s %s (%s)\n", action, sock, reason)
-		if dryRun || action == "keep" {
-			continue
-		}
-		// Down rechecks liveness under the key's lock, so a session that
-		// changed state since judge is still handled safely.
-		if err := Down(sock); err != nil {
+		if err := gcOne(dir, idle, dryRun, w); err != nil {
 			fmt.Fprintf(w, "  failed: %v\n", err)
 			failed++
 		}
@@ -431,6 +445,22 @@ func GC(idle time.Duration, dryRun bool, w io.Writer) error {
 	return nil
 }
 
+// gcOne judges and acts on one session under its key's lock, so an up in
+// progress is never judged half-started and then stopped once it finishes.
+func gcOne(dir string, idle time.Duration, dryRun bool, w io.Writer) error {
+	unlock, err := lockKey(dir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	action, reason := judge(dir, idle)
+	fmt.Fprintf(w, "%s %s (%s)\n", action, filepath.Join(dir, sockSubdir, sockName), reason)
+	if dryRun || action == "keep" {
+		return nil
+	}
+	return downLocked(dir)
+}
+
 func judge(dir string, idle time.Duration) (action, reason string) {
 	if !alive(dir) {
 		return "remove", "not running"
@@ -439,8 +469,11 @@ func judge(dir string, idle time.Duration) (action, reason string) {
 		errors.Is(syscall.Kill(owner, 0), syscall.ESRCH) {
 		return "down", "its shell is gone"
 	}
-	if info, err := os.Stat(filepath.Join(dir, "last-used")); err == nil && time.Since(info.ModTime()) > idle {
+	if info, err := os.Stat(filepath.Join(dir, sockSubdir, "last-used")); err == nil && time.Since(info.ModTime()) > idle {
 		return "down", "unused since " + info.ModTime().Format(time.RFC3339)
 	}
 	return "keep", "in use"
 }
+
+// sessionOf is the session directory a socket path belongs to.
+func sessionOf(sock string) string { return filepath.Dir(filepath.Dir(sock)) }

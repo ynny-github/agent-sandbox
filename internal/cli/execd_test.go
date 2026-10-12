@@ -67,3 +67,34 @@ func TestSessionDeclaresDumbTerm(t *testing.T) {
 		t.Errorf("TERM = %q, want %q", got, "dumb")
 	}
 }
+// outFile returns a file to pass as a command's stdout or stderr, and a func
+// that reads back what landed in it. A duplicate of internal/execd's own test
+// helper, deliberately: a test fixture is not part of that package's API, and
+// one short copy costs less than an export that exists only for this file.
+func outFile(t *testing.T) (*os.File, func() string) {
+	t.Helper()
+	f, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	return f, func() string {
+		b, err := os.ReadFile(f.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+}
+
+// devNull is the stdin a case with no input to send passes; Stdio has no
+// branch for an absent file.
+func devNull(t *testing.T) *os.File {
+	t.Helper()
+	f, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	return f
+}

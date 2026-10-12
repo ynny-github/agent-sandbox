@@ -327,10 +327,10 @@ func RecvStdio(uc *net.UnixConn) (Stdio, error) {
 	}
 	// The message that should carry the descriptors is one fixed byte. Anything
 	// else means the peer is not speaking this protocol at all — which is what
-	// an older agent-sandbox binary looks like from here, since its first move
+	// an older execd client looks like from here, since its first move
 	// is the request itself.
 	noFDs := fmt.Errorf("execd: no file descriptors arrived with the request. " +
-		"This usually means the agent-sandbox binary sending it is older than the " +
+		"This usually means the execd client sending it is older than the " +
 		"execd serving it — restart the session so both come from the same build")
 
 	// Decode first, validate second. The kernel installs SCM_RIGHTS descriptors

@@ -26,7 +26,7 @@ type Executor interface {
 // unsandboxed launcher's own reach.
 //
 // That session is started by internal/claude.startExecd, which runs
-// `nono run --profile <command profile> -- agent-sandbox execd --socket
+// `nono run --profile <command profile> -- execd serve --socket
 // <path>` (see claude.ExecdArgs) as a sibling of the agent's own sandbox, not
 // a child of it — nono refuses to nest.
 type Server struct {

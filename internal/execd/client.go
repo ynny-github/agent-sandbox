@@ -191,7 +191,7 @@ func workingDir() string {
 
 // SandboxNotRunningHint is the actionable message shown when execd is not
 // reachable. It is exported because the situation is detected before any
-// command runs: `agent-sandbox exec` and the MCP server both fail to build a
+// command runs: `execd exec` and the MCP server both fail to build a
 // client when AGENT_SANDBOX_EXECD_SOCKET is unset, and must print this rather
 // than a raw dial error.
 const SandboxNotRunningHint = "exec daemon is not available; run Claude via `agent-sandbox claude`, which starts it automatically"

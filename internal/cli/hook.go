@@ -74,7 +74,7 @@ func runHookCore(in io.Reader, out io.Writer) error {
 			"through execd; refusing rather than letting it run outside execd", name)
 	}
 
-	wrapped := "agent-sandbox exec -- " + shellquote.Quote(input.ToolInput.Command)
+	wrapped := "execd exec -- " + shellquote.Quote(input.ToolInput.Command)
 	response := map[string]any{
 		"hookSpecificOutput": map[string]any{
 			"hookEventName":      "PreToolUse",

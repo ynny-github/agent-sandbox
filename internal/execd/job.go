@@ -145,7 +145,7 @@ const TerminateGrace = 200 * time.Millisecond
 // package cannot touch. Pre-branch it held execd's interposed pipe instead,
 // and this grace force-closing that pipe is why those runs returned at 5004ms.
 // Post-branch the request itself returns sooner, ~3000ms, the timeout alone;
-// but `agent-sandbox exec … | downstream` leaves `downstream` waiting for an
+// but `execd exec … | downstream` leaves `downstream` waiting for an
 // EOF for as long as the strand lives, and nothing here bounds that.
 //
 // Accepted, not overlooked. It is inherent to handing a descriptor to a
@@ -181,7 +181,7 @@ const TerminateGrace = 200 * time.Millisecond
 // on this branch and on the pre-branch binary alike
 // (docs/superpowers/probes/2026-09-21-fd-passing.md §8, which is never
 // committed, so this sentence is where that correction survives). A user of
-// `agent-sandbox exec` therefore sees a ~2s stall, the note naming the command
+// `execd exec` therefore sees a ~2s stall, the note naming the command
 // that caused it, complete output, and — unless the request timeout fired
 // first — a correct exit status.
 const DrainGrace = 2 * time.Second

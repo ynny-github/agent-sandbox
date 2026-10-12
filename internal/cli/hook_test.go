@@ -45,7 +45,7 @@ func TestRunHookCore_WrapsBashCommand(t *testing.T) {
 	if hso["permissionDecision"] != "allow" {
 		t.Errorf("permissionDecision = %v, want allow", hso["permissionDecision"])
 	}
-	if got, want := updatedCommand(t, parsed), `agent-sandbox exec -- 'git status'`; got != want {
+	if got, want := updatedCommand(t, parsed), `execd exec -- 'git status'`; got != want {
 		t.Errorf("updatedInput.command = %q, want %q", got, want)
 	}
 }
@@ -57,7 +57,7 @@ func TestRunHookCore_EscapesEmbeddedQuotes(t *testing.T) {
 		t.Fatalf("runHookCore error: %v", err)
 	}
 	parsed := decodeHookOutput(t, out.Bytes())
-	want := `agent-sandbox exec -- 'git commit -m '\''hi there'\'''`
+	want := `execd exec -- 'git commit -m '\''hi there'\'''`
 	if got := updatedCommand(t, parsed); got != want {
 		t.Errorf("updatedInput.command = %q, want %q", got, want)
 	}
@@ -108,7 +108,7 @@ func TestRunHook_SucceedsWithExitCode0(t *testing.T) {
 	if code := runHook(in, &out, &errOut); code != 0 {
 		t.Errorf("exit code = %d, want 0; stderr: %s", code, errOut.String())
 	}
-	if !strings.Contains(out.String(), "agent-sandbox exec --") {
+	if !strings.Contains(out.String(), "execd exec --") {
 		t.Errorf("expected the rewritten command; got %q", out.String())
 	}
 }

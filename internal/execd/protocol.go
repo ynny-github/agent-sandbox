@@ -258,7 +258,7 @@ func ReadFrame(r io.Reader) (Frame, error) {
 // TestPassedStdinCannotBeInterruptedWhileBlockedOnARead pins that shape.
 //
 // Who is exposed. Anything whose stdin is a terminal or a live producer: a
-// human running `agent-sandbox exec`, and `producer | agent-sandbox exec …`.
+// human running `execd exec`, and `producer | execd exec …`.
 // The agent's hook path is not — the harness gives it /dev/null, which reads
 // EOF at once — which is why this is a sharp edge rather than an outage.
 //

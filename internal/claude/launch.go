@@ -138,7 +138,7 @@ func ResolveExecd() (string, error) {
 // the response were somehow acted on.
 const (
 	hookProbePayload = `{"tool_name":"Bash","tool_input":{"command":"true"}}`
-	hookProbeWant    = "agent-sandbox exec --"
+	hookProbeWant    = "execd exec --"
 )
 
 // probeHook runs the PreToolUse hook inside the agent's own sandbox and checks

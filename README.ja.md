@@ -159,7 +159,6 @@ execd 自身のビルトインは 3 つ目の扱いで、execd プロセスの�
 | `execd up --profile <path> [--workdir <dir>]` | このシェル・workdir・プロファイルのセッションを nono の下で起動する(動いていればそれを使う)。ソケットを出力する。`agent-sandbox claude` が実行する |
 | `execd down [<socket>]` | そのセッションを止めてディレクトリを消す。socket を省くと、このシェルが起動したセッションをすべて止める。`agent-sandbox claude` が終了時に実行する |
 | `execd gc [--idle <duration>] [--dry-run]` | 死んでいる・シェルが消えた・`--idle`(既定 168h)より長く使われていないセッションを片付ける |
-| `execd serve --socket <path>` | ソケットでコマンドを受け付ける。`execd up` がコマンドプロファイルのセッション内で起動する。受け取ったものをそのまま実行するので、sandbox の外では動かさないこと |
 | `execd exec [--timeout d] -- <command>` | `AGENT_SANDBOX_EXECD_SOCKET` のソケットにコマンドを 1 つ送り、出力をストリームする |
 
 セッションは `$XDG_STATE_HOME/execd/`(`~/.local/state/execd/`)に置かれます。ランチャーが kill されるなどで `agent-sandbox claude` が止められなかったセッションは、`execd gc` が片付けるまで動き続けます。

@@ -160,7 +160,6 @@ for `nono profile show` / `nono why`.
 | `execd up --profile <path> [--workdir <dir>]` | Start the session for this shell, workdir and profile under nono, or reuse the running one; print its socket. `agent-sandbox claude` runs this |
 | `execd down [<socket>]` | Stop that session and remove its directory; without a socket, stop every session this shell started. `agent-sandbox claude` runs this on exit |
 | `execd gc [--idle <duration>] [--dry-run]` | Clean up sessions that are dead, whose shell is gone, or unused for longer than `--idle` (default 168h) |
-| `execd serve --socket <path>` | Serve commands on the socket. `execd up` runs it inside the command-profile session; never run it unsandboxed, it executes whatever it is sent |
 | `execd exec [--timeout d] -- <command>` | Send one command to the socket named by `AGENT_SANDBOX_EXECD_SOCKET` and stream its output |
 
 Sessions live under `$XDG_STATE_HOME/execd/` (`~/.local/state/execd/`). One that `agent-sandbox claude` could not stop — the launcher was killed — keeps running until `execd gc` collects it.

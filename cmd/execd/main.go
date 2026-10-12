@@ -4,11 +4,11 @@
 //	execd up --profile <p> [--workdir d] start or reuse this shell's session; print its socket
 //	execd down [<socket>]                stop that session, or every session this shell started
 //	execd gc [--idle d] [--dry-run]      clean up dead, orphaned and idle sessions
-//	execd serve --socket <path>          serve until SIGTERM/SIGINT
 //	execd exec [--timeout d] -- <cmd>    send one command line, exit with its status
 //
-// serve is not meant to run outside a sandbox: it executes whatever it is sent
-// at its own grants. exec finds the socket through AGENT_SANDBOX_EXECD_SOCKET.
+// up runs the server itself as `execd serve --socket <path>` inside the nono
+// session. serve is internal and left out of the usage: outside a sandbox it
+// executes whatever it is sent at the caller's own grants. exec finds the socket through AGENT_SANDBOX_EXECD_SOCKET.
 // There is no config file.
 package main
 
@@ -29,7 +29,6 @@ const usage = `usage:
   execd up --profile <path> [--workdir <dir>]
   execd down [<socket>]
   execd gc [--idle <duration>] [--dry-run]
-  execd serve --socket <path>
   execd exec [--timeout d] -- <command>`
 
 func main() { os.Exit(run(os.Args[1:])) }
@@ -55,6 +54,8 @@ func run(args []string) int {
 	return 2
 }
 
+// serve is the server `execd up` starts under nono. Internal: never run it
+// unsandboxed, it executes whatever it is sent.
 func serve(args []string) int {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	socket := fs.String("socket", "", "unix socket path to serve on (required)")

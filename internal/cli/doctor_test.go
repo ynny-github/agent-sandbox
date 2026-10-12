@@ -767,7 +767,7 @@ func TestCheckProfiles_FailsWhenNonoSaysTheBinaryIsWritable(t *testing.T) {
 func TestProfileAllowsWrite_ReadsStatusPastWarnings(t *testing.T) {
 	restore := stubRunCommand(nonoAnswers(nil, "allowed"))
 	defer restore()
-	allowed, err := profileAllowsWrite(context.Background(), "/p.json", "/bin/agent-sandbox")
+	allowed, err := claude.ProfileAllowsWrite(context.Background(), runCommand, "/p.json", "/bin/agent-sandbox")
 	if err != nil {
 		t.Fatalf("profileAllowsWrite: %v", err)
 	}
@@ -781,7 +781,7 @@ func TestProfileAllowsWrite_ErrorsOnUnparseableOutput(t *testing.T) {
 		return []byte("no json here"), nil
 	})
 	defer restore()
-	if _, err := profileAllowsWrite(context.Background(), "/p.json", "/bin/agent-sandbox"); err == nil {
+	if _, err := claude.ProfileAllowsWrite(context.Background(), runCommand, "/p.json", "/bin/agent-sandbox"); err == nil {
 		t.Error("profileAllowsWrite err = nil, want an error when nono prints no JSON")
 	}
 }

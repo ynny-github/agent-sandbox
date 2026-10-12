@@ -511,7 +511,7 @@ func checkProfiles(ctx context.Context, cfg *config.Config) checkResult {
 	// execd replaces what the next session serves with, a writable
 	// agent-sandbox replaces the launcher and the hook.
 	for _, bin := range []string{execdBin, self} {
-		writable, werr := profileAllowsWrite(ctx, cmdPath, bin)
+		writable, werr := claude.ProfileAllowsWrite(ctx, runCommand, cmdPath, bin)
 		if werr != nil {
 			r.details = append(r.details, fmt.Sprintf("error: could not ask nono whether %s is writable: %v", bin, werr))
 			r.hint = "could not verify " + bin + " is not writable through the command profile; " +
@@ -528,40 +528,6 @@ func checkProfiles(ctx context.Context, cfg *config.Config) checkResult {
 
 	r.ok = true
 	return r
-}
-
-// profileAllowsWrite asks nono whether profilePath grants write access to
-// binPath. The answer comes from `nono why --json`, whose status field is
-// "allowed" or "denied"; the command exits 0 either way, so the status is the
-// only signal.
-//
-// nono writes warnings (a bypass_protection entry naming a path that does not
-// exist on this host, for one) to stderr, and runCommand combines the streams,
-// so the JSON object is found rather than assumed to start at byte zero.
-func profileAllowsWrite(ctx context.Context, profilePath, binPath string) (bool, error) {
-	out, err := runCommand(ctx, "nono", "why", "--json",
-		"--profile", profilePath, "--path", binPath, "--op", "write")
-	if err != nil {
-		return false, fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
-	}
-	i := strings.IndexByte(string(out), '{')
-	if i < 0 {
-		return false, fmt.Errorf("no JSON in nono why output: %s", strings.TrimSpace(string(out)))
-	}
-	var answer struct {
-		Status string `json:"status"`
-	}
-	if err := json.Unmarshal([]byte(string(out)[i:]), &answer); err != nil {
-		return false, err
-	}
-	switch answer.Status {
-	case "allowed":
-		return true, nil
-	case "denied":
-		return false, nil
-	default:
-		return false, fmt.Errorf("unexpected nono why status %q", answer.Status)
-	}
 }
 
 // commandPolicySandbox is the subset of a `nono profile show --json` sandbox

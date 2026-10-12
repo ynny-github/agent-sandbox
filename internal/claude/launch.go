@@ -4,6 +4,8 @@
 package claude
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -478,6 +480,22 @@ func startExecd(cfg *config.Config) (string, string, func(), error) {
 	if err != nil {
 		return "", "", nil, err
 	}
+	// A command that can write execd, or the directory it sits in, could
+	// choose what this launch grants the agent and runs as the daemon —
+	// including by planting an `execd` in a writable directory earlier on
+	// PATH. Planting happens between launches, so refusing it only in doctor
+	// is not enough.
+	for _, p := range []string{execdPath, filepath.Dir(execdPath)} {
+		writable, werr := ProfileAllowsWrite(context.Background(), combinedOutput, cfg.CommandProfilePath(), p)
+		if werr != nil {
+			return "", "", nil, fmt.Errorf("check that the command profile cannot write %s: %w", p, werr)
+		}
+		if writable {
+			return "", "", nil, fmt.Errorf("the command profile can write %s, so a command could replace the "+
+				"execd this launch runs; install execd outside every path the command profile grants "+
+				"write access to", p)
+		}
+	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", "", nil, fmt.Errorf("getwd: %w", err)
@@ -654,4 +672,44 @@ func ExecdSocketPath() (string, error) {
 		return "", fmt.Errorf("create state dir: %w", err)
 	}
 	return filepath.Join(dir, fmt.Sprintf("execd-%d.sock", os.Getpid())), nil
+}
+
+// ProfileAllowsWrite asks nono whether profilePath grants write access to
+// binPath, running nono through run (which returns combined output). The answer comes from `nono why --json`, whose status field is
+// "allowed" or "denied"; the command exits 0 either way, so the status is the
+// only signal.
+//
+// nono writes warnings (a bypass_protection entry naming a path that does not
+// exist on this host, for one) to stderr, and run is expected to combine the streams,
+// so the JSON object is found rather than assumed to start at byte zero.
+func ProfileAllowsWrite(ctx context.Context, run func(context.Context, string, ...string) ([]byte, error),
+	profilePath, binPath string) (bool, error) {
+	out, err := run(ctx, "nono", "why", "--json",
+		"--profile", profilePath, "--path", binPath, "--op", "write")
+	if err != nil {
+		return false, fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
+	}
+	i := strings.IndexByte(string(out), '{')
+	if i < 0 {
+		return false, fmt.Errorf("no JSON in nono why output: %s", strings.TrimSpace(string(out)))
+	}
+	var answer struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(string(out)[i:]), &answer); err != nil {
+		return false, err
+	}
+	switch answer.Status {
+	case "allowed":
+		return true, nil
+	case "denied":
+		return false, nil
+	default:
+		return false, fmt.Errorf("unexpected nono why status %q", answer.Status)
+	}
+}
+
+// combinedOutput is the real runner ProfileAllowsWrite uses at launch.
+func combinedOutput(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }

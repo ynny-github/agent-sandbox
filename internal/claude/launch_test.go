@@ -61,7 +61,9 @@ func makeFakeNono(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nono")
-	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+	// Answers `nono why` with denied, so startExecd's writability check on
+	// the fake execd beside it passes.
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nif [ \"$1\" = why ]; then echo '{\"status\":\"denied\"}'; exit 0; fi\nexit 0\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "execd"), []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
@@ -85,6 +87,7 @@ func makeFakeNonoWedged(t *testing.T) {
 	// is what gets resolved), so both the socket creation and the "never
 	// exits" wait use only sh builtins: redirection and a busy loop.
 	script := `#!/bin/sh
+if [ "$1" = why ]; then echo '{"status":"denied"}'; exit 0; fi
 sock=""
 prev=""
 for arg in "$@"; do
@@ -1368,5 +1371,31 @@ func TestRun_ExecdMissing_DoesNotLaunch(t *testing.T) {
 	}
 	if wrapperCleaned != 1 {
 		t.Errorf("shell wrapper cleanup ran %d times, want 1", wrapperCleaned)
+	}
+}
+
+// A command running under the command profile must not be able to choose the
+// execd the next launch grants to the agent and runs as the daemon — by
+// rewriting the installed one, or by planting an `execd` in a writable
+// directory earlier on PATH. startExecd refuses either before starting
+// anything.
+func TestStartExecd_RefusesAnExecdTheCommandProfileCanWrite(t *testing.T) {
+	dir := t.TempDir()
+	nono := "#!/bin/sh\nif [ \"$1\" = why ]; then echo '{\"status\":\"allowed\"}'; fi\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(dir, "nono"), []byte(nono), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "execd"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	_, _, cleanup, err := startExecd(&config.Config{})
+	if err == nil || !strings.Contains(err.Error(), "command profile can write") {
+		t.Fatalf("startExecd() error = %v, want a refusal naming the writable execd", err)
+	}
+	if cleanup != nil {
+		t.Error("cleanup should be nil on error")
 	}
 }

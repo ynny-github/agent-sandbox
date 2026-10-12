@@ -4,13 +4,13 @@ package cli
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/ynny-github/agent-sandbox/internal/claude"
 	"github.com/ynny-github/agent-sandbox/internal/config"
 	"github.com/ynny-github/agent-sandbox/internal/envflag"
+	"github.com/ynny-github/agent-sandbox/internal/execd"
 )
 
 var debugCmd = &cobra.Command{
@@ -45,7 +45,11 @@ func runDebug(cmd *cobra.Command, args []string) error {
 	// debug exists to show the exact invocation the launcher builds, so it must
 	// include the execd socket grant; passing "" here would hide the only thing
 	// execd adds to the agent's nono invocation.
-	execdSocket, err := claude.ExecdSocketPath()
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("getwd: %w", err)
+	}
+	execdSocket, err := execd.SessionSocket(cfg.CommandProfilePath(), cwd)
 	if err != nil {
 		return err
 	}
@@ -67,16 +71,12 @@ func runDebug(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Println(strings.Join(nonoArgs, " "))
 
-	cwd, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("getwd: %w", err)
-	}
 	if execdErr != nil {
 		execdPath = "execd"
 	}
 	fmt.Fprintln(cmd.OutOrStdout(), "exec daemon:")
-	fmt.Fprintln(cmd.OutOrStdout(), "  "+strings.Join(
-		claude.ExecdArgs(cfg, nonoPathForDisplay(), execdPath, execdSocket, cwd), " "))
+	fmt.Fprintln(cmd.OutOrStdout(), "  "+strings.Join([]string{
+		execdPath, "up", "--profile", cfg.CommandProfilePath(), "--workdir", cwd}, " "))
 	if execdErr != nil {
 		fmt.Fprintln(cmd.OutOrStdout(), "  ("+execdErr.Error()+")")
 	}
@@ -87,15 +87,4 @@ func runDebug(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
-}
-
-// nonoPathForDisplay resolves nono the same way the launcher does, so debug
-// prints the binary that will actually run rather than an unresolved literal.
-// It falls back to "nono" when lookup fails: debug must still print something
-// useful when nono is missing, which is itself worth being able to see here.
-func nonoPathForDisplay() string {
-	if path, err := exec.LookPath("nono"); err == nil {
-		return path
-	}
-	return "nono"
 }

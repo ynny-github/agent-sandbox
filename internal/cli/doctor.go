@@ -20,7 +20,6 @@ import (
 	"github.com/ynny-github/agent-sandbox/internal/claude"
 	"github.com/ynny-github/agent-sandbox/internal/config"
 	"github.com/ynny-github/agent-sandbox/internal/execd"
-	"github.com/ynny-github/agent-sandbox/internal/policysnapshot"
 )
 
 var errDoctorChecksFailed = errors.New("doctor: checks failed")
@@ -224,9 +223,10 @@ func checkNono(ctx context.Context) checkResult {
 	}
 }
 
-// checkExecdSocketDir verifies the launcher can create the execd socket. A
-// failure here means `agent-sandbox claude` cannot start execd,
-// so every sandboxed command would fail.
+// checkExecdSocketDir verifies a socket can be created under execd's session
+// root, where `execd up` creates sessions. A failure here means
+// `agent-sandbox claude` cannot start execd, so every sandboxed command would
+// fail.
 //
 // os.MkdirAll alone is not sufficient: it returns nil for a directory that
 // already exists, regardless of its permission bits, so an existing
@@ -236,7 +236,7 @@ func checkNono(ctx context.Context) checkResult {
 // the ~104-byte sun_path limit a plain write wouldn't.
 func checkExecdSocketDir() checkResult {
 	const name = "exec daemon"
-	dir, err := policysnapshot.StateDir()
+	dir, err := execd.Root()
 	if err != nil {
 		return checkResult{name: name, ok: false,
 			details: []string{fmt.Sprintf("error: %v", err)},

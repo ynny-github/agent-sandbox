@@ -299,7 +299,7 @@ func TestCheckExecdSocketDir_OK(t *testing.T) {
 	if !r.ok {
 		t.Fatalf("expected OK, got NG: %v", r.details)
 	}
-	want := filepath.Join(base, "agent-sandbox")
+	want := filepath.Join(base, "execd")
 	joined := strings.Join(r.details, "\n")
 	if !strings.Contains(joined, want) {
 		t.Errorf("details missing socket dir %q: %v", want, r.details)
@@ -332,7 +332,7 @@ func TestCheckExecdSocketDir_ExistingDirUnwritableFails(t *testing.T) {
 		t.Skip("root bypasses permission checks")
 	}
 	base := t.TempDir()
-	dir := filepath.Join(base, "agent-sandbox")
+	dir := filepath.Join(base, "execd")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}

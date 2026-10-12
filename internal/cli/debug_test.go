@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ynny-github/agent-sandbox/internal/claude"
+	"github.com/ynny-github/agent-sandbox/internal/execd"
 )
 
 func TestRunDebug_MissingConfig(t *testing.T) {
@@ -45,9 +45,13 @@ func TestRunDebug_PrintsExecdSocketGrant(t *testing.T) {
 	configPath = cfgPath
 	t.Cleanup(func() { configPath = orig })
 
-	wantSocket, err := claude.ExecdSocketPath()
+	cwd, err := os.Getwd()
 	if err != nil {
-		t.Fatalf("ExecdSocketPath() error = %v", err)
+		t.Fatal(err)
+	}
+	wantSocket, err := execd.SessionSocket(filepath.Join(dir, "command-profile.json"), cwd)
+	if err != nil {
+		t.Fatalf("SessionSocket() error = %v", err)
 	}
 
 	out := captureStdout(t, func() {
@@ -61,10 +65,9 @@ func TestRunDebug_PrintsExecdSocketGrant(t *testing.T) {
 	}
 }
 
-// The exec daemon line must print the resolved nono binary, not a literal
-// "nono": debug exists to show the exact invocation the launcher builds, and
-// ExecdArgs now honours whatever path it is given.
-func TestRunDebug_PrintsResolvedNonoPath(t *testing.T) {
+// The exec daemon line shows the `execd up` the launcher runs. execd is not
+// on this test's PATH, so the literal name is printed.
+func TestRunDebug_PrintsTheExecdUpLine(t *testing.T) {
 	dir := t.TempDir()
 	nono := filepath.Join(dir, "nono")
 	if err := os.WriteFile(nono, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
@@ -90,8 +93,9 @@ func TestRunDebug_PrintsResolvedNonoPath(t *testing.T) {
 			t.Fatalf("runDebug() error = %v", err)
 		}
 	})
-	if !strings.Contains(out, "exec daemon:\n  "+nono+" run") {
-		t.Errorf("debug output missing the resolved nono path %q in the exec daemon line; got:\n%s", nono, out)
+	want := "exec daemon:\n  execd up --profile " + filepath.Join(dir, "command-profile.json")
+	if !strings.Contains(out, want) {
+		t.Errorf("debug output missing %q; got:\n%s", want, out)
 	}
 }
 

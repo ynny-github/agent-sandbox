@@ -12,13 +12,11 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/ynny-github/agent-sandbox/internal/agentconfig"
 	"github.com/ynny-github/agent-sandbox/internal/config"
 	"github.com/ynny-github/agent-sandbox/internal/execd"
 	"github.com/ynny-github/agent-sandbox/internal/gitutil"
-	"github.com/ynny-github/agent-sandbox/internal/policysnapshot"
 )
 
 // agentName identifies the launched agent for host-policy resolution. Only
@@ -462,17 +460,18 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 	return nil
 }
 
-// startExecd launches the execd binary found on PATH in its own nono session
-// and returns the socket path, the resolved execd path, and a cleanup that
-// stops it.
+// startExecd resolves the execd binary on PATH, refuses one the command
+// profile could replace, and runs `execd up` for this working directory and
+// the command profile. It returns the socket execd up printed, the resolved
+// execd path, and a cleanup that runs `execd down` on that socket.
 //
-// execd no longer runs in this process. It runs inside a sandbox whose
-// command policies govern everything it executes, which is the whole point: a
-// process outside the sandbox would execute commands with the launcher's own
-// reach.
+// execd starts its session inside a sandbox whose command profile governs
+// everything it executes, which is the whole point: a process outside the
+// sandbox would execute commands with the launcher's own reach.
 func startExecd(cfg *config.Config) (string, string, func(), error) {
-	nonoPath, err := exec.LookPath("nono")
-	if err != nil {
+	// The writability check below runs `nono why`; fail on a missing nono
+	// first, with the error that names it.
+	if _, err := exec.LookPath("nono"); err != nil {
 		return "", "", nil, fmt.Errorf("nono not found in PATH: %w", err)
 	}
 	execdPath, err := ResolveExecd()
@@ -499,189 +498,23 @@ func startExecd(cfg *config.Config) (string, string, func(), error) {
 	if err != nil {
 		return "", "", nil, fmt.Errorf("getwd: %w", err)
 	}
-	sockPath, err := ExecdSocketPath()
+	// execd owns the session: where the socket lives, the nono argv, waiting
+	// for it, and stopping it. The launcher only decided which execd to trust.
+	up := exec.Command(execdPath, "up", "--profile", cfg.CommandProfilePath(), "--workdir", cwd)
+	up.Stderr = os.Stderr
+	out, err := up.Output()
 	if err != nil {
-		return "", "", nil, err
+		return "", "", nil, fmt.Errorf("execd up: %w", err)
 	}
-	// The socket gets a directory of its own because the bind grant for a
-	// socket that does not exist yet makes nono allow its whole parent
-	// directory to execd's session. Measured on nono 0.78.0: with the socket
-	// directly in the state dir, a command run through execd could rewrite the
-	// agent's shell wrapper there — even one created after the session started
-	// — and run code at the agent profile's reach on the next Bash call. A
-	// directory left by a killed run with the same pid is replaced, not reused.
-	sockDir := filepath.Dir(sockPath)
-	if rmErr := os.RemoveAll(sockDir); rmErr != nil {
-		return "", "", nil, fmt.Errorf("remove stale socket directory: %w", rmErr)
-	}
-	if mkErr := os.Mkdir(sockDir, 0o700); mkErr != nil {
-		return "", "", nil, fmt.Errorf("create socket directory: %w", mkErr)
-	}
-
-	args := ExecdArgs(cfg, nonoPath, execdPath, sockPath, cwd)
-	cmd := exec.Command(nonoPath, args[1:]...)
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	if err := cmd.Start(); err != nil {
-		os.RemoveAll(sockDir)
-		return "", "", nil, fmt.Errorf("start exec daemon: %w", err)
-	}
-
-	// waitExited carries cmd.Wait's result exactly once. Starting it here,
-	// before the readiness race below, is what lets that race observe the
-	// child dying (nono rejecting the profile, say) instead of only ever
-	// seeing the socket never appear; the channel is buffered so whichever
-	// side — the race below, or cleanup later — ends up reading it does not
-	// block a send from the other.
-	waitExited := make(chan error, 1)
-	go func() { waitExited <- cmd.Wait() }()
-
-	childExited, err := waitForSocketOrExit(sockPath, execdStartTimeout, waitExited)
-	if err != nil {
-		if !childExited {
-			// Still running past the deadline, or wedged mid-startup: stop it and
-			// reap it before reporting, so this call never leaves an orphaned
-			// execd process behind.
-			cmd.Process.Kill()
-			<-waitExited
-		}
-		os.RemoveAll(sockDir)
-		return "", "", nil, err
-	}
-
+	sock := strings.TrimSpace(string(out))
 	cleanup := func() {
-		if cmd.Process == nil {
-			os.RemoveAll(sockDir)
-			return
-		}
-		if sigErr := cmd.Process.Signal(syscall.SIGTERM); sigErr != nil {
-			fmt.Fprintf(os.Stderr, "agent-sandbox: signal exec daemon: %v\n", sigErr)
-		}
-		// Nothing here can confirm that nono forwards SIGTERM into the session
-		// it supervises, so this cannot simply wait on cmd.Wait() forever: an
-		// execd that never receives (or never acts on) the signal would hang
-		// agent-sandbox claude after the agent has already exited, with nothing
-		// on screen explaining why. Escalate to SIGKILL instead once
-		// execdStopTimeout passes.
-		select {
-		case waitErr := <-waitExited:
-			if waitErr != nil {
-				fmt.Fprintf(os.Stderr, "agent-sandbox: exec daemon: %v\n", waitErr)
-			}
-		case <-time.After(execdStopTimeout):
-			fmt.Fprintf(os.Stderr,
-				"agent-sandbox: exec daemon did not exit within %s after SIGTERM; killing it\n",
-				execdStopTimeout)
-			if killErr := cmd.Process.Kill(); killErr != nil {
-				fmt.Fprintf(os.Stderr, "agent-sandbox: kill exec daemon: %v\n", killErr)
-			}
-			<-waitExited
-		}
-		os.RemoveAll(sockDir)
-	}
-	return sockPath, execdPath, cleanup, nil
-}
-
-// execdStartTimeout bounds how long the launcher waits for execd's socket
-// to appear. A sandbox that cannot start fails here rather than leaving Claude
-// running against an execd that will never answer.
-const execdStartTimeout = 15 * time.Second
-
-// execdStopTimeout bounds how long teardown waits for execd to exit
-// after SIGTERM before escalating to SIGKILL. Signal forwarding into a nono
-// session is not this package's to verify, so teardown cannot simply trust it
-// and wait forever.
-//
-// It is a var, not a const, so a test can shrink it rather than spend several
-// real seconds proving the escalation path actually fires.
-var execdStopTimeout = 5 * time.Second
-
-// waitForSocketOrExit waits for execd's socket to appear, racing that
-// against the child exiting first via exited. Polling for the socket (rather
-// than a readiness handshake) is necessary because execd is behind a
-// sandbox boundary: there is no shared channel to signal on until the socket
-// itself appears. Racing it against exited is what turns "nono rejected the
-// profile and the child exited within milliseconds" into an immediate,
-// specific error instead of a silent wait for the full timeout.
-//
-// childExited reports whether exited fired (in which case the child is
-// already reaped and err explains why it died) or the deadline passed with
-// the child still running (in which case the caller still owns stopping and
-// reaping it).
-func waitForSocketOrExit(path string, timeout time.Duration, exited <-chan error) (childExited bool, err error) {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if _, statErr := os.Stat(path); statErr == nil {
-			return false, nil
-		}
-		select {
-		case waitErr := <-exited:
-			if waitErr == nil {
-				// A nil error from cmd.Wait means the process exited 0: unusual for
-				// nono to do without ever binding the socket, but still reported as
-				// a specific, immediate failure rather than folded into the
-				// generic timeout message below.
-				return true, fmt.Errorf("exec daemon exited (status 0) before binding its socket")
-			}
-			return true, fmt.Errorf("exec daemon exited before binding its socket: %w", waitErr)
-		case <-time.After(25 * time.Millisecond):
+		down := exec.Command(execdPath, "down", sock)
+		down.Stdout, down.Stderr = os.Stderr, os.Stderr
+		if err := down.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "agent-sandbox: execd down: %v\n", err)
 		}
 	}
-	return false, fmt.Errorf("exec daemon did not start within %s; run `agent-sandbox doctor`", timeout)
-}
-
-// ExecdArgs builds the `nono run` argv for execd's session.
-//
-// execd is a sibling of the agent's sandbox, not a child of it: nono
-// refuses to nest, and execd must be the session entrypoint so the profile
-// applies to everything it executes. It is deliberately not given --allow-cwd;
-// the working directory reaches the profile through --workdir, which is what
-// $WORKDIR expands to inside it.
-//
-// Everything execd needs in order to *start* is granted here, on the
-// command line, rather than being left to the operator's profile. --read-file
-// covers the execd binary (a read grant carries the execute right), and
-// --allow-unix-socket-bind covers the socket. Measured: under a profile that
-// grants neither, an absolute-path invocation of that binary exits 127 with no
-// output; adding --read-file alone makes the same invocation run. Keeping these
-// on the launcher's side means an operator narrowing what *commands* may reach
-// cannot accidentally stop execd from starting, and it removes the
-// profile's grants from the set of things that decide whether a session comes
-// up at all.
-//
-// The entrypoint is invoked by its absolute path. It was invoked by base name
-// while the profile carried command_policies, because tool-sandbox treats an
-// absolute-path invocation of a policy-controlled command as a direct exec
-// bypass and refuses it. With no command_policies left, that constraint is gone
-// and only base-name resolution's own hazard would remain: nono resolves the
-// bare name through this launcher's PATH, so a different, stale copy earlier on
-// PATH would silently become execd instead of this one.
-func ExecdArgs(cfg *config.Config, nonoPath, execdPath, sockPath, workdir string) []string {
-	return []string{
-		nonoPath, "run", "--silent",
-		"--profile", cfg.CommandProfilePath(),
-		"--workdir", workdir,
-		"--read-file", execdPath,
-		"--allow-unix-socket-bind", sockPath,
-		"--",
-		execdPath, "serve", "--socket", sockPath,
-	}
-}
-
-// ExecdSocketPath returns a per-process socket path under
-// policysnapshot.StateDir(). It stays short on purpose: unix socket paths are
-// limited to about 104 bytes on macOS.
-//
-// It is exported so `agent-sandbox debug` can print the same
-// `--allow-unix-socket` grant the launcher builds.
-func ExecdSocketPath() (string, error) {
-	dir, err := policysnapshot.StateDir()
-	if err != nil {
-		return "", err
-	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", fmt.Errorf("create state dir: %w", err)
-	}
-	return filepath.Join(dir, fmt.Sprintf("execd-%d", os.Getpid()), "execd.sock"), nil
+	return sock, execdPath, cleanup, nil
 }
 
 // ProfileAllowsWrite asks nono whether profilePath grants write access to

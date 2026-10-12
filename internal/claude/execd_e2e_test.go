@@ -20,12 +20,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
-	"github.com/ynny-github/agent-sandbox/internal/claude"
-	"github.com/ynny-github/agent-sandbox/internal/config"
 	"github.com/ynny-github/agent-sandbox/internal/execd"
 )
 
@@ -56,47 +53,24 @@ func buildExecd(t *testing.T, dir string) string {
 	return out
 }
 
-// startExecdSession starts a real execd inside a real nono run session,
-// built exactly as claude.ExecdArgs describes it, and returns the socket
-// path. Teardown (SIGTERM, Wait, socket removal) is registered via t.Cleanup.
-func startExecdSession(t *testing.T, nonoPath, execdPath string, cfg *config.Config, workdir string) string {
+// startExecdSession runs the real `execd up` against a real nono and returns
+// the socket; `execd down` is registered for cleanup. XDG_STATE_HOME is left
+// alone: nono keeps its own state under it, and refuses to start when a
+// profile grants write access over that state (a temp dir under /tmp would).
+// The session key carries this test's temp workdir, so it collides with no
+// other session.
+func startExecdSession(t *testing.T, execdPath, profile, workdir string) string {
 	t.Helper()
-	// A short, unrelated temp dir for the socket: t.TempDir() embeds the
-	// (potentially long) test name in the path, which can push a unix socket
-	// path past the ~104-byte sun_path limit.
-	dir, err := os.MkdirTemp("", "brke2e")
+	up := exec.Command(execdPath, "up", "--profile", profile, "--workdir", workdir)
+	var errBuf strings.Builder
+	up.Stderr = &errBuf
+	out, err := up.Output()
 	if err != nil {
-		t.Fatalf("MkdirTemp: %v", err)
+		t.Fatalf("execd up: %v\n%s", err, errBuf.String())
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	sock := filepath.Join(dir, "e.sock")
-
-	args := claude.ExecdArgs(cfg, nonoPath, execdPath, sock, workdir)
-	// Captured rather than sent straight to the test binary's own stdout/stderr
-	// so a failure to start reports nono's own diagnostic (e.g. "directory is
-	// not readable inside the sandbox" for a binary outside every grant)
-	// instead of just "socket did not appear".
-	var outBuf, errBuf strings.Builder
-	cmd := exec.Command(nonoPath, args[1:]...)
-	cmd.Stdout, cmd.Stderr = &outBuf, &errBuf
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start execd session: %v", err)
-	}
-	t.Cleanup(func() {
-		cmd.Process.Signal(syscall.SIGTERM)
-		cmd.Wait()
-	})
-
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(sock); err == nil {
-			return sock
-		}
-		time.Sleep(25 * time.Millisecond)
-	}
-	t.Fatalf("execd socket %s did not appear within 15s\nargs: %v\nstdout: %s\nstderr: %s",
-		sock, args, outBuf.String(), errBuf.String())
-	return ""
+	sock := strings.TrimSpace(string(out))
+	t.Cleanup(func() { exec.Command(execdPath, "down", sock).Run() })
+	return sock
 }
 
 // fixtureProfile is the subset of nono's own profile schema this suite needs:
@@ -175,16 +149,15 @@ func writeFixtureProfile(t *testing.T, workdir string, allowDomains []string) st
 // allowDomains, sends command to it, and returns the exit code.
 func runExecded(t *testing.T, allowDomains []string, command string) int {
 	t.Helper()
-	nonoPath, err := exec.LookPath("nono")
-	if err != nil {
+	if _, err := exec.LookPath("nono"); err != nil {
 		t.Skip("nono not on PATH")
 	}
 
 	workdir := t.TempDir()
 	execdPath := buildExecd(t, workdir)
-	cfg := &config.Config{CommandProfile: writeFixtureProfile(t, workdir, allowDomains)}
+	profile := writeFixtureProfile(t, workdir, allowDomains)
 
-	sock := startExecdSession(t, nonoPath, execdPath, cfg, workdir)
+	sock := startExecdSession(t, execdPath, profile, workdir)
 
 	// The client sends its own working directory as the request's Cwd (see
 	// execd.Client.RunCommand's workingDir helper), so this test's cwd must
@@ -245,5 +218,22 @@ func TestExecdCommand_DomainOutsidePresetBlocked(t *testing.T) {
 func TestExecdCommand_AllowDomainsGrantsAccess(t *testing.T) {
 	if code := runExecded(t, []string{"example.org"}, curlCmd("https://example.org/")); code != 0 {
 		t.Errorf("curl to an allow_domains entry exited %d, want 0", code)
+	}
+}
+
+func TestExecdUp_TwiceReturnsTheSamePath(t *testing.T) {
+	if _, err := exec.LookPath("nono"); err != nil {
+		t.Skip("nono not on PATH")
+	}
+	workdir := t.TempDir()
+	execdPath := buildExecd(t, workdir)
+	profile := writeFixtureProfile(t, workdir, nil)
+	first := startExecdSession(t, execdPath, profile, workdir)
+	out, err := exec.Command(execdPath, "up", "--profile", profile, "--workdir", workdir).Output()
+	if err != nil {
+		t.Fatalf("second execd up: %v", err)
+	}
+	if got := strings.TrimSpace(string(out)); got != first {
+		t.Errorf("second execd up = %s, want %s", got, first)
 	}
 }

@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/ynny-github/agent-sandbox/internal/agentconfig"
 	"github.com/ynny-github/agent-sandbox/internal/config"
@@ -66,47 +65,16 @@ func makeFakeNono(t *testing.T) string {
 	if err := os.WriteFile(path, []byte("#!/bin/sh\nif [ \"$1\" = why ]; then echo '{\"status\":\"denied\"}'; exit 0; fi\nexit 0\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "execd"), []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+	execdScript := "#!/bin/sh\nd=${0%/*}\n" +
+		"case \"$1\" in\n" +
+		"up) echo \"$d/fake.sock\" ;;\n" +
+		"down) echo \"$2\" > \"$d/down-arg\" ;;\n" +
+		"esac\n"
+	if err := os.WriteFile(filepath.Join(dir, "execd"), []byte(execdScript), 0755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir)
 	return path
-}
-
-// makeFakeNonoWedged writes a "nono" that creates the socket named after
-// "--allow-unix-socket-bind" (standing in for an execd session that started
-// fine), then ignores SIGTERM and sleeps, standing in for an execd that never
-// exits on its own. It is what TestStartExecd_CleanupKillsAWedgedExecd
-// uses to prove teardown escalates to SIGKILL rather than waiting forever.
-func makeFakeNonoWedged(t *testing.T) {
-	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "nono")
-	// touch and sleep are external binaries and this script's own PATH is
-	// deliberately just this fake nono's directory (so it, not any real nono,
-	// is what gets resolved), so both the socket creation and the "never
-	// exits" wait use only sh builtins: redirection and a busy loop.
-	script := `#!/bin/sh
-if [ "$1" = why ]; then echo '{"status":"denied"}'; exit 0; fi
-sock=""
-prev=""
-for arg in "$@"; do
-  if [ "$prev" = "--allow-unix-socket-bind" ]; then
-    sock="$arg"
-  fi
-  prev="$arg"
-done
-: > "$sock"
-trap '' TERM
-while :; do :; done
-`
-	if err := os.WriteFile(path, []byte(script), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "execd"), []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", dir)
 }
 
 func argsContain(args []string, target string) bool {
@@ -525,252 +493,6 @@ func TestStartExecd_NonoNotInPath(t *testing.T) {
 	}
 	if cleanup != nil {
 		t.Error("cleanup should be nil on error")
-	}
-}
-
-// TestStartExecd_ReportsChildExitBeforeBinding is the integration-level
-// version of TestWaitForSocketOrExit_ChildExitsFirst: with a fake "nono" that
-// exits 0 without ever binding a socket (standing in for nono rejecting the
-// command profile), startExecd must fail fast with a specific error
-// rather than blocking for the full execdStartTimeout and reporting a bare
-// "did not start" message.
-func TestStartExecd_ReportsChildExitBeforeBinding(t *testing.T) {
-	makeFakeNono(t)
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-
-	start := time.Now()
-	sock, _, cleanup, err := startExecd(&config.Config{})
-	if elapsed := time.Since(start); elapsed > 2*time.Second {
-		t.Errorf("startExecd() took %s, want it to fail fast once the child exits", elapsed)
-	}
-	if err == nil {
-		t.Fatal("startExecd() error = nil, want an error when the child exits before binding")
-	}
-	if !strings.Contains(err.Error(), "exited") {
-		t.Errorf("err = %v, want it to mention the child exiting", err)
-	}
-	if sock != "" {
-		t.Errorf("socket = %q, want empty on error", sock)
-	}
-	if cleanup != nil {
-		t.Error("cleanup should be nil on error")
-	}
-}
-
-// TestStartExecd_CleanupKillsAWedgedExecd is the regression test for
-// Important Finding 2: teardown must not trust a signaled execd to exit and
-// wait on it forever. With a fake "nono" that ignores SIGTERM entirely,
-// cleanup must still return — bounded by execdStopTimeout, shrunk here so the
-// test does not spend real seconds proving it — rather than hang
-// agent-sandbox claude after the agent has already exited.
-func TestStartExecd_CleanupKillsAWedgedExecd(t *testing.T) {
-	old := execdStopTimeout
-	execdStopTimeout = 200 * time.Millisecond
-	t.Cleanup(func() { execdStopTimeout = old })
-
-	makeFakeNonoWedged(t)
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-
-	sock, _, cleanup, err := startExecd(&config.Config{})
-	if err != nil {
-		t.Fatalf("startExecd() error = %v", err)
-	}
-	if cleanup == nil {
-		t.Fatal("cleanup = nil, want a cleanup function")
-	}
-	if _, statErr := os.Stat(sock); statErr != nil {
-		t.Fatalf("socket %s missing before cleanup: %v", sock, statErr)
-	}
-
-	start := time.Now()
-	cleanup()
-	if elapsed := time.Since(start); elapsed > 3*time.Second {
-		t.Errorf("cleanup() took %s, want it bounded by execdStopTimeout instead of hanging", elapsed)
-	}
-	if _, statErr := os.Stat(sock); !os.IsNotExist(statErr) {
-		t.Errorf("socket %s still exists after cleanup (stat err = %v), want it removed", sock, statErr)
-	}
-}
-
-func TestExecdArgsRunsExecdUnderTheCommandProfile(t *testing.T) {
-	dir := t.TempDir()
-	profile := filepath.Join(dir, "command-profile.json")
-	if err := os.WriteFile(profile, []byte("{}"), 0o600); err != nil {
-		t.Fatalf("write profile: %v", err)
-	}
-	cfg := loadConfigWithCommandProfile(t, dir, profile)
-
-	args := ExecdArgs(cfg, "/usr/bin/nono", "/opt/bin/execd",
-		"/run/b.sock", "/work/project")
-
-	joined := strings.Join(args, " ")
-	for _, want := range []string{
-		"run", "--silent",
-		"--profile " + profile,
-		"--workdir /work/project",
-		"--allow-unix-socket-bind /run/b.sock",
-		"--read-file /opt/bin/execd",
-		"-- /opt/bin/execd serve --socket /run/b.sock",
-	} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("ExecdArgs() = %q\nmissing %q", joined, want)
-		}
-	}
-	if strings.Contains(joined, "--allow-cwd") {
-		t.Errorf("ExecdArgs() grants --allow-cwd; the working directory comes from the profile's $WORKDIR")
-	}
-}
-
-// TestExecdArgsGrantsItsOwnBinaryAndInvokesItAbsolutely pins the two halves
-// of one ruling: execd's ability to start is the launcher's to guarantee,
-// not the operator profile's to remember.
-//
-// --read-file covers the binary (a read grant carries the execute right).
-// Measured: under a profile granting neither, an absolute-path invocation of
-// the binary exits 127 with no output; --read-file alone makes it run.
-//
-// The entrypoint is then invoked by that same absolute path. It was invoked by
-// base name only because tool-sandbox refuses an absolute-path invocation of a
-// policy-controlled command as a direct exec bypass; with command_policies gone
-// that constraint is gone, and base-name resolution would leave its own hazard —
-// a stale copy earlier on the launcher's PATH silently becoming execd.
-func TestExecdArgsGrantsItsOwnBinaryAndInvokesItAbsolutely(t *testing.T) {
-	dir := t.TempDir()
-	profile := filepath.Join(dir, "command-profile.json")
-	if err := os.WriteFile(profile, []byte("{}"), 0o600); err != nil {
-		t.Fatalf("write profile: %v", err)
-	}
-	cfg := loadConfigWithCommandProfile(t, dir, profile)
-	const execdPath = "/opt/bin/execd"
-
-	args := ExecdArgs(cfg, "/usr/bin/nono", execdPath, "/run/b.sock", "/work/project")
-
-	readFile := -1
-	dashIdx := -1
-	for i, a := range args {
-		switch a {
-		case "--read-file":
-			readFile = i
-		case "--":
-			if dashIdx < 0 {
-				dashIdx = i
-			}
-		}
-	}
-	if readFile < 0 || readFile+1 >= len(args) || args[readFile+1] != execdPath {
-		t.Errorf("ExecdArgs() = %v, want --read-file %s so the profile need not grant execd's own binary", args, execdPath)
-	}
-	if readFile > dashIdx {
-		t.Errorf("ExecdArgs() puts --read-file after --, where nono would pass it to execd instead of reading it")
-	}
-	if dashIdx < 0 || dashIdx+1 >= len(args) {
-		t.Fatalf("ExecdArgs() = %v, no entrypoint after --", args)
-	}
-	if got := args[dashIdx+1]; got != execdPath {
-		t.Errorf("entrypoint = %q, want execd's absolute path %q", got, execdPath)
-	}
-	if got := args[dashIdx+2:]; strings.Join(got, " ") != "serve --socket /run/b.sock" {
-		t.Errorf("after the entrypoint = %v, want serve --socket /run/b.sock", got)
-	}
-}
-
-// TestExecdArgsUsesTheResolvedNonoPath guards against ExecdArgs silently
-// discarding nonoPath: `agent-sandbox debug` exists specifically to print the
-// invocation the launcher really builds, and a hardcoded "nono" in argv[0]
-// would defeat that the moment the resolved binary isn't the first "nono" on
-// PATH.
-func TestExecdArgsUsesTheResolvedNonoPath(t *testing.T) {
-	dir := t.TempDir()
-	profile := filepath.Join(dir, "command-profile.json")
-	if err := os.WriteFile(profile, []byte("{}"), 0o600); err != nil {
-		t.Fatalf("write profile: %v", err)
-	}
-	cfg := loadConfigWithCommandProfile(t, dir, profile)
-
-	args := ExecdArgs(cfg, "/opt/nono/bin/nono", "/opt/bin/execd",
-		"/run/b.sock", "/work/project")
-
-	if len(args) == 0 || args[0] != "/opt/nono/bin/nono" {
-		t.Errorf("args[0] = %v, want the resolved nono path %q", args, "/opt/nono/bin/nono")
-	}
-}
-
-func TestWaitForSocketOrExit_SocketAppears(t *testing.T) {
-	dir := t.TempDir()
-	sock := filepath.Join(dir, "s.sock")
-	exited := make(chan error, 1) // never sent to: the child stays "running"
-	go func() {
-		time.Sleep(20 * time.Millisecond)
-		if err := os.WriteFile(sock, nil, 0o600); err != nil {
-			t.Error(err)
-		}
-	}()
-
-	childExited, err := waitForSocketOrExit(sock, 2*time.Second, exited)
-	if err != nil {
-		t.Fatalf("waitForSocketOrExit() error = %v, want nil", err)
-	}
-	if childExited {
-		t.Error("childExited = true, want false: the child never exited on this path")
-	}
-}
-
-// TestWaitForSocketOrExit_ChildExitsFirst is the case Important Finding 1
-// exists to fix: an execd nono rejects (a bad profile, say) exits almost
-// immediately, and that must surface as a fast, specific error instead of the
-// launcher blocking for the full startup timeout and then reporting a
-// generic "did not start" message.
-func TestWaitForSocketOrExit_ChildExitsFirst(t *testing.T) {
-	dir := t.TempDir()
-	sock := filepath.Join(dir, "s.sock") // never created
-	exited := make(chan error, 1)
-	exited <- errors.New("exit status 2")
-
-	start := time.Now()
-	childExited, err := waitForSocketOrExit(sock, 2*time.Second, exited)
-	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
-		t.Errorf("waitForSocketOrExit() took %s, want it to return promptly on child exit", elapsed)
-	}
-	if !childExited {
-		t.Error("childExited = false, want true")
-	}
-	if err == nil || !strings.Contains(err.Error(), "exited before binding its socket") {
-		t.Errorf("err = %v, want it to say the child exited before binding", err)
-	}
-	if err == nil || !strings.Contains(err.Error(), "exit status 2") {
-		t.Errorf("err = %v, want it to wrap the underlying exit error", err)
-	}
-}
-
-// TestWaitForSocketOrExit_ChildExitsCleanly guards the nil-error edge case: a
-// nil error from cmd.Wait means the process exited with status 0, which %w
-// would otherwise render as a broken "%!w(<nil>)" message.
-func TestWaitForSocketOrExit_ChildExitsCleanly(t *testing.T) {
-	dir := t.TempDir()
-	sock := filepath.Join(dir, "s.sock")
-	exited := make(chan error, 1)
-	exited <- nil
-
-	childExited, err := waitForSocketOrExit(sock, 2*time.Second, exited)
-	if !childExited {
-		t.Error("childExited = false, want true")
-	}
-	if err == nil || !strings.Contains(err.Error(), "status 0") {
-		t.Errorf("err = %v, want it to mention exit status 0", err)
-	}
-}
-
-func TestWaitForSocketOrExit_Timeout(t *testing.T) {
-	dir := t.TempDir()
-	sock := filepath.Join(dir, "s.sock")
-	exited := make(chan error, 1) // never sent to
-
-	childExited, err := waitForSocketOrExit(sock, 50*time.Millisecond, exited)
-	if childExited {
-		t.Error("childExited = true, want false: nothing was ever sent on exited")
-	}
-	if err == nil || !strings.Contains(err.Error(), "did not start within") {
-		t.Errorf("err = %v, want the timeout message", err)
 	}
 }
 
@@ -1400,48 +1122,57 @@ func TestStartExecd_RefusesAnExecdTheCommandProfileCanWrite(t *testing.T) {
 	}
 }
 
-// The socket's nonexistent-path bind grant makes nono allow the socket's whole
-// parent directory to execd's session. That directory must therefore hold
-// nothing but this launch's socket: measured on nono 0.78.0, with the socket
-// directly in the state dir, a command run through execd could rewrite the
-// agent's shell wrapper — even one created after the session started — and so
-// run code at the agent profile's reach on the agent's next Bash call.
-func TestExecdSocketPath_HasADirectoryOfItsOwn(t *testing.T) {
+// The session socket's bind grant reaches its parent directory, so that
+// directory must not be the one holding the agent's shell wrapper.
+func TestExecdSessionSocket_IsNotBesideTheShellWrapper(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	sock, err := ExecdSocketPath()
+	sock, err := execd.SessionSocket("/p/command-profile.json", "/w")
 	if err != nil {
-		t.Fatalf("ExecdSocketPath() error = %v", err)
+		t.Fatal(err)
 	}
 	wrapper, err := ShellWrapperPath()
 	if err != nil {
-		t.Fatalf("ShellWrapperPath() error = %v", err)
+		t.Fatal(err)
 	}
-	if filepath.Dir(sock) == filepath.Dir(wrapper) {
-		t.Errorf("socket %s shares a directory with the shell wrapper %s; the bind grant would make the wrapper writable to execd's session", sock, wrapper)
+	if filepath.Dir(sock) == filepath.Dir(wrapper) || filepath.Dir(filepath.Dir(sock)) == filepath.Dir(wrapper) {
+		t.Errorf("socket %s sits in or beside the shell wrapper's directory %s", sock, filepath.Dir(wrapper))
 	}
 }
 
-func TestStartExecd_CreatesAndRemovesTheSocketDirectory(t *testing.T) {
-	old := execdStopTimeout
-	execdStopTimeout = 200 * time.Millisecond
-	t.Cleanup(func() { execdStopTimeout = old })
-	makeFakeNonoWedged(t)
+func TestStartExecd_RunsUpAndDown(t *testing.T) {
+	nono := makeFakeNono(t)
+	dir := filepath.Dir(nono)
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 
-	sock, _, cleanup, err := startExecd(&config.Config{})
+	sock, execdPath, cleanup, err := startExecd(&config.Config{})
 	if err != nil {
 		t.Fatalf("startExecd() error = %v", err)
 	}
-	dir := filepath.Dir(sock)
-	info, statErr := os.Stat(dir)
-	if statErr != nil {
-		t.Fatalf("socket directory %s missing: %v", dir, statErr)
+	if want := filepath.Join(dir, "fake.sock"); sock != want {
+		t.Errorf("socket = %q, want what execd up printed, %q", sock, want)
 	}
-	if perm := info.Mode().Perm(); perm != 0o700 {
-		t.Errorf("socket directory mode = %o, want 700", perm)
+	if execdPath != filepath.Join(dir, "execd") {
+		t.Errorf("execd path = %q", execdPath)
 	}
 	cleanup()
-	if _, statErr := os.Stat(dir); !os.IsNotExist(statErr) {
-		t.Errorf("socket directory %s still exists after cleanup (stat err = %v)", dir, statErr)
+	got, err := os.ReadFile(filepath.Join(dir, "down-arg"))
+	if err != nil || strings.TrimSpace(string(got)) != sock {
+		t.Errorf("execd down got %q (err %v), want %q", got, err, sock)
+	}
+}
+
+func TestStartExecd_UpFailureFailsTheLaunch(t *testing.T) {
+	nono := makeFakeNono(t)
+	failing := "#!/bin/sh\necho 'profile rejected' >&2\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(filepath.Dir(nono), "execd"), []byte(failing), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	_, _, cleanup, err := startExecd(&config.Config{})
+	if err == nil || !strings.Contains(err.Error(), "execd up") {
+		t.Fatalf("startExecd() error = %v, want an execd up failure", err)
+	}
+	if cleanup != nil {
+		t.Error("cleanup should be nil on error")
 	}
 }

@@ -62,3 +62,36 @@ func TestSessionDeclaresDumbTerm(t *testing.T) {
 		t.Errorf("TERM = %q, want dumb", got)
 	}
 }
+func TestUp_RequiresProfile(t *testing.T) {
+	if code := run([]string{"up"}); code != 2 {
+		t.Errorf("run(up) = %d, want 2 without --profile", code)
+	}
+}
+
+func TestDown_RequiresExactlyOneSocket(t *testing.T) {
+	for _, args := range [][]string{{"down"}, {"down", "a", "b"}} {
+		if code := run(args); code != 2 {
+			t.Errorf("run(%v) = %d, want 2", args, code)
+		}
+	}
+}
+
+func TestDown_RefusalExits1(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	if code := run([]string{"down", "/tmp/not-a-session/execd.sock"}); code != 1 {
+		t.Errorf("run(down outside root) = %d, want 1", code)
+	}
+}
+
+func TestGC_BadIdleIsUsage(t *testing.T) {
+	if code := run([]string{"gc", "--idle", "soon"}); code != 2 {
+		t.Errorf("run(gc --idle soon) = %d, want 2", code)
+	}
+}
+
+func TestGC_EmptyRootSucceeds(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	if code := run([]string{"gc", "--dry-run"}); code != 0 {
+		t.Errorf("run(gc --dry-run) on an empty root = %d, want 0", code)
+	}
+}

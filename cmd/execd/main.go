@@ -1,6 +1,9 @@
 // Command execd serves shell command lines inside a sandbox session and sends
 // them to it.
 //
+//	execd up --profile <p> [--workdir d] start or reuse this shell's session; print its socket
+//	execd down <socket>                  stop that session and remove its directory
+//	execd gc [--idle d] [--dry-run]      clean up dead, orphaned and idle sessions
 //	execd serve --socket <path>          serve until SIGTERM/SIGINT
 //	execd exec [--timeout d] -- <cmd>    send one command line, exit with its status
 //
@@ -17,11 +20,15 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/ynny-github/agent-sandbox/internal/execd"
 )
 
 const usage = `usage:
+  execd up --profile <path> [--workdir <dir>]
+  execd down <socket>
+  execd gc [--idle <duration>] [--dry-run]
   execd serve --socket <path>
   execd exec [--timeout d] -- <command>`
 
@@ -37,6 +44,12 @@ func run(args []string) int {
 		return serve(args[1:])
 	case "exec":
 		return execCommand(args[1:])
+	case "up":
+		return up(args[1:])
+	case "down":
+		return down(args[1:])
+	case "gc":
+		return gc(args[1:])
 	}
 	fmt.Fprintln(os.Stderr, usage)
 	return 2
@@ -121,4 +134,50 @@ func execCommand(args []string) int {
 	}
 	return execd.RunCLI(context.Background(), command, *timeout,
 		execd.Stdio{In: os.Stdin, Out: os.Stdout, Err: os.Stderr})
+}
+
+func up(args []string) int {
+	fs := flag.NewFlagSet("up", flag.ContinueOnError)
+	profile := fs.String("profile", "", "nono profile the session runs under (required)")
+	workdir := fs.String("workdir", "", "directory $WORKDIR expands to (default: current directory)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *profile == "" || fs.NArg() != 0 {
+		fmt.Fprintln(os.Stderr, "execd up: --profile is required and takes no arguments")
+		return 2
+	}
+	sock, err := execd.Up(*profile, *workdir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "execd up: %v\n", err)
+		return 1
+	}
+	fmt.Println(sock)
+	return 0
+}
+
+func down(args []string) int {
+	if len(args) != 1 {
+		fmt.Fprintln(os.Stderr, "execd down: takes exactly one socket path")
+		return 2
+	}
+	if err := execd.Down(args[0]); err != nil {
+		fmt.Fprintf(os.Stderr, "execd down: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func gc(args []string) int {
+	fs := flag.NewFlagSet("gc", flag.ContinueOnError)
+	idle := fs.Duration("idle", 168*time.Hour, "down sessions unused for longer than this")
+	dryRun := fs.Bool("dry-run", false, "only report what would be cleaned up")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if err := execd.GC(*idle, *dryRun, os.Stdout); err != nil {
+		fmt.Fprintf(os.Stderr, "execd gc: %v\n", err)
+		return 1
+	}
+	return 0
 }

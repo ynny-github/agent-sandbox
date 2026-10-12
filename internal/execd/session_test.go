@@ -10,6 +10,7 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // TestMain lets the test binary stand in for execd under a fake nono: Up
@@ -274,5 +275,94 @@ func TestUp_ChildExitingEarlyFailsWithTheLog(t *testing.T) {
 	sock, _ := SessionSocket(profile, workdir)
 	if _, statErr := os.Stat(filepath.Dir(sock)); !os.IsNotExist(statErr) {
 		t.Errorf("session dir left behind after a failed Up (stat err %v)", statErr)
+	}
+}
+func TestDown_StopsAndRemovesTheSession(t *testing.T) {
+	stateHome(t)
+	fakeNono(t, passthroughNono)
+	sock := upForTest(t, writeProfile(t, "{}"))
+	pid, _ := readInt(filepath.Join(filepath.Dir(sock), "pid"))
+
+	if err := Down(sock); err != nil {
+		t.Fatalf("Down() error = %v", err)
+	}
+	if processExists(pid) {
+		t.Errorf("session process %d still running after Down", pid)
+	}
+	if _, err := os.Stat(filepath.Dir(sock)); !os.IsNotExist(err) {
+		t.Errorf("session dir still exists after Down (stat err %v)", err)
+	}
+}
+
+func TestDown_KillsAServerThatIgnoresSIGTERM(t *testing.T) {
+	stateHome(t)
+	fakeNono(t, passthroughNono)
+	t.Setenv("EXECD_TEST_WEDGED", "1")
+	prev := StopTimeout
+	StopTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { StopTimeout = prev })
+	sock := upForTest(t, writeProfile(t, "{}"))
+	pid, _ := readInt(filepath.Join(filepath.Dir(sock), "pid"))
+
+	start := time.Now()
+	if err := Down(sock); err != nil {
+		t.Fatalf("Down() error = %v", err)
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Errorf("Down() took %v, want it bounded by StopTimeout", d)
+	}
+	if processExists(pid) {
+		t.Errorf("wedged session %d survived Down", pid)
+	}
+}
+
+// A dead session's pid may belong to an unrelated process by now. The test
+// process's own pid stands in for that process: signalling it would end the
+// test run.
+func TestDown_DeadSessionIsRemovedWithoutSignalling(t *testing.T) {
+	stateHome(t)
+	sock, err := SessionSocket(writeProfile(t, "{}"), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Dir(sock)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "pid"), []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Down(sock); err != nil {
+		t.Fatalf("Down() error = %v", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("dead session dir still exists (stat err %v)", err)
+	}
+}
+
+func TestDown_MissingSessionSucceeds(t *testing.T) {
+	stateHome(t)
+	sock, _ := SessionSocket(writeProfile(t, "{}"), t.TempDir())
+	if err := Down(sock); err != nil {
+		t.Errorf("Down() on a missing session error = %v, want nil", err)
+	}
+}
+
+func TestDown_RefusesAPathOutsideTheRoot(t *testing.T) {
+	stateHome(t)
+	root, _ := Root()
+	victim := t.TempDir()
+	for _, sock := range []string{
+		filepath.Join(victim, sockName),
+		filepath.Join(root, "..", filepath.Base(victim), sockName),
+		filepath.Join(root, "abc", "other.sock"),
+		filepath.Join(root, "a", "b", sockName),
+	} {
+		if err := Down(sock); err == nil {
+			t.Errorf("Down(%s) = nil, want a refusal", sock)
+		}
+	}
+	if _, err := os.Stat(victim); err != nil {
+		t.Errorf("a refused Down removed %s: %v", victim, err)
 	}
 }

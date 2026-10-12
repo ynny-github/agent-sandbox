@@ -326,3 +326,65 @@ func waitForSocketOrExit(path string, timeout time.Duration, exited <-chan error
 	}
 	return false, fmt.Errorf("exec daemon did not start within %s", timeout)
 }
+
+// StopTimeout bounds how long Down waits after SIGTERM before SIGKILL.
+// Signal forwarding into a nono session is not execd's to verify, so it cannot
+// trust it and wait forever. A var so tests can shrink it.
+var StopTimeout = 5 * time.Second
+
+// Down stops the session whose socket is sock and removes its directory. It
+// refuses anything but <root>/<key>/execd.sock, because it removes a tree.
+// A session already gone is success.
+func Down(sock string) error {
+	sock, err := filepath.Abs(sock)
+	if err != nil {
+		return err
+	}
+	root, err := Root()
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(sock)
+	if filepath.Base(sock) != sockName || filepath.Dir(dir) != root {
+		return fmt.Errorf("%s is not an execd session socket under %s", sock, root)
+	}
+	unlock, err := lockKey(dir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if _, statErr := os.Stat(dir); errors.Is(statErr, os.ErrNotExist) {
+		return nil
+	}
+	// Only a session whose socket still answers is signalled: a dead
+	// session's pid may have been reused by an unrelated process. A wedged
+	// server still accepts connections at the kernel level.
+	if alive(dir) {
+		if pid, err := readInt(filepath.Join(dir, "pid")); err == nil {
+			stop(pid)
+		}
+	}
+	return os.RemoveAll(dir)
+}
+
+func stop(pid int) {
+	syscall.Kill(pid, syscall.SIGTERM)
+	if waitGone(pid, StopTimeout) {
+		return
+	}
+	syscall.Kill(pid, syscall.SIGKILL)
+	waitGone(pid, time.Second)
+}
+
+// waitGone polls rather than waits: the session is not this process's child
+// once `execd up` has exited.
+func waitGone(pid int, d time.Duration) bool {
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if !processExists(pid) {
+			return true
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	return !processExists(pid)
+}

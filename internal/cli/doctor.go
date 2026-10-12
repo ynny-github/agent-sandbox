@@ -414,9 +414,13 @@ func writeToolSandboxProbeProfile(dir, probeBin string) (string, error) {
 	return path, nil
 }
 
-// selfPath is os.Executable, indirected so tests can place the execd binary
-// anywhere without moving a real file.
+// selfPath is os.Executable, indirected so tests can place agent-sandbox's
+// own binary anywhere without moving a real file.
 var selfPath = os.Executable
+
+// execdPath is claude.ResolveExecd, indirected so tests can place the execd
+// binary anywhere without installing one.
+var execdPath = claude.ResolveExecd
 
 // checkProfiles validates both nono profiles and measures the one thing nono
 // cannot report. agent-sandbox generates neither file, so every check here is
@@ -487,27 +491,39 @@ func checkProfiles(ctx context.Context, cfg *config.Config) checkResult {
 
 	self, err := selfPath()
 	if err != nil {
-		// Fail loudly rather than silently reporting OK: not knowing
-		// execd's own binary path means the writability check below never
-		// ran, and that must not look like it passed.
-		r.details = append(r.details, fmt.Sprintf("error: could not determine execd binary's own path: %v", err))
-		r.hint = "could not verify execd's binary is not writable through the command profile; " +
+		// Fail loudly rather than silently reporting OK: not knowing the
+		// binary's path means the writability check below never ran, and
+		// that must not look like it passed.
+		r.details = append(r.details, fmt.Sprintf("error: could not determine agent-sandbox's own path: %v", err))
+		r.hint = "could not verify agent-sandbox's binary is not writable through the command profile; " +
 			"investigate why os.Executable() failed and re-run doctor"
 		return r
 	}
-	writable, werr := profileAllowsWrite(ctx, cmdPath, self)
-	if werr != nil {
-		r.details = append(r.details, fmt.Sprintf("error: could not ask nono whether %s is writable: %v", self, werr))
-		r.hint = "could not verify execd's binary is not writable through the command profile; " +
-			"fix the error above and re-run doctor"
+	execdBin, err := execdPath()
+	if err != nil {
+		r.details = append(r.details, "execd binary: "+err.Error())
+		r.hint = "install execd: go install github.com/ynny-github/agent-sandbox/cmd/execd@latest"
 		return r
 	}
-	if writable {
-		r.details = append(r.details, "execd binary: "+self)
-		r.hint = "the command profile grants write access to execd's own binary, so a command could " +
-			"replace what the next launch runs; narrow the grant that covers it (`nono why --profile " +
-			cmdPath + " --path " + self + " --op write` names it)"
-		return r
+	r.details = append(r.details, "execd binary: "+execdBin)
+
+	// Two files the command profile must not be able to write: a writable
+	// execd replaces what the next session serves with, a writable
+	// agent-sandbox replaces the launcher and the hook.
+	for _, bin := range []string{execdBin, self} {
+		writable, werr := profileAllowsWrite(ctx, cmdPath, bin)
+		if werr != nil {
+			r.details = append(r.details, fmt.Sprintf("error: could not ask nono whether %s is writable: %v", bin, werr))
+			r.hint = "could not verify " + bin + " is not writable through the command profile; " +
+				"fix the error above and re-run doctor"
+			return r
+		}
+		if writable {
+			r.hint = "the command profile grants write access to " + bin + ", so a command could " +
+				"replace what the next launch runs; narrow the grant that covers it (`nono why --profile " +
+				cmdPath + " --path " + bin + " --op write` names it)"
+			return r
+		}
 	}
 
 	r.ok = true

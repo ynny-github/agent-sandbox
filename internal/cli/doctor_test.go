@@ -411,10 +411,25 @@ func configWithProfile(t *testing.T, dir, profile string) *config.Config {
 	return cfg
 }
 
+// stubSelfPath pins agent-sandbox's own path, and execd's beside it: both
+// binaries are checked, and a test environment has neither on PATH.
 func stubSelfPath(path string) func() {
-	prev := selfPath
+	prevSelf, prevExecd := selfPath, execdPath
 	selfPath = func() (string, error) { return path, nil }
-	return func() { selfPath = prev }
+	execdPath = func() (string, error) { return filepath.Join(filepath.Dir(path), "execd"), nil }
+	return func() { selfPath, execdPath = prevSelf, prevExecd }
+}
+
+// nonoWritable answers like nonoAnswers(nil, "denied") except that `nono why`
+// reports "allowed" for exactly the path writable.
+func nonoWritable(writable string) func(context.Context, string, ...string) ([]byte, error) {
+	base := nonoAnswers(nil, "denied")
+	return func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if len(args) > 0 && args[0] == "why" && slices.Contains(args, writable) {
+			return []byte(`{"status":"allowed"}`), nil
+		}
+		return base(ctx, name, args...)
+	}
 }
 
 // The agent profile must be validated too: it is now hand-written, so nono
@@ -609,7 +624,7 @@ func TestCheckProfiles_FailsWhenSelfPathErrors(t *testing.T) {
 	if got.hint == "" {
 		t.Errorf("a failing check must carry a hint")
 	}
-	if !strings.Contains(strings.Join(got.details, "\n"), "could not determine execd binary's own path") {
+	if !strings.Contains(strings.Join(got.details, "\n"), "could not determine agent-sandbox's own path") {
 		t.Errorf("expected details to name what could not be determined, got %v", got.details)
 	}
 }
@@ -1187,5 +1202,66 @@ func TestCheckProfiles_SkipsContextModeInsideASession(t *testing.T) {
 	got := checkProfiles(context.Background(), cfg)
 	if !strings.Contains(strings.Join(got.details, "\n"), "context-mode: skipped") {
 		t.Errorf("details must say the context-mode facts were skipped: %v", got.details)
+	}
+}
+
+// checkProfilesWith runs checkProfiles against a fresh pair of profiles with
+// agent-sandbox at dir/agent-sandbox (and execd beside it), answering nono
+// with the fake runFor builds for that dir.
+func checkProfilesWith(t *testing.T, runFor func(dir string) func(context.Context, string, ...string) ([]byte, error)) (checkResult, string) {
+	t.Helper()
+	dir := t.TempDir()
+	cfg := configWithBothProfiles(t, dir)
+	t.Cleanup(stubRunCommand(runFor(dir)))
+	t.Cleanup(stubRunCommandEnv(func(context.Context, []string, string, ...string) ([]byte, error) {
+		return []byte(envProbeValue), nil
+	}))
+	t.Cleanup(stubSelfPath(filepath.Join(dir, "agent-sandbox")))
+	return checkProfiles(context.Background(), cfg), dir
+}
+
+func TestCheckProfiles_FailsWhenExecdIsWritable(t *testing.T) {
+	got, dir := checkProfilesWith(t, func(dir string) func(context.Context, string, ...string) ([]byte, error) {
+		return nonoWritable(filepath.Join(dir, "execd"))
+	})
+	if got.ok {
+		t.Fatal("checkProfiles ok = true, want false when the command profile can write execd")
+	}
+	if !strings.Contains(got.hint, filepath.Join(dir, "execd")) {
+		t.Errorf("hint = %q, want it to name execd's path", got.hint)
+	}
+}
+
+func TestCheckProfiles_FailsWhenAgentSandboxIsWritable(t *testing.T) {
+	got, dir := checkProfilesWith(t, func(dir string) func(context.Context, string, ...string) ([]byte, error) {
+		return nonoWritable(filepath.Join(dir, "agent-sandbox"))
+	})
+	if got.ok {
+		t.Fatal("checkProfiles ok = true, want false when the command profile can write agent-sandbox")
+	}
+	if !strings.Contains(got.hint, filepath.Join(dir, "agent-sandbox")) {
+		t.Errorf("hint = %q, want it to name agent-sandbox's path", got.hint)
+	}
+}
+
+func TestCheckProfiles_FailsWhenExecdIsNotOnPath(t *testing.T) {
+	dir := t.TempDir()
+	cfg := configWithBothProfiles(t, dir)
+	t.Cleanup(stubRunCommand(nonoAnswers(nil, "denied")))
+	t.Cleanup(stubRunCommandEnv(func(context.Context, []string, string, ...string) ([]byte, error) {
+		return []byte(envProbeValue), nil
+	}))
+	t.Cleanup(stubSelfPath(filepath.Join(dir, "agent-sandbox")))
+	execdPath = func() (string, error) {
+		return "", errors.New("execd not found in PATH; install it with " +
+			"`go install github.com/ynny-github/agent-sandbox/cmd/execd@latest`")
+	}
+
+	got := checkProfiles(context.Background(), cfg)
+	if got.ok {
+		t.Fatal("checkProfiles ok = true, want false when execd is not on PATH")
+	}
+	if !strings.Contains(got.hint, "cmd/execd@latest") {
+		t.Errorf("hint = %q, want the install command", got.hint)
 	}
 }

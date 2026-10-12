@@ -1399,3 +1399,49 @@ func TestStartExecd_RefusesAnExecdTheCommandProfileCanWrite(t *testing.T) {
 		t.Error("cleanup should be nil on error")
 	}
 }
+
+// The socket's nonexistent-path bind grant makes nono allow the socket's whole
+// parent directory to execd's session. That directory must therefore hold
+// nothing but this launch's socket: measured on nono 0.78.0, with the socket
+// directly in the state dir, a command run through execd could rewrite the
+// agent's shell wrapper — even one created after the session started — and so
+// run code at the agent profile's reach on the agent's next Bash call.
+func TestExecdSocketPath_HasADirectoryOfItsOwn(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	sock, err := ExecdSocketPath()
+	if err != nil {
+		t.Fatalf("ExecdSocketPath() error = %v", err)
+	}
+	wrapper, err := ShellWrapperPath()
+	if err != nil {
+		t.Fatalf("ShellWrapperPath() error = %v", err)
+	}
+	if filepath.Dir(sock) == filepath.Dir(wrapper) {
+		t.Errorf("socket %s shares a directory with the shell wrapper %s; the bind grant would make the wrapper writable to execd's session", sock, wrapper)
+	}
+}
+
+func TestStartExecd_CreatesAndRemovesTheSocketDirectory(t *testing.T) {
+	old := execdStopTimeout
+	execdStopTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { execdStopTimeout = old })
+	makeFakeNonoWedged(t)
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	sock, _, cleanup, err := startExecd(&config.Config{})
+	if err != nil {
+		t.Fatalf("startExecd() error = %v", err)
+	}
+	dir := filepath.Dir(sock)
+	info, statErr := os.Stat(dir)
+	if statErr != nil {
+		t.Fatalf("socket directory %s missing: %v", dir, statErr)
+	}
+	if perm := info.Mode().Perm(); perm != 0o700 {
+		t.Errorf("socket directory mode = %o, want 700", perm)
+	}
+	cleanup()
+	if _, statErr := os.Stat(dir); !os.IsNotExist(statErr) {
+		t.Errorf("socket directory %s still exists after cleanup (stat err = %v)", dir, statErr)
+	}
+}

@@ -55,6 +55,9 @@ subcommands do not justify the dependency in a binary meant to be small.
 | `execd serve --socket <path>` | Serve commands on the socket until SIGTERM/SIGINT; sets `TERM=dumb`; removes the socket on exit | `agent-sandbox execd` |
 | `execd exec [--timeout d] -- <cmd>` | Send one command to the socket named by `AGENT_SANDBOX_EXECD_SOCKET`, stream its output, exit with its status; two-stage interrupt | `agent-sandbox exec` |
 
+execd reads no config file and does not import `internal/config`; the flags
+above and `AGENT_SANDBOX_EXECD_SOCKET` are its whole input.
+
 `serve` is not meant to run outside a sandbox: it executes whatever it is sent
 at its own grants. Its usage text says so, as the hidden cobra command's
 comment does today.

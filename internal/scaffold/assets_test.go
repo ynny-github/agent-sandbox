@@ -14,9 +14,11 @@ func TestBaseURLPinsMain(t *testing.T) {
 
 func TestAssetsCoverEveryDestination(t *testing.T) {
 	want := []string{
-		"agent-sandbox.toml",
-		"command-profile.json",
-		"claude-profile.json",
+		".agent-sandbox/bin/claude",
+		".agent-sandbox/bash",
+		".agent-sandbox/settings.json",
+		".agent-sandbox/command-profile.json",
+		".agent-sandbox/claude-profile.json",
 		".claude/skills/growing-a-nono-profile/SKILL.md",
 		".claude/skills/verifying-nono-sandbox-claims/SKILL.md",
 	}

@@ -27,7 +27,17 @@ var configCheckCmd = &cobra.Command{
 	RunE:  runConfigCheck,
 }
 
+var pointerCmd = &cobra.Command{
+	Use:   "pointer",
+	Short: "Print the system-prompt line that points the agent at `agent-sandbox ai explain`",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Fprint(cmd.OutOrStdout(), agentconfig.Pointer())
+	},
+}
+
 func init() {
+	aiCmd.AddCommand(pointerCmd)
 	aiCmd.AddCommand(explainCmd)
 	aiCmd.AddCommand(configCheckCmd)
 	rootCmd.AddCommand(aiCmd)

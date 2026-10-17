@@ -1,0 +1,4 @@
+#!/bin/sh
+# Claude's shell (CLAUDE_CODE_SHELL): bash without rc files, which the agent
+# profile does not grant. The name must contain "bash" for Claude to use it.
+exec bash --norc --noprofile "$@"

@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -25,19 +24,16 @@ var (
 
 var initCmd = &cobra.Command{
 	Use:   "init",
-	Short: "Download a minimal config, both nono profiles, and the profile skills into this project",
+	Short: "Download the .agent-sandbox/ launch template and the profile skills into this project",
 	Long: `Download a starting point from this repository's main branch and write it
-beside the config path: agent-sandbox.toml, a minimal command profile and
-agent profile, and the two skills that explain how to grow a profile.
+into the current directory: .agent-sandbox/ (the launch script bin/claude, the
+hook settings, the shell wrapper, a minimal command profile and agent profile)
+and the two skills that explain how to grow a profile.
 
 Nothing is ever overwritten -- a file that already exists is reported and
 left alone, so re-running init is safe and skills you have edited are yours.
 The profiles are handed to ` + "`nono profile validate`" + ` before anything is
 written; if either is rejected, no file is created at all.
-
-Files are written beside the config path under their standard names (for
-example agent-sandbox.toml, command-profile.json) -- ` + "`--config ./cfg/my-sandbox.toml`" + `
-still writes ` + "`./cfg/agent-sandbox.toml`" + `, not a file named after the custom path.
 
 The profiles are a starting point, not a finished boundary. Run
 ` + "`agent-sandbox ai explain`" + ` and read the seeded growing-a-nono-profile skill
@@ -46,14 +42,16 @@ before widening them.`,
 	RunE: runInit,
 }
 
+// initDir is where init writes; a var so tests can point it at a temp dir.
+var initDir = "."
+
 func init() {
 	rootCmd.AddCommand(initCmd)
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
 	out := cmd.OutOrStdout()
-	// Files land beside the config path, which --config can move.
-	dir := filepath.Dir(configPath)
+	dir := initDir
 
 	// cobra only sets a context when the command runs through Execute; a
 	// direct call leaves it nil, which WithTimeout would panic on.
@@ -99,7 +97,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		fmt.Fprint(out, "\nAlready initialized; nothing to do.\n")
 		return nil
 	}
-	fmt.Fprint(out, "\nNext: agent-sandbox doctor, then agent-sandbox claude\n"+
+	fmt.Fprint(out, "\nNext: agent-sandbox launch claude\n"+
 		"These profiles are a starting point. Read the seeded\n"+
 		"growing-a-nono-profile skill before widening them.\n")
 	return nil

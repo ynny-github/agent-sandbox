@@ -41,7 +41,8 @@ func TestWriteCreatesEveryAssetIncludingNestedDirectories(t *testing.T) {
 
 func TestWriteNeverOverwrites(t *testing.T) {
 	dir := t.TempDir()
-	existing := filepath.Join(dir, "command-profile.json")
+	existing := filepath.Join(dir, ".agent-sandbox", "command-profile.json")
+	os.MkdirAll(filepath.Dir(existing), 0o755)
 	if err := os.WriteFile(existing, []byte("grown by the project"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -49,10 +50,10 @@ func TestWriteNeverOverwrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Write: %v", err)
 	}
-	if !slices.Contains(skipped, "command-profile.json") {
+	if !slices.Contains(skipped, ".agent-sandbox/command-profile.json") {
 		t.Errorf("skipped = %v, want it to contain command-profile.json", skipped)
 	}
-	if slices.Contains(written, "command-profile.json") {
+	if slices.Contains(written, ".agent-sandbox/command-profile.json") {
 		t.Errorf("written = %v, must not contain command-profile.json", written)
 	}
 	got, err := os.ReadFile(existing)
@@ -76,7 +77,8 @@ func TestWriteDoesNotWriteThroughADanglingSymlink(t *testing.T) {
 	outside := t.TempDir()
 	target := filepath.Join(outside, "escaped")
 
-	dest := filepath.Join(dir, "command-profile.json")
+	dest := filepath.Join(dir, ".agent-sandbox", "command-profile.json")
+	os.MkdirAll(filepath.Dir(dest), 0o755)
 	if err := os.Symlink(target, dest); err != nil {
 		t.Fatal(err)
 	}
@@ -85,10 +87,10 @@ func TestWriteDoesNotWriteThroughADanglingSymlink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Write: %v", err)
 	}
-	if !slices.Contains(skipped, "command-profile.json") {
+	if !slices.Contains(skipped, ".agent-sandbox/command-profile.json") {
 		t.Errorf("skipped = %v, want it to contain command-profile.json", skipped)
 	}
-	if slices.Contains(written, "command-profile.json") {
+	if slices.Contains(written, ".agent-sandbox/command-profile.json") {
 		t.Errorf("written = %v, must not contain command-profile.json", written)
 	}
 	if _, err := os.Lstat(dest); err != nil {
@@ -117,5 +119,16 @@ func TestWriteSkipsAnExistingSkillNestedDeep(t *testing.T) {
 	}
 	if !slices.Contains(skipped, dest) {
 		t.Errorf("skipped = %v, want it to contain %s", skipped, dest)
+	}
+}
+
+func TestWriteHonoursTheAssetMode(t *testing.T) {
+	dir := t.TempDir()
+	if _, _, err := Write(dir, []Fetched{{Asset: Asset{Dest: "run", Mode: 0o755}, Body: []byte("x")}}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(dir, "run"))
+	if err != nil || info.Mode()&0o111 == 0 {
+		t.Errorf("mode %v (err %v), want executable", info.Mode(), err)
 	}
 }

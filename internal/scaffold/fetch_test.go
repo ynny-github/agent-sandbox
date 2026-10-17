@@ -53,7 +53,7 @@ func TestFetchReturnsEveryAsset(t *testing.T) {
 }
 
 func TestFetchReturnsNothingWhenOneAssetIsMissing(t *testing.T) {
-	srv := serveAssets(t, "templates/minimal/claude-profile.json")
+	srv := serveAssets(t, "templates/minimal/.agent-sandbox/claude-profile.json")
 	got, err := Fetch(context.Background(), srv.Client(), srv.URL+"/")
 	if err == nil {
 		t.Fatal("Fetch succeeded despite a 404")

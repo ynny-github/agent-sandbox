@@ -45,9 +45,9 @@ func initHarness(t *testing.T) (dir string, out *bytes.Buffer) {
 	t.Cleanup(func() { initValidate = origValidate })
 
 	dir = t.TempDir()
-	origCfg := configPath
-	configPath = filepath.Join(dir, "agent-sandbox.toml")
-	t.Cleanup(func() { configPath = origCfg })
+	origDir := initDir
+	initDir = dir
+	t.Cleanup(func() { initDir = origDir })
 
 	out = &bytes.Buffer{}
 	initCmd.SetOut(out)
@@ -77,7 +77,7 @@ func TestRunInitWritesEveryAssetBesideTheConfigPath(t *testing.T) {
 	// loop, so asserting on the base URL alone would pass even if the loop
 	// printed a bare filename; assert on a specific asset's full fetched
 	// URL (base + source path), which can only appear if f.URL was used.
-	wantURL := initBaseURL + "templates/minimal/command-profile.json"
+	wantURL := initBaseURL + "templates/minimal/.agent-sandbox/command-profile.json"
 	if !strings.Contains(out.String(), "http://") || !strings.Contains(out.String(), wantURL) {
 		t.Errorf("report does not contain the fetched URL %q\n%s", wantURL, out)
 	}
@@ -85,7 +85,8 @@ func TestRunInitWritesEveryAssetBesideTheConfigPath(t *testing.T) {
 
 func TestRunInitSkipsExistingFilesAndStillSucceeds(t *testing.T) {
 	dir, out := initHarness(t)
-	if err := os.WriteFile(filepath.Join(dir, "claude-profile.json"), []byte("mine"), 0o644); err != nil {
+	os.MkdirAll(filepath.Join(dir, ".agent-sandbox"), 0o755)
+	if err := os.WriteFile(filepath.Join(dir, ".agent-sandbox", "claude-profile.json"), []byte("mine"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := runInit(initCmd, nil); err != nil {
@@ -94,7 +95,7 @@ func TestRunInitSkipsExistingFilesAndStillSucceeds(t *testing.T) {
 	if !strings.Contains(out.String(), "skip") {
 		t.Errorf("report does not mention the skip\n%s", out)
 	}
-	got, err := os.ReadFile(filepath.Join(dir, "claude-profile.json"))
+	got, err := os.ReadFile(filepath.Join(dir, ".agent-sandbox", "claude-profile.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

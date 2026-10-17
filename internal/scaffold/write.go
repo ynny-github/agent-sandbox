@@ -29,7 +29,11 @@ func Write(dir string, fetched []Fetched) ([]string, []string, error) {
 		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 			return written, skipped, fmt.Errorf("%s: %w", f.Asset.Dest, err)
 		}
-		file, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		mode := f.Asset.Mode
+		if mode == 0 {
+			mode = 0o644
+		}
+		file, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 		if err != nil {
 			if errors.Is(err, fs.ErrExist) {
 				skipped = append(skipped, f.Asset.Dest)

@@ -33,7 +33,7 @@ func init() { rootCmd.AddCommand(launchCmd) }
 
 func runLaunch(cmd *cobra.Command, args []string) error {
 	err := launch.Run(args[0], args[1:], launch.Options{
-		Prompt:   promptTTY,
+		Prompt: promptTTY,
 		Writable: func(profile, path string) (bool, error) {
 			return claude.ProfileAllowsWrite(context.Background(), combinedOutput, profile, path)
 		},

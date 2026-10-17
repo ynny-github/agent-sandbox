@@ -8,8 +8,6 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-
-	"github.com/ynny-github/agent-sandbox/internal/config"
 )
 
 // repoRoot walks up from the working directory until it finds go.mod. The
@@ -40,7 +38,7 @@ func TestTemplatesValidate(t *testing.T) {
 	}
 	root := repoRoot(t)
 	for _, name := range []string{"command-profile.json", "claude-profile.json"} {
-		path := filepath.Join(root, "templates", "minimal", name)
+		path := filepath.Join(root, "templates", "minimal", ".agent-sandbox", name)
 		out, err := exec.Command("nono", "profile", "validate", path).CombinedOutput()
 		if err != nil {
 			t.Errorf("nono profile validate %s: %v\n%s", name, err, out)
@@ -49,43 +47,6 @@ func TestTemplatesValidate(t *testing.T) {
 		if !strings.Contains(string(out), "Result: valid") {
 			t.Errorf("%s: nono did not report the profile valid\n%s", name, out)
 		}
-	}
-}
-
-// TestTemplateConfigNamesBothProfiles keeps the TOML template in step with the
-// two JSON files beside it. A substring check alone has no teeth -- a file
-// starting `[[[garbage` that still contains both lines would pass it while
-// the real TOML parser rejects it -- so this also loads the template through
-// config.Load, the same entry point agent-sandbox itself uses, and confirms
-// it resolves both profile paths.
-func TestTemplateConfigNamesBothProfiles(t *testing.T) {
-	// Isolate HOME so a real ~/.config/agent-sandbox/config.toml on the
-	// developer's machine cannot influence what config.Load resolves.
-	t.Setenv("HOME", t.TempDir())
-
-	root := repoRoot(t)
-	tomlPath := filepath.Join(root, "templates", "minimal", "agent-sandbox.toml")
-	body, err := os.ReadFile(tomlPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{`command_profile = "command-profile.json"`, `profile = "claude-profile.json"`} {
-		if !strings.Contains(string(body), want) {
-			t.Errorf("template config missing %q\n%s", want, body)
-		}
-	}
-
-	cfg, err := config.Load(tomlPath)
-	if err != nil {
-		t.Fatalf("config.Load(%s): %v", tomlPath, err)
-	}
-	wantCommand := filepath.Join(root, "templates", "minimal", "command-profile.json")
-	if got := cfg.CommandProfilePath(); got != wantCommand {
-		t.Errorf("CommandProfilePath() = %q, want %q", got, wantCommand)
-	}
-	wantAgent := filepath.Join(root, "templates", "minimal", "claude-profile.json")
-	if got := cfg.AgentProfilePath("claude"); got != wantAgent {
-		t.Errorf("AgentProfilePath(\"claude\") = %q, want %q", got, wantAgent)
 	}
 }
 
@@ -174,7 +135,7 @@ func TestExecdSocketWildcardDetection(t *testing.T) {
 // would.
 func TestCommandTemplateNeverForwardsTheExecdSocket(t *testing.T) {
 	root := repoRoot(t)
-	body, err := os.ReadFile(filepath.Join(root, "templates", "minimal", "command-profile.json"))
+	body, err := os.ReadFile(filepath.Join(root, "templates", "minimal", ".agent-sandbox", "command-profile.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,6 +151,23 @@ func TestCommandTemplateNeverForwardsTheExecdSocket(t *testing.T) {
 	for _, entry := range commandTemplateAllowVarEntries(text) {
 		if matchesExecdSocket(entry) {
 			t.Errorf("command template allow_vars entry %q would forward %s (wildcard or exact match)", entry, execdSocketVar)
+		}
+	}
+}
+
+func TestTemplateLaunchFilesAreExecutable(t *testing.T) {
+	root := repoRoot(t)
+	for _, rel := range []string{"templates/minimal/.agent-sandbox/bin/claude", "templates/minimal/.agent-sandbox/bash"} {
+		info, err := os.Stat(filepath.Join(root, rel))
+		if err != nil || info.Mode()&0o111 == 0 {
+			t.Errorf("%s: mode %v (err %v), want executable", rel, info.Mode(), err)
+		}
+	}
+	for _, a := range Assets {
+		if strings.HasSuffix(a.Dest, "/bin/claude") || strings.HasSuffix(a.Dest, "/bash") {
+			if a.Mode&0o111 == 0 {
+				t.Errorf("asset %s is written without the executable bit", a.Dest)
+			}
 		}
 	}
 }

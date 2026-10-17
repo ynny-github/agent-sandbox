@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/ynny-github/agent-sandbox/internal/agentconfig"
 )
 
 func writeTempConfig(t *testing.T, body string) string {
@@ -159,5 +161,14 @@ func TestRunConfigCheck_FailsWhenTheAgentProfileIsMissing(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "claude-profile.json") {
 		t.Errorf("error must name the missing file: %v", err)
+	}
+}
+
+func TestAiPointer_PrintsThePointer(t *testing.T) {
+	var out bytes.Buffer
+	pointerCmd.SetOut(&out)
+	pointerCmd.Run(pointerCmd, nil)
+	if out.String() != agentconfig.Pointer() {
+		t.Errorf("ai pointer = %q, want %q", out.String(), agentconfig.Pointer())
 	}
 }

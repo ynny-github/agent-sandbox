@@ -6,7 +6,7 @@ AI コーディングエージェント (Claude Code) を [nono](https://github.
 サンドボックス内で動かし、エージェントが発行するすべてのシェルコマンドを、
 専用の兄弟 nono セッションで動くホスト側の exec デーモン execd 経由で仲介します。
 それぞれのコマンドが何に触れてよいかは、オペレーターが書く nono の
-コマンドプロファイルが決めます — `agent-sandbox.toml` ではありません。
+コマンドプロファイルが決めます。
 
 目的はエージェントをマシンから締め出すことではなく、境界を*明示的で検査可能*に
 することです。`agent-sandbox ai explain` は、どのコマンドが自分専用のサンドボックスで
@@ -15,9 +15,9 @@ AI コーディングエージェント (Claude Code) を [nono](https://github.
 読まれます。
 
 ```
-launcher
+agent-sandbox launch claude → .agent-sandbox/bin/claude (あなたのスクリプト)
 ├── nono run   --profile <エージェントプロファイル>  -- claude …   ここにコマンド制御はない
-└── nono run   --profile <コマンドプロファイル>      -- execd serve
+└── execd up → nono run --profile <コマンドプロファイル> -- execd serve
                                                │
                                                ├─ exec git → shim → git 専用の子サンドボックス
                                                │                     └─ exec ssh → shim → ssh 専用
@@ -28,7 +28,7 @@ launcher
 
 - `PATH` の通った [nono](https://github.com/tkancf/nono) — サンドボックスエンジン本体
 - Go 1.25 以降 (ソースからビルドする場合)
-- `PATH` の通った `claude` — `agent-sandbox claude` を使う場合
+- `PATH` の通った `claude` — `init` が書き出す起動スクリプト `claude` を使う場合
 
 `agent-sandbox doctor` で確認できます。
 
@@ -38,7 +38,7 @@ launcher
 go install github.com/ynny-github/agent-sandbox/cmd/...@latest
 ```
 
-`agent-sandbox` と `execd` の両方が入ります。ランチャーは `execd` を `PATH` から探します。
+`agent-sandbox` と `execd` の両方が入ります。起動スクリプトはどちらも `PATH` から実行します。
 
 [mise](https://mise.jdx.dev/) を使う場合:
 
@@ -55,10 +55,10 @@ go install github.com/ynny-github/agent-sandbox/cmd/...@latest
 ## クイックスタート
 
 プロジェクトのルートで `agent-sandbox init` を実行します。このリポジトリの
-`main` ブランチから出発点一式 —— `agent-sandbox.toml`、最小のコマンドプロファイル
-とエージェントプロファイル、プロファイルの育て方を説明する 2 つの skill ——
-をダウンロードし、設定ファイルの隣に書き出します。既存のファイルは決して
-上書きしません。存在するファイルは報告してそのまま残します。
+`main` ブランチから出発点一式 —— `.agent-sandbox/`(起動スクリプト、フックの設定、
+shell wrapper、最小のコマンドプロファイルとエージェントプロファイル)と、
+プロファイルの育て方を説明する 2 つの skill —— をダウンロードします。既存の
+ファイルは決して上書きしません。存在するファイルは報告してそのまま残します。
 
 ```bash
 agent-sandbox init
@@ -85,7 +85,7 @@ agent-sandbox init
 `nix_runtime` を含んでいます。
 
 **エージェントプロファイルはレジストリの pack を extends します。** テンプレートも
-このリポジトリ自身の `claude-profile.json` も `nolabs-ai/claude` を extends して
+このリポジトリ自身の `.agent-sandbox/claude-profile.json` も `nolabs-ai/claude` を extends して
 おり、nono 0.78 にはこれが組み込まれていません。初回起動の前に一度インストール
 してください。
 
@@ -97,26 +97,40 @@ pull すると、pack の Claude Code プラグイン `nono@nolabs-ai` も
 `~/.claude/settings.json` で有効になります。`nono remove nolabs-ai/claude` で
 両方とも元に戻ります。
 
-両方のプロファイルを nono のスキーマで一から書くこともできます。どちらにも
-既定値はなく、ファイルが無ければ起動時エラーになります。このリポジトリ自身の
-2 ファイルは時間をかけて育てたプロファイルの実例で、各エントリがその理由を
-コメントに持っています。`templates/minimal/` は `init` が配る出発点です。
+両方のプロファイルを nono のスキーマで一から書くこともできます。このリポジトリ
+自身の `.agent-sandbox/` は時間をかけて育てたプロファイルの実例で、各エントリが
+その理由をコメントに持っています。`templates/minimal/.agent-sandbox/` は `init` が
+配る出発点です。
 
 ```bash
-agent-sandbox doctor            # nono、execd ソケット、2 つのプロファイルは使えるか
-agent-sandbox ai config-check   # agent-sandbox.toml は解決でき、両プロファイルは検証を通るか
-agent-sandbox claude -- --model opus
+agent-sandbox launch claude            # Claude を起動。後ろの引数はスクリプトに渡る
+agent-sandbox launch claude --model opus
 ```
 
-`sandbox up` のような手順はありません。`agent-sandbox claude` が execd を専用の
-nono セッションで起動し、2 つ目の兄弟セッションで Claude を起動し、Claude の終了時に
-execd を片付けます。
+`.agent-sandbox/bin/claude` はあなたのシェルスクリプトです。`agent-sandbox doctor`
+を実行し、`execd up` で execd を起動し、フックの設定を付けて `nono run` の下で
+Claude を起動し、Claude の終了時に `execd down` で execd を止めます。自由に編集
+してください —— herdr や tmux、追加のフラグ、別のエージェント用のスクリプトを
+`bin/` に足すこともできます。
+
+起動は必ず `agent-sandbox launch` を通してください。作業ディレクトリ以下のファイル
+—— `.agent-sandbox/`、プロファイル、`.git` まで —— はエージェントが実行するコマンドから
+書き換えられるので、起動と起動の間にスクリプトを書き換えられる可能性があります。
+`launch` は `.agent-sandbox/` を、前回承認して `~/.config/agent-sandbox/trusted/` に
+控えた写しと比べ、違いがあれば差分を表示して端末で確認し、承認済みの写しを実行します。
+`.agent-sandbox/bin` を `PATH` に通さないでください。承認を経ずに実行されるうえ、
+`claude` という名前のスクリプトは自分自身を呼び続けます。近道は、自分のシェルの
+設定ファイルに置くエイリアスです。
+
+```bash
+alias claude-sb='agent-sandbox launch claude'
+```
 
 ## 仕組み
 
 **兄弟セッションが 2 つ、入れ子にはしない。** 一方はエージェントプロファイルで
-Claude Code を包み、もう一方はコマンドプロファイルで `execd serve` を
-動かします。サンドボックスは入れ子にできないので、execd はエージェントの
+Claude Code を包み、もう一方はコマンドプロファイルの execd で、`execd up` が
+起動します。サンドボックスは入れ子にできないので、execd はエージェントの
 セッションの中では動きません。
 
 **ループの中にシェルはいません。** エージェントが発行するコマンドは unix ソケットで
@@ -144,86 +158,70 @@ execd 自身のビルトインは 3 つ目の扱いで、execd プロセスの�
 
 | コマンド | 内容 |
 |---|---|
-| `agent-sandbox init` | 最小の設定・両プロファイル・プロファイル用 skill をこのプロジェクトにダウンロードする。上書きはしない |
-| `agent-sandbox claude -- [claude の引数...]` | execd を兄弟セッションで動かしつつ、nono 配下で Claude を起動 |
-| `agent-sandbox doctor` | 起動が依存するものを一通り確認: サンドボックスエンジン、execd ソケット、両プロファイルとそれが固定しているパス、そしてコマンドプロファイルが `execd` と `agent-sandbox` のどちらも書き込み可能にしていないこと。終了コード 0 / 1 |
-| `agent-sandbox debug -- [claude の引数...]` | 実行はせずに、両セッション分の `nono` コマンドを表示 |
+| `agent-sandbox init` | `.agent-sandbox/` とプロファイル用 skill をこのプロジェクトにダウンロードする。上書きはしない |
+| `agent-sandbox launch <name> [引数...]` | `.agent-sandbox/` の変更を承認したうえで `.agent-sandbox/bin/<name>` を実行する。実行されるのは承認済みの写し |
+| `agent-sandbox doctor` | 起動が依存するものを一通り確認: サンドボックスエンジン、execd ソケット、両プロファイルとそれが固定しているパス、フックがエージェントプロファイルで動くこと、そしてコマンドプロファイルが `execd` と `agent-sandbox` のどちらも書き込み可能にしていないこと。`--command-profile`/`--agent-profile` の既定は `.agent-sandbox/`。終了コード 0 / 1 |
 | `agent-sandbox ai explain` | エージェント向けのサンドボックス説明: コマンドの実行経路、2 つの層、拒否の理由 |
-| `agent-sandbox ai config-check` | `agent-sandbox.toml` と 2 つの nono プロファイルを、起動時と同じ読み方で検証 |
-| `agent-sandbox hook` | PreToolUse アダプタ (起動時に注入され、Claude が呼ぶもので、手で叩くものではない) |
+| `agent-sandbox ai pointer` | 起動スクリプトが Claude に渡すシステムプロンプトの一文 |
+| `agent-sandbox hook` | PreToolUse アダプタ (`.agent-sandbox/settings.json` に書かれ、Claude が呼ぶもので、手で叩くものではない) |
 
 `execd` は独立したバイナリで、設定ファイルを持ちません。
 
 | コマンド | 内容 |
 |---|---|
-| `execd up --profile <path> [--workdir <dir>]` | このシェル・workdir・プロファイルのセッションを nono の下で起動する(動いていればそれを使う)。ソケットを出力する。`agent-sandbox claude` が実行する |
-| `execd down [<socket>]` | そのセッションを止めてディレクトリを消す。socket を省くと、このシェルが起動したセッションをすべて止める。`agent-sandbox claude` が終了時に実行する |
+| `execd up --profile <path> [--workdir <dir>]` | このシェル・workdir・プロファイルのセッションを nono の下で起動する(動いていればそれを使う)。ソケットを出力する。起動スクリプトが実行する |
+| `execd down [<socket>]` | そのセッションを止めてディレクトリを消す。socket を省くと、このシェルが起動したセッションをすべて止める。起動スクリプトが終了時に実行する |
 | `execd gc [--idle <duration>] [--dry-run]` | 死んでいる・シェルが消えた・`--idle`(既定 168h)より長く使われていないセッションを片付ける |
 | `execd exec [--timeout d] -- <command>` | `AGENT_SANDBOX_EXECD_SOCKET` のソケットにコマンドを 1 つ送り、出力をストリームする |
 
-セッションは `$XDG_STATE_HOME/execd/`(`~/.local/state/execd/`)に置かれます。ランチャーが kill されるなどで `agent-sandbox claude` が止められなかったセッションは、`execd gc` が片付けるまで動き続けます。
+セッションは `$XDG_STATE_HOME/execd/`(`~/.local/state/execd/`)に置かれます。起動スクリプトが kill されるなどで `execd down` まで届かなかったセッションは、`execd gc` が片付けるまで動き続けます。
 
-グローバルフラグは `--config <path>` (既定 `agent-sandbox.toml`) と `--env <ref>`
-(繰り返し可) の 2 つで、`claude` と `debug` はさらに `--context-mode` を受け取ります。
-`--` の前に置けるのはこれらだけで、`--` 以降はすべて `claude` に渡ります。`--settings`
-は PreToolUse フックを載せるために予約されており、パススルーとして拒否されます。
-
-`--context-mode` は、そのセッションで
-[context-mode](https://github.com/ynny-github/context-mode) の execd バックエンドを
-選びます (`CONTEXT_MODE_EXEC_BACKEND=execd` をエージェントに渡す)。付けた場合、
-`ctx_execute` が動かすコードは他のコマンドと同じく execd とコマンドプロファイルを
-通ります。付けない場合、そのコードは MCP サーバーの子プロセスとしてエージェント
-プロファイルの中で動きます。Claude Code が context-mode プラグインを有効と報告し、
-かつ選択がサンドボックス内で実測できる場合にのみ起動します — 変数が届かないことは
-context-mode 側ではエラーにならず、黙ってエージェントプロファイルでの実行に戻るためです。
-エージェントプロファイルの `environment.allow_vars` に `CONTEXT_MODE_EXEC_BACKEND` が
-必要で、`node` が実行できることも必要です。プラグインの有効状態と変数の転送は
-`agent-sandbox doctor` が報告し、`node` の到達性は起動前の probe が実測します。
+[context-mode](https://github.com/ynny-github/context-mode) は、`ctx_execute` が
+動かすコードを、エージェントプロファイルの中ではなく execd とコマンドプロファイル
+経由で実行できます。起動スクリプトの `export CONTEXT_MODE_EXEC_BACKEND=execd` の
+コメントを外してください。`doctor` がプラグインの有効状態と、選択が実際に
+サンドボックス内へ届いているかを確認します —— 変数が届かないことはエラーにならず、
+黙ってエージェントプロファイルでの実行に戻るためです。エージェントプロファイルの
+`environment.allow_vars` に `CONTEXT_MODE_EXEC_BACKEND` が必要で、`node` が実行
+できることも必要です。
 
 ## 設定
 
-```toml
-command_profile = "command-profile.json" # 既定の名前。すべてのエージェントで共有
-
-[agents.claude]
-profile = "claude-profile.json"          # 既定の名前: "<agent>-profile.json"
+```
+.agent-sandbox/
+  bin/claude             起動スクリプト (あなたのもの。他のエージェント用に追加してよい)
+  settings.json          `claude --settings` に渡す PreToolUse フックの設定
+  bash                   CLAUDE_CODE_SHELL に使う shell wrapper
+  command-profile.json   execd のプロファイル
+  claude-profile.json    エージェントのプロファイル
 ```
 
-Bash と Monitor は有効なままです。起動時に `claude --settings` で PreToolUse
-フックを注入し、各コマンドを `execd exec -- <command>` に書き換えます。
-`.claude/settings.json` には何も書きません。`agent-sandbox` と `execd` が `PATH` に必要です。
-制御を渡す前に、ランチャーがプローブ用のペイロードでフックを 1 回実行し、コマンドが
-書き換わって返ってこなければ起動を拒否します — Claude Code は起動できないフックを
-非ブロッキングのエラーとして扱い、そのままコマンドを実行してしまうので、それは
-機能低下ではなくバイパスだからです。
+設定ファイルはありません。Bash と Monitor は有効なままで、`settings.json` のフックが
+各コマンドを `execd exec -- <command>` に書き換えます。`.claude/settings.json` には
+何も書きません。`agent-sandbox` と `execd` が `PATH` に必要です。起動スクリプトが
+最初に実行する `doctor` が、フックがエージェントプロファイルで動くことを確かめます
+—— Claude Code は起動できないフックを非ブロッキングのエラーとして扱い、そのまま
+コマンドを実行してしまうので、それは機能低下ではなくバイパスだからです。
 
-プロファイルのパスは、絶対パスで書かない限り `agent-sandbox.toml` の隣で解決されます。
-任意の `~/.config/agent-sandbox/config.toml` はプロジェクト設定と合成され、
-プロジェクト側が設定した値が勝ちます — 「どのプロジェクトも設定ファイルの隣に
-`claude-profile.json` を置く」はユーザースコープに一度書けば済みます。
+セッションは承認済みの写しから動くので、`.agent-sandbox/` を編集しても動いている
+セッションは変わりません。次の `launch` が変更を表示して確認します。
 
-両プロファイルはセッション開始時に一度だけ読まれます。編集が効くのは次の
-`agent-sandbox claude` からで、セッションの途中では効きません。
-
-エージェントのシェルは、ホストの bash ではなくランチャーが生成する wrapper です。
+エージェントのシェルは、ホストの bash ではなく `.agent-sandbox/bash` です。
 Claude Code はツールのコマンドを stdin がソケットの状態で起動し、非対話の bash は
 stdin のソケットを rshd/sshd 経由の起動と解釈して `~/.bashrc` を読みます — どちらの
 プロファイルも許可していないファイルなので、wrapper がないとツールの結果すべてに
-権限エラーの行が付きます。ランチャーは execd ソケットの隣に `norc-bash-<pid>`
-(中身は `bash --norc --noprofile` だけ) を書き、`--read-file` で許可し、
-`CLAUDE_CODE_SHELL` で名指しし、セッション終了時に削除します。エージェント
-プロファイルの `environment.allow_vars` にこの変数を書かないと nono が剥がし、
-Claude はホストの bash に戻ります。セッション自体は動きますが騒がしくなるので、
-`agent-sandbox doctor` が実測します。
+権限エラーの行が付きます。起動スクリプトが `--read-file` で許可し、
+`CLAUDE_CODE_SHELL` で名指しします。エージェントプロファイルの
+`environment.allow_vars` にこの変数を書かないと nono が剥がし、Claude はホストの
+bash に戻ります。セッション自体は動きますが騒がしくなるので、`agent-sandbox doctor`
+が実測します。
 
-`--env <ref>` (現状 `file:` のみ) は dotenv サブセットのファイルをランチャー自身の
-プロセスに読み込みます。**これは何も許可しません。** 転送されるのはプロファイルの
-`environment.allow_vars` に並んでいるものだけなので、変数がエージェントに届くのは
-エージェントプロファイルがその名前を書いている場合だけです。execd 経由のコマンドに
-見せるのはコマンドプロファイル側の別の編集になります — ただし 1 つ例外があり、
-`AGENT_SANDBOX_EXECD_SOCKET` はどんな名前でもワイルドカードでも、そこに書いては
-いけません。execd ソケットに到達できるコマンドは execd に再帰でき、
-execd は同時実行の上限なしにハンドラを起動します。
+転送されるのはプロファイルの `environment.allow_vars` に並んでいるものだけなので、
+変数がエージェントに届くのはエージェントプロファイルがその名前を書いている場合
+だけです。execd 経由のコマンドに見せるのはコマンドプロファイル側の別の編集になります
+— ただし 1 つ例外があり、`AGENT_SANDBOX_EXECD_SOCKET` はどんな名前でもワイルド
+カードでも、そこに書いてはいけません。execd ソケットに到達できるコマンドは execd に
+再帰でき、execd は同時実行の上限なしにハンドラを起動します。
 
 ## 開発
 
@@ -242,8 +240,7 @@ mise run build        # `go install` で両バイナリのワーキングツリ�
 埋め込まず実行時に `main` から取得するので、ここへの変更はリリースを挟まずに
 利用者へ届きます —— そして `go test ./...` がそれらのファイルに対して
 `nono profile validate` を実行することだけが、`main` が使える状態に保たれている
-保証です。このリポジトリ自身の `command-profile.json` / `claude-profile.json` と
-混同しないでください。あちらはこのホスト向けに育てたもので、可搬ではありません。
+保証です。このリポジトリ自身の `.agent-sandbox/` と混同しないでください。あちらはこのホスト向けに育てたもので、可搬ではありません。
 
 コミットは [Conventional Commits](https://www.conventionalcommits.org/) に従い、
 `lefthook` が `commit-msg` でタイトルを検証します。

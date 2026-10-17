@@ -160,7 +160,7 @@ for `nono profile show` / `nono why`.
 |---|---|
 | `agent-sandbox init` | Download `.agent-sandbox/` and the profile skills into this project. Never overwrites |
 | `agent-sandbox launch <name> [args...]` | Run `.agent-sandbox/bin/<name>` after you approve any change to `.agent-sandbox/`; the approved copy is what runs |
-| `agent-sandbox doctor` | Check everything a launch depends on: the sandbox engine, the execd socket, both profiles and the paths they pin, that the hook runs under the agent profile, and that the command profile leaves neither `execd` nor `agent-sandbox` writable. `--command-profile`/`--agent-profile` default to `.agent-sandbox/`. Exit 0 / 1 |
+| `agent-sandbox doctor` | Check everything a launch depends on: the sandbox engine, the execd socket, both profiles and the paths they pin, that the hook runs under the agent profile, that the command profile leaves neither `execd` nor `agent-sandbox` writable, and that the agent profile cannot write the approved copy `launch` runs. `--command-profile`/`--agent-profile` default to `.agent-sandbox/`. Exit 0 / 1 |
 | `agent-sandbox ai explain` | Agent-facing description of the sandbox: how commands run, both tiers, and every denial's reason |
 | `agent-sandbox ai pointer` | The system-prompt line the launch script passes to Claude |
 | `agent-sandbox hook` | PreToolUse adapter, named in `.agent-sandbox/settings.json` and invoked by Claude, not by you |

@@ -160,7 +160,7 @@ execd 自身のビルトインは 3 つ目の扱いで、execd プロセスの�
 |---|---|
 | `agent-sandbox init` | `.agent-sandbox/` とプロファイル用 skill をこのプロジェクトにダウンロードする。上書きはしない |
 | `agent-sandbox launch <name> [引数...]` | `.agent-sandbox/` の変更を承認したうえで `.agent-sandbox/bin/<name>` を実行する。実行されるのは承認済みの写し |
-| `agent-sandbox doctor` | 起動が依存するものを一通り確認: サンドボックスエンジン、execd ソケット、両プロファイルとそれが固定しているパス、フックがエージェントプロファイルで動くこと、そしてコマンドプロファイルが `execd` と `agent-sandbox` のどちらも書き込み可能にしていないこと。`--command-profile`/`--agent-profile` の既定は `.agent-sandbox/`。終了コード 0 / 1 |
+| `agent-sandbox doctor` | 起動が依存するものを一通り確認: サンドボックスエンジン、execd ソケット、両プロファイルとそれが固定しているパス、フックがエージェントプロファイルで動くこと、コマンドプロファイルが `execd` と `agent-sandbox` のどちらも書き込み可能にしていないこと、そしてエージェントプロファイルが `launch` の実行する承認済みの写しに書き込めないこと。`--command-profile`/`--agent-profile` の既定は `.agent-sandbox/`。終了コード 0 / 1 |
 | `agent-sandbox ai explain` | エージェント向けのサンドボックス説明: コマンドの実行経路、2 つの層、拒否の理由 |
 | `agent-sandbox ai pointer` | 起動スクリプトが Claude に渡すシステムプロンプトの一文 |
 | `agent-sandbox hook` | PreToolUse アダプタ (`.agent-sandbox/settings.json` に書かれ、Claude が呼ぶもので、手で叩くものではない) |

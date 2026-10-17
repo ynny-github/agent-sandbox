@@ -77,9 +77,9 @@ func ContextModeEnabledIn(out []byte) (bool, error) {
 	return false, nil
 }
 
-// contextModeEnabled asks the installed Claude Code whether context-mode is
+// ContextModeEnabled asks the installed Claude Code whether context-mode is
 // enabled for this user.
-func contextModeEnabled() (bool, error) {
+func ContextModeEnabled() (bool, error) {
 	claudePath, err := exec.LookPath("claude")
 	if err != nil {
 		return false, fmt.Errorf("claude not found in PATH: %w", err)
@@ -102,19 +102,19 @@ func contextModeEnabled() (bool, error) {
 var contextModeProbeExpr = "[process.env." + ContextModeEnvVar +
 	", process.env." + execd.SocketEnvVar + "].join(\"|\")"
 
-// probeContextMode proves, before the agent is launched, that a context-mode
+// ProbeContextMode proves, before the agent is launched, that a context-mode
 // MCP server born in this sandbox would see the backend selection.
 //
 // It runs node — the binary the plugin manifest names — under the agent's own
 // profile, so it measures the environment the server is actually about to get:
-// same profile, same env filter, same parent. This is probeHook's rationale
+// same profile, same env filter, same parent. This is ProbeHook's rationale
 // applied to a second silent failure. Claude Code reports an MCP server that
 // cannot start as nothing but an absent tool, and context-mode reads an absent
 // variable as "local", so neither failure announces itself in a session.
 //
 // --allow-cwd is required because nono refuses working-directory access in
 // non-interactive mode, which is how this runs.
-func probeContextMode(profilePath string) error {
+func ProbeContextMode(profilePath string) error {
 	nonoPath, err := exec.LookPath("nono")
 	if err != nil {
 		return fmt.Errorf("nono not found in PATH: %w", err)

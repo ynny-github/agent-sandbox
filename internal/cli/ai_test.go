@@ -29,33 +29,20 @@ func writeTempConfig(t *testing.T, body string) string {
 	return p
 }
 
-func TestRunExplain_RendersConfig(t *testing.T) {
-	cfgPath := writeTempConfig(t, "")
-	orig := configPath
-	configPath = cfgPath
-	t.Cleanup(func() { configPath = orig })
+func TestRunExplain_NamesTheProfilesFromItsFlags(t *testing.T) {
+	prevC, prevA := explainCommandProfile, explainAgentProfile
+	explainCommandProfile, explainAgentProfile = "/p/cmd.json", "/p/agent.json"
+	t.Cleanup(func() { explainCommandProfile, explainAgentProfile = prevC, prevA })
 
 	var buf bytes.Buffer
 	explainCmd.SetOut(&buf)
 	if err := runExplain(explainCmd, nil); err != nil {
 		t.Fatalf("runExplain: %v", err)
 	}
-	for _, want := range []string{
-		"# agent-sandbox environment",
-		cfgPath,
-	} {
+	for _, want := range []string{"# agent-sandbox environment", "/p/cmd.json", "/p/agent.json"} {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("output missing %q\n%s", want, buf.String())
 		}
-	}
-}
-
-func TestRunExplain_MissingConfig(t *testing.T) {
-	orig := configPath
-	configPath = "/nonexistent/path.toml"
-	t.Cleanup(func() { configPath = orig })
-	if err := runExplain(explainCmd, nil); err == nil {
-		t.Fatal("expected config error, got nil")
 	}
 }
 

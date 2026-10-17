@@ -140,7 +140,7 @@ const (
 	hookProbeWant    = "execd exec --"
 )
 
-// probeHook runs the PreToolUse hook inside the agent's own sandbox and checks
+// ProbeHook runs the PreToolUse hook inside the agent's own sandbox and checks
 // that it rewrites a command, before the agent is launched.
 //
 // It exists because the failure it catches is invisible and unsafe. Claude Code
@@ -153,7 +153,7 @@ const (
 //
 // --allow-cwd is required because nono refuses working-directory access in
 // non-interactive mode, which is how this runs.
-func probeHook(profilePath, self string) error {
+func ProbeHook(profilePath, self string) error {
 	nonoPath, err := exec.LookPath("nono")
 	if err != nil {
 		return fmt.Errorf("nono not found in PATH: %w", err)
@@ -283,10 +283,10 @@ type runDeps struct {
 	// verifyHook proves the PreToolUse hook can actually run under the agent's
 	// profile. Every session injects that hook, so every launch runs it.
 	verifyHook func(profilePath, selfPath string) error
-	// contextModeEnabled reports whether Claude Code has an enabled
+	// ContextModeEnabled reports whether Claude Code has an enabled
 	// context-mode plugin. Called only when --context-mode was passed, and
 	// before anything is started, so a refusal tears nothing down.
-	contextModeEnabled func() (bool, error)
+	ContextModeEnabled func() (bool, error)
 	// verifyContextMode proves the backend selection actually reaches the
 	// sandbox. Called only when --context-mode was passed, after execd is up
 	// and the variables are set.
@@ -328,9 +328,9 @@ func Run(cfg *config.Config, opts Options) error {
 func defaultDeps() runDeps {
 	return runDeps{
 		agentProfile:       defaultAgentProfile,
-		verifyHook:         probeHook,
-		contextModeEnabled: contextModeEnabled,
-		verifyContextMode:  probeContextMode,
+		verifyHook:         ProbeHook,
+		ContextModeEnabled: ContextModeEnabled,
+		verifyContextMode:  ProbeContextMode,
 		startExecd:         startExecd,
 		startShellWrapper:  defaultShellWrapper,
 		reexec:             syscall.Exec,
@@ -383,7 +383,7 @@ func run(cfg *config.Config, opts Options, d runDeps) error {
 	}
 
 	if opts.ContextMode {
-		enabled, cerr := d.contextModeEnabled()
+		enabled, cerr := d.ContextModeEnabled()
 		if cerr != nil {
 			return fmt.Errorf("context-mode check: %w", cerr)
 		}

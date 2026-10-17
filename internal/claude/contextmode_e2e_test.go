@@ -43,7 +43,7 @@ func TestContextModeProbe_AgainstTheRepoProfile(t *testing.T) {
 	// measures the profile rather than `go test`'s cwd.
 	t.Chdir(filepath.Dir(profile))
 
-	if perr := probeContextMode(profile); perr != nil {
+	if perr := ProbeContextMode(profile); perr != nil {
 		t.Fatalf("the repo's agent profile does not satisfy the context-mode probe: %v", perr)
 	}
 }

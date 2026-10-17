@@ -2,10 +2,12 @@ package cli
 
 import (
 	"fmt"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 	"github.com/ynny-github/agent-sandbox/internal/agentconfig"
 	"github.com/ynny-github/agent-sandbox/internal/config"
+	"github.com/ynny-github/agent-sandbox/internal/launch"
 )
 
 var aiCmd = &cobra.Command{
@@ -15,7 +17,7 @@ var aiCmd = &cobra.Command{
 
 var explainCmd = &cobra.Command{
 	Use:   "explain",
-	Short: "Explain how to use the sandbox environment, from the active config",
+	Short: "Explain how to use the sandbox environment",
 	Args:  cobra.NoArgs,
 	RunE:  runExplain,
 }
@@ -38,6 +40,10 @@ var pointerCmd = &cobra.Command{
 
 func init() {
 	aiCmd.AddCommand(pointerCmd)
+	explainCmd.Flags().StringVar(&explainCommandProfile, "command-profile",
+		filepath.Join(launch.Dir, "command-profile.json"), "execd's nono profile")
+	explainCmd.Flags().StringVar(&explainAgentProfile, "agent-profile",
+		filepath.Join(launch.Dir, "claude-profile.json"), "the agent's nono profile")
 	aiCmd.AddCommand(explainCmd)
 	aiCmd.AddCommand(configCheckCmd)
 	rootCmd.AddCommand(aiCmd)
@@ -70,11 +76,12 @@ func runConfigCheck(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// explainCommandProfile and explainAgentProfile name the profiles explain
+// points the agent at; the defaults are where init and the launch template
+// put them.
+var explainCommandProfile, explainAgentProfile string
+
 func runExplain(cmd *cobra.Command, args []string) error {
-	cfg, err := config.Load(configPath)
-	if err != nil {
-		return fmt.Errorf("config error: %w", err)
-	}
-	fmt.Fprint(cmd.OutOrStdout(), agentconfig.Explain(cfg, configPath))
+	fmt.Fprint(cmd.OutOrStdout(), agentconfig.Explain(explainCommandProfile, explainAgentProfile))
 	return nil
 }

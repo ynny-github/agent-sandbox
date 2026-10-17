@@ -5,8 +5,6 @@ import (
 	_ "embed"
 	"strings"
 	"text/template"
-
-	"github.com/ynny-github/agent-sandbox/internal/config"
 )
 
 // Pointer returns the short guidance injected into the agent's system prompt at
@@ -29,15 +27,12 @@ var explainTmpl = template.Must(template.New("explain").Parse(explainTmplText))
 
 // explainView is the data handed to explain.tmpl.
 type explainView struct {
-	// ConfigPath is the config file actually loaded, not the default name: the
-	// agent is being told which file to edit, and --config can move it.
-	ConfigPath string
 	// ProfilePath is the command profile execd runs commands under
-	// (cfg.CommandProfilePath()). agent-sandbox neither generates nor reads its
+	// . agent-sandbox neither generates nor reads its
 	// contents; this is a pointer, not a description.
 	ProfilePath string
 	// AgentProfilePath is the nono profile the launched agent itself runs
-	// under (cfg.AgentProfilePath). Like ProfilePath it is a pointer, not a
+	// under. Like ProfilePath it is a pointer, not a
 	// description: agent-sandbox neither generates nor reads it.
 	AgentProfilePath string
 }
@@ -52,11 +47,10 @@ type explainView struct {
 // and the template points the agent at `nono why` and `nono profile show`
 // instead of restating it — a restatement drifts, and drifts into a confident
 // lie. See docs/superpowers/specs/2026-09-12-git-goes-to-command-policy.md.
-func Explain(cfg *config.Config, configPath string) string {
+func Explain(commandProfile, agentProfile string) string {
 	view := explainView{
-		ConfigPath:       configPath,
-		ProfilePath:      cfg.CommandProfilePath(),
-		AgentProfilePath: cfg.AgentProfilePath("claude"),
+		ProfilePath:      commandProfile,
+		AgentProfilePath: agentProfile,
 	}
 
 	var buf bytes.Buffer

@@ -759,7 +759,7 @@ func TestRun_SetsContextModeEnvBeforeSupervise(t *testing.T) {
 			return "/tmp/asb-profile-1.json", nil
 		},
 		verifyHook:         func(string, string) error { return nil },
-		contextModeEnabled: func() (bool, error) { return true, nil },
+		ContextModeEnabled: func() (bool, error) { return true, nil },
 		verifyContextMode:  func(string) error { return nil },
 		startExecd:         testExecdStart("/tmp/test.sock", nil),
 		startShellWrapper:  testWrapperStart("/tmp/test-norc-bash-1", nil),
@@ -789,7 +789,7 @@ func TestRun_LeavesContextModeEnvUnsetWithoutTheFlag(t *testing.T) {
 			return "/tmp/asb-profile-1.json", nil
 		},
 		verifyHook:         func(string, string) error { return nil },
-		contextModeEnabled: func() (bool, error) { return false, nil },
+		ContextModeEnabled: func() (bool, error) { return false, nil },
 		startExecd:         testExecdStart("/tmp/test.sock", nil),
 		startShellWrapper:  testWrapperStart("/tmp/test-norc-bash-1", nil),
 		supervise: func(string, []string) int {
@@ -814,7 +814,7 @@ func TestRun_ContextModeNotEnabled_DoesNotStartExecd(t *testing.T) {
 			return "/tmp/asb-profile-1.json", nil
 		},
 		verifyHook:         func(string, string) error { return nil },
-		contextModeEnabled: func() (bool, error) { return false, nil },
+		ContextModeEnabled: func() (bool, error) { return false, nil },
 		verifyContextMode:  func(string) error { return nil },
 		startShellWrapper:  testWrapperStart("/tmp/test-norc-bash-1", nil),
 		startExecd: func(*config.Config) (string, string, func(), error) {
@@ -846,7 +846,7 @@ func TestRun_ContextModeCheckSkippedWithoutTheFlag(t *testing.T) {
 			return "/tmp/asb-profile-1.json", nil
 		},
 		verifyHook:         func(string, string) error { return nil },
-		contextModeEnabled: func() (bool, error) { checked = true; return false, nil },
+		ContextModeEnabled: func() (bool, error) { checked = true; return false, nil },
 		startExecd:         testExecdStart("/tmp/test.sock", nil),
 		startShellWrapper:  testWrapperStart("/tmp/test-norc-bash-1", nil),
 		supervise:          func(string, []string) int { return 0 },
@@ -868,7 +868,7 @@ func TestRun_ContextModeProbeFailure_DoesNotLaunch(t *testing.T) {
 			return "/tmp/asb-profile-1.json", nil
 		},
 		verifyHook:         func(string, string) error { return nil },
-		contextModeEnabled: func() (bool, error) { return true, nil },
+		ContextModeEnabled: func() (bool, error) { return true, nil },
 		verifyContextMode: func(string) error {
 			return errors.New("the profile does not forward CONTEXT_MODE_EXEC_BACKEND")
 		},
@@ -896,7 +896,7 @@ func TestRun_ContextModeProbeRunsAfterTheEnvIsSet(t *testing.T) {
 			return "/tmp/asb-profile-1.json", nil
 		},
 		verifyHook:         func(string, string) error { return nil },
-		contextModeEnabled: func() (bool, error) { return true, nil },
+		ContextModeEnabled: func() (bool, error) { return true, nil },
 		verifyContextMode: func(string) error {
 			seen = os.Getenv(ContextModeEnvVar)
 			return nil
@@ -925,7 +925,7 @@ func herdrRun(t *testing.T) (reexeced bool, env []string, started bool) {
 			return "/tmp/asb-profile-1.json", nil
 		},
 		verifyHook:         func(string, string) error { return nil },
-		contextModeEnabled: func() (bool, error) { return false, nil },
+		ContextModeEnabled: func() (bool, error) { return false, nil },
 		startExecd: func(*config.Config) (string, string, func(), error) {
 			started = true
 			return "/tmp/test.sock", testExecdPath, func() {}, nil

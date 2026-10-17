@@ -11,11 +11,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 
-	"github.com/ynny-github/agent-sandbox/internal/config"
 	"github.com/ynny-github/agent-sandbox/internal/execd"
 )
 
@@ -63,22 +61,23 @@ func stubRunCommandEnv(rc func(context.Context, []string, string, ...string) ([]
 }
 
 // configWithBothProfiles writes a config plus both profiles beside it.
-func configWithBothProfiles(t *testing.T, dir string) *config.Config {
+func configWithBothProfiles(t *testing.T, dir string) profiles {
 	t.Helper()
 	for _, name := range []string{"command-profile.json", "claude-profile.json"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte("{}"), 0o600); err != nil {
 			t.Fatalf("write %s: %v", name, err)
 		}
 	}
-	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
-	if err := os.WriteFile(cfgPath, []byte(""), 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-	cfg, err := config.Load(cfgPath)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	return cfg
+	return profiles{agent: filepath.Join(dir, "claude-profile.json"), command: filepath.Join(dir, "command-profile.json")}
+}
+
+// useProfiles points doctor's profile flags at dir's two profiles.
+func useProfiles(t *testing.T, dir string) {
+	t.Helper()
+	prevA, prevC := doctorAgentProfile, doctorCommandProfile
+	doctorAgentProfile = filepath.Join(dir, "claude-profile.json")
+	doctorCommandProfile = filepath.Join(dir, "command-profile.json")
+	t.Cleanup(func() { doctorAgentProfile, doctorCommandProfile = prevA, prevC })
 }
 
 func TestCheckNono_NotInPath(t *testing.T) {
@@ -126,6 +125,9 @@ func stubAllSeamsOK(t *testing.T) {
 		nonoAnswers(nil, "denied"),
 	)
 	t.Setenv("XDG_STATE_HOME", shortStateDir(t))
+	prev := probeHook
+	probeHook = func(string, string) error { return nil }
+	t.Cleanup(func() { probeHook = prev })
 }
 
 func TestDoctorCmd_Registered(t *testing.T) {
@@ -141,10 +143,8 @@ func TestRunDoctor_AllOK(t *testing.T) {
 	stubAllSeamsOK(t)
 
 	dir := t.TempDir()
-	configWithBothProfiles(t, dir) // writes dir/agent-sandbox.toml
-	origConfigPath := configPath
-	configPath = filepath.Join(dir, "agent-sandbox.toml")
-	t.Cleanup(func() { configPath = origConfigPath })
+	configWithBothProfiles(t, dir)
+	useProfiles(t, dir)
 	// The execd binary in a `go test` run is a temp binary outside dir, so it
 	// is never covered by the profile's filesystem.allow above.
 	restoreSelf := stubSelfPath(filepath.Join(t.TempDir(), "agent-sandbox"))
@@ -175,9 +175,7 @@ func TestRunDoctor_NonoNG(t *testing.T) {
 
 	dir := t.TempDir()
 	configWithBothProfiles(t, dir)
-	origConfigPath := configPath
-	configPath = filepath.Join(dir, "agent-sandbox.toml")
-	t.Cleanup(func() { configPath = origConfigPath })
+	useProfiles(t, dir)
 	restoreSelf := stubSelfPath(filepath.Join(t.TempDir(), "agent-sandbox"))
 	defer restoreSelf()
 	restoreEnv := stubRunCommandEnv(func(context.Context, []string, string, ...string) ([]byte, error) {
@@ -207,9 +205,7 @@ func TestRunDoctor_RunsAllChecksEvenOnEarlyFailure(t *testing.T) {
 
 	dir := t.TempDir()
 	configWithBothProfiles(t, dir)
-	origConfigPath := configPath
-	configPath = filepath.Join(dir, "agent-sandbox.toml")
-	t.Cleanup(func() { configPath = origConfigPath })
+	useProfiles(t, dir)
 	restoreSelf := stubSelfPath(filepath.Join(t.TempDir(), "agent-sandbox"))
 	defer restoreSelf()
 	restoreEnv := stubRunCommandEnv(func(context.Context, []string, string, ...string) ([]byte, error) {
@@ -226,47 +222,6 @@ func TestRunDoctor_RunsAllChecksEvenOnEarlyFailure(t *testing.T) {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("output missing section %q:\n%s", want, buf.String())
 		}
-	}
-}
-
-// A missing command profile is config.Load's headline failure
-// (config.go:204 requires the file to exist before anything else about the
-// config can be trusted), so this is the case doctor most needs to get
-// right — and until config.Load started returning cfg alongside
-// ErrCommandProfileMissing, runDoctor's cfgErr branch could not reach
-// checkProfiles at all here, so this exact scenario always fell back
-// to the generic "fix the config first" hint instead of the dedicated one.
-func TestRunDoctor_MissingCommandProfileReportsActionableHint(t *testing.T) {
-	stubAllSeamsOK(t)
-
-	dir := t.TempDir()
-	missing := filepath.Join(dir, "command-profile.json") // never written
-	if err := os.WriteFile(filepath.Join(dir, "claude-profile.json"), []byte("{}"), 0o600); err != nil {
-		t.Fatalf("write claude profile: %v", err)
-	}
-	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
-	body := "command_profile = " + strconv.Quote(missing) + "\n"
-	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-	origConfigPath := configPath
-	configPath = cfgPath
-	t.Cleanup(func() { configPath = origConfigPath })
-
-	var buf bytes.Buffer
-	doctorCmd.SetOut(&buf)
-	t.Cleanup(func() { doctorCmd.SetOut(nil) })
-
-	err := runDoctor(doctorCmd, nil)
-	if !errors.Is(err, errDoctorChecksFailed) {
-		t.Fatalf("expected errDoctorChecksFailed, got %v", err)
-	}
-	out := buf.String()
-	if !strings.Contains(out, "write the profile, or point command_profile at it") {
-		t.Errorf("output missing checkProfiles's dedicated hint:\n%s", out)
-	}
-	if strings.Contains(out, "fix the config first") {
-		t.Errorf("output still uses the generic cfgErr hint for the missing-profile case:\n%s", out)
 	}
 }
 
@@ -397,18 +352,9 @@ func TestRenderResults_Mixed(t *testing.T) {
 	}
 }
 
-func configWithProfile(t *testing.T, dir, profile string) *config.Config {
+func configWithProfile(t *testing.T, dir, profile string) profiles {
 	t.Helper()
-	cfgPath := filepath.Join(dir, "agent-sandbox.toml")
-	body := "command_profile = " + strconv.Quote(profile) + "\n"
-	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-	cfg, err := config.Load(cfgPath)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	return cfg
+	return profiles{agent: filepath.Join(dir, "claude-profile.json"), command: profile}
 }
 
 // stubSelfPath pins agent-sandbox's own path, and execd's beside it: both
@@ -565,12 +511,8 @@ func TestCheckProfiles_FailsWhenTheFileIsMissing(t *testing.T) {
 	})
 	defer restoreRun()
 
-	// config.Load itself already refuses a missing profile (validate's
-	// ErrCommandProfileMissing) — see TestRunDoctor_MissingCommandProfileReportsActionableHint
-	// for that path through runDoctor. Build the *Config while the file still
-	// exists, then remove it, to exercise checkProfiles's own
-	// defensive os.Stat directly here — covering the window between Load
-	// succeeding and the profile disappearing before launch.
+	// runDoctor stops earlier on a missing profile (profileFilesExist); this
+	// drives checkProfiles directly to pin its own defensive os.Stat.
 	cfg := configWithProfile(t, dir, present)
 	if err := os.Remove(present); err != nil {
 		t.Fatalf("remove profile: %v", err)
@@ -734,8 +676,8 @@ func TestCheckProfiles_FailsWhenTheAgentProfileIsRejected(t *testing.T) {
 	if got.ok {
 		t.Fatal("checkProfiles ok = true, want false when nono rejects the agent profile")
 	}
-	if !strings.Contains(got.hint, "[agents.claude].profile") {
-		t.Errorf("hint = %q, want it to point at the config field that names the profile", got.hint)
+	if !strings.Contains(got.hint, cfg.agent) {
+		t.Errorf("hint = %q, want it to name the rejected profile %s", got.hint, cfg.agent)
 	}
 }
 
@@ -1263,5 +1205,33 @@ func TestCheckProfiles_FailsWhenExecdIsNotOnPath(t *testing.T) {
 	}
 	if !strings.Contains(got.hint, "cmd/execd@latest") {
 		t.Errorf("hint = %q, want the install command", got.hint)
+	}
+}
+
+func TestDoctor_MissingProfilesPointAtInit(t *testing.T) {
+	t.Chdir(t.TempDir())
+	r := profileFilesExist(profiles{
+		agent:   filepath.Join(".agent-sandbox", "claude-profile.json"),
+		command: filepath.Join(".agent-sandbox", "command-profile.json"),
+	})
+	if r.ok || !strings.Contains(r.hint, "agent-sandbox init") {
+		t.Errorf("result = %+v, want a failure pointing at agent-sandbox init", r)
+	}
+}
+
+func TestCheckHook_ReportsAProbeFailure(t *testing.T) {
+	prev := probeHook
+	probeHook = func(string, string) error { return errors.New("hook did not run") }
+	t.Cleanup(func() { probeHook = prev })
+	defer stubSelfPath("/usr/local/bin/agent-sandbox")()
+	if r := checkHook(profiles{agent: "a.json"}); r.ok || !strings.Contains(strings.Join(r.details, "\n"), "hook did not run") {
+		t.Errorf("checkHook() = %+v, want the probe error", r)
+	}
+}
+
+func TestCheckContextMode_SkippedWithoutTheVariable(t *testing.T) {
+	t.Setenv(claude.ContextModeEnvVar, "")
+	if r := checkContextMode(profiles{agent: "a.json"}); !r.ok {
+		t.Errorf("checkContextMode() without %s = %+v, want ok", claude.ContextModeEnvVar, r)
 	}
 }

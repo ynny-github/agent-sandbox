@@ -18,8 +18,8 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/ynny-github/agent-sandbox/internal/claude"
-	"github.com/ynny-github/agent-sandbox/internal/config"
 	"github.com/ynny-github/agent-sandbox/internal/execd"
+	"github.com/ynny-github/agent-sandbox/internal/launch"
 )
 
 var errDoctorChecksFailed = errors.New("doctor: checks failed")
@@ -31,7 +31,24 @@ var doctorCmd = &cobra.Command{
 	RunE:          runDoctor,
 }
 
+// profiles are the two nono profiles doctor checks.
+type profiles struct{ agent, command string }
+
+var doctorCommandProfile, doctorAgentProfile string
+
+// probeHook and the context-mode probes are vars so tests can stand in for
+// the real nono and claude.
+var (
+	probeHook          = claude.ProbeHook
+	contextModeEnabled = claude.ContextModeEnabled
+	probeContextMode   = claude.ProbeContextMode
+)
+
 func init() {
+	doctorCmd.Flags().StringVar(&doctorCommandProfile, "command-profile",
+		filepath.Join(launch.Dir, "command-profile.json"), "execd's nono profile")
+	doctorCmd.Flags().StringVar(&doctorAgentProfile, "agent-profile",
+		filepath.Join(launch.Dir, "claude-profile.json"), "the agent's nono profile")
 	rootCmd.AddCommand(doctorCmd)
 }
 
@@ -41,27 +58,16 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		ctx = context.Background()
 	}
 
-	cfg, cfgErr := config.Load(configPath)
+	p := profiles{agent: doctorAgentProfile, command: doctorCommandProfile}
 	results := []checkResult{
 		checkNono(ctx),
 		checkToolSandbox(ctx),
 		checkExecdSocketDir(),
 	}
-	switch {
-	case cfgErr == nil, errors.Is(cfgErr, config.ErrCommandProfileMissing) && cfg != nil:
-		// config.Load returns cfg alongside ErrCommandProfileMissing
-		// specifically (unlike every other validate failure, which leaves cfg
-		// nil), so checkProfiles can still run and report its own
-		// dedicated, actionable hint ("write the profile, or point
-		// command_profile at it") instead of the generic one below, which the
-		// os.Stat check in validate (internal/config/config.go) made otherwise
-		// unreachable for this, the headline case doctor exists to catch.
-		results = append(results, checkProfiles(ctx, cfg), checkProfilePaths(ctx, cfg))
-	default:
-		results = append(results, checkResult{
-			name: "profiles",
-			hint: "fix the config first: " + cfgErr.Error(),
-		})
+	if r := profileFilesExist(p); !r.ok {
+		results = append(results, r)
+	} else {
+		results = append(results, checkProfiles(ctx, p), checkProfilePaths(ctx, p), checkHook(p), checkContextMode(p))
 	}
 	renderResults(cmd.OutOrStdout(), results)
 	for _, r := range results {
@@ -429,21 +435,20 @@ var execdPath = claude.ResolveExecd
 // Each failure otherwise produces a session that refuses every command with an
 // error the agent cannot act on: nono's own failure arrives on execd's
 // stderr long after the launcher has returned.
-func checkProfiles(ctx context.Context, cfg *config.Config) checkResult {
+func checkProfiles(ctx context.Context, p profiles) checkResult {
 	r := checkResult{name: "profiles"}
-	agentPath := cfg.AgentProfilePath("claude")
-	cmdPath := cfg.CommandProfilePath()
+	agentPath := p.agent
+	cmdPath := p.command
 	r.details = append(r.details, "agent profile: "+agentPath, "command profile: "+cmdPath)
 
 	if err := validateProfile(agentPath); err != nil {
 		r.details = append(r.details, "agent profile: "+err.Error())
-		r.hint = "write the agent profile, or point [agents.claude].profile at it, " +
-			"until `nono profile validate` passes"
+		r.hint = "edit " + agentPath + " until `nono profile validate` passes"
 		return r
 	}
 	if err := validateProfile(cmdPath); err != nil {
 		r.details = append(r.details, "command profile: "+err.Error())
-		r.hint = "write the profile, or point command_profile at it"
+		r.hint = "edit " + cmdPath + " until `nono profile validate` passes"
 		return r
 	}
 
@@ -759,9 +764,9 @@ func expandHome(p string) string {
 // produce either state. This check is what makes that loud — without
 // drowning out the signal on a healthy host that happens to carry
 // non-NixOS candidates it will never use.
-func checkProfilePaths(ctx context.Context, cfg *config.Config) checkResult {
+func checkProfilePaths(ctx context.Context, p profiles) checkResult {
 	r := checkResult{name: "profile paths"}
-	profilePath := cfg.CommandProfilePath()
+	profilePath := p.command
 
 	pinned, err := commandPolicyPaths(ctx, profilePath)
 	if err != nil {
@@ -864,4 +869,64 @@ func renderResults(w io.Writer, results []checkResult) {
 	} else {
 		fmt.Fprintf(w, "doctor: %d of %d checks failed\n", failed, len(results))
 	}
+}
+
+// profileFilesExist fails with the init hint when either profile is missing.
+func profileFilesExist(p profiles) checkResult {
+	r := checkResult{name: "profiles"}
+	for _, path := range []string{p.agent, p.command} {
+		if _, err := os.Stat(path); err != nil {
+			r.details = append(r.details, err.Error())
+			r.hint = "run `agent-sandbox init`, or pass --agent-profile/--command-profile"
+			return r
+		}
+	}
+	r.ok = true
+	return r
+}
+
+// checkHook proves the PreToolUse hook runs under the agent profile. A hook
+// that cannot start is a non-blocking error to Claude Code, and the command
+// then runs unwrapped, outside execd, with nothing on screen.
+func checkHook(p profiles) checkResult {
+	r := checkResult{name: "hook"}
+	self, err := selfPath()
+	if err != nil {
+		r.details = append(r.details, err.Error())
+		r.hint = "investigate why os.Executable() failed"
+		return r
+	}
+	if resolved, rerr := filepath.EvalSymlinks(self); rerr == nil {
+		self = resolved
+	}
+	if err := probeHook(p.agent, self); err != nil {
+		r.details = append(r.details, err.Error())
+		r.hint = "grant agent-sandbox to the agent (the launch script's --read-file does) and keep the profile able to run it"
+		return r
+	}
+	r.ok = true
+	return r
+}
+
+// checkContextMode runs only when the environment selects context-mode's
+// execd backend, as a launch script exporting the variable does.
+func checkContextMode(p profiles) checkResult {
+	r := checkResult{name: "context-mode"}
+	if os.Getenv(claude.ContextModeEnvVar) == "" {
+		r.ok = true
+		r.details = append(r.details, "not selected ("+claude.ContextModeEnvVar+" unset)")
+		return r
+	}
+	if enabled, err := contextModeEnabled(); err != nil || !enabled {
+		r.details = append(r.details, fmt.Sprintf("plugin enabled: %v (err %v)", enabled, err))
+		r.hint = "install and enable the context-mode plugin, or stop exporting " + claude.ContextModeEnvVar
+		return r
+	}
+	if err := probeContextMode(p.agent); err != nil {
+		r.details = append(r.details, err.Error())
+		r.hint = "forward " + claude.ContextModeEnvVar + " and let the agent profile run node"
+		return r
+	}
+	r.ok = true
+	return r
 }

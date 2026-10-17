@@ -76,38 +76,18 @@ whichever sandbox it runs in — its own if it is declared, execd's own grants i
 it is not — and never by argv rules. Ask nono which of the two it is, and what
 that sandbox grants, before assuming otherwise.
 
-## Changing the config
-`{{.ConfigPath}}` names two nono profiles; you may edit all three files.
+## Changing the sandbox
+Both profiles live in `.agent-sandbox/`, beside the launch scripts in
+`.agent-sandbox/bin/`.
 
 - Your own sandbox — this process, its file tools, and any MCP server it spawns
   as a direct child — is `{{.AgentProfilePath}}`.
 - The sandbox every shell command runs in is `{{.ProfilePath}}`.
 
-Both are written in nono's own schema. agent-sandbox neither generates nor reads
-either one; it hands each path to nono.
+Both are written in nono's own schema; agent-sandbox hands each path to nono.
 
-Editing **does not affect the current session**: both profiles are read once, at
-session start. An edit takes effect the next time the operator runs
-`agent-sandbox claude`. After editing, run `agent-sandbox ai config-check` — it
-hands both profiles to `nono profile validate`. `agent-sandbox doctor` goes
-further: it adds the execd-socket probe, probes whether the nono on this host
-can start Tool Sandbox at all (an unpatched nono on NixOS cannot, even though
-`nono --version` still answers fine), asks nono whether the command profile
-leaves execd's own binary writable, and checks that the paths the profile
-pins still exist on this host.
-
-Schema:
-
-```toml
-command_profile = "command-profile.json" # default name; shared by every agent
-
-[agents.claude]
-profile = "claude-profile.json"          # default name: "<agent>-profile.json"
-```
-
-Both profile paths resolve beside `{{.ConfigPath}}` unless written absolute.
-
-A user-scope config at `~/.config/agent-sandbox/config.toml` is composed with
-this file: every value the project file sets wins, and an agent the user-scope
-file declares alone still applies. If a profile path you did not write shows up
-in `agent-sandbox ai config-check`, it comes from there.
+Editing **does not affect the current session**: the session runs from a copy
+of `.agent-sandbox/` the operator approved. The next `agent-sandbox launch`
+shows the operator your change and asks before using it. `agent-sandbox doctor`
+validates both profiles, probes that the hook runs under your profile, and
+asks nono whether execd's binary is writable from the command profile.

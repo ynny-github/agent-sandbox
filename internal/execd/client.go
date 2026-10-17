@@ -31,7 +31,7 @@ func NewClient(sockPath string) *Client { return &Client{sockPath: sockPath} }
 
 // NewClientFromEnv builds a client from SocketEnvVar. It returns
 // ErrExecdUnavailable when the variable is unset, which happens whenever a
-// command is routed to the sandbox outside an `agent-sandbox claude` session.
+// command is routed to the sandbox outside an `agent-sandbox launch` session.
 func NewClientFromEnv() (*Client, error) {
 	path := os.Getenv(SocketEnvVar)
 	if path == "" {
@@ -194,4 +194,4 @@ func workingDir() string {
 // command runs: `execd exec` and the MCP server both fail to build a
 // client when AGENT_SANDBOX_EXECD_SOCKET is unset, and must print this rather
 // than a raw dial error.
-const SandboxNotRunningHint = "exec daemon is not available; run Claude via `agent-sandbox claude`, which starts it automatically"
+const SandboxNotRunningHint = "exec daemon is not available; start the agent with `agent-sandbox launch claude`, or point AGENT_SANDBOX_EXECD_SOCKET at the socket `execd up` printed"

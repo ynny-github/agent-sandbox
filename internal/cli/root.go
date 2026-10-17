@@ -5,11 +5,7 @@ import (
 	"runtime/debug"
 
 	"github.com/spf13/cobra"
-	"github.com/ynny-github/agent-sandbox/internal/envflag"
 )
-
-var configPath string
-var envRefs []string
 
 func buildVersion() string {
 	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" {
@@ -19,27 +15,16 @@ func buildVersion() string {
 }
 
 var rootCmd = &cobra.Command{
-	Use:               "agent-sandbox",
-	Short:             "Run an AI coding agent in a nono sandbox and run its commands through execd",
-	SilenceUsage:      true,
-	PersistentPreRunE: applyPersistentEnv,
+	Use:          "agent-sandbox",
+	Short:        "Sandbox helpers for running an AI coding agent under nono with execd",
+	SilenceUsage: true,
 }
 
 func Execute() error {
 	return rootCmd.Execute()
 }
 
-func init() {
-	rootCmd.PersistentFlags().StringVar(&configPath, "config", "agent-sandbox.toml", "path to TOML config file")
-	rootCmd.PersistentFlags().StringArrayVar(&envRefs, "env", nil,
-		"load env vars from a source into the process (repeatable), e.g. --env file:.env")
-}
-
 // applyPersistentEnv loads the --env sources into the process environment for
 // normal (flag-parsed) commands such as `exec`. Commands that disable flag
 // parsing (claude, debug) leave envRefs empty here and apply --env themselves
 // from their own argument parsing.
-func applyPersistentEnv(cmd *cobra.Command, args []string) error {
-	_, err := envflag.Load(envRefs)
-	return err
-}

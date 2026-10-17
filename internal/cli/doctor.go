@@ -231,7 +231,7 @@ func checkNono(ctx context.Context) checkResult {
 
 // checkExecdSocketDir verifies a socket can be created under execd's session
 // root, where `execd up` creates sessions. A failure here means
-// `agent-sandbox claude` cannot start execd, so every sandboxed command would
+// `execd up` cannot start execd, so every sandboxed command would
 // fail.
 //
 // os.MkdirAll alone is not sufficient: it returns nil for a directory that

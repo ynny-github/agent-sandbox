@@ -67,7 +67,8 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	if r := profileFilesExist(p); !r.ok {
 		results = append(results, r)
 	} else {
-		results = append(results, checkProfiles(ctx, p), checkProfilePaths(ctx, p), checkHook(p), checkContextMode(p))
+		results = append(results, checkProfiles(ctx, p), checkProfilePaths(ctx, p), checkHook(p), checkContextMode(p),
+			checkApprovedCopy(ctx, p))
 	}
 	renderResults(cmd.OutOrStdout(), results)
 	for _, r := range results {
@@ -925,6 +926,41 @@ func checkContextMode(p profiles) checkResult {
 	if err := probeContextMode(p.agent); err != nil {
 		r.details = append(r.details, err.Error())
 		r.hint = "forward " + claude.ContextModeEnvVar + " and let the agent profile run node"
+		return r
+	}
+	r.ok = true
+	return r
+}
+
+// checkApprovedCopy fails when the agent profile can write the copy of
+// .agent-sandbox/ that `agent-sandbox launch` runs. Claude's own file tools run
+// under the agent profile, not through the hook, so such a grant would let the
+// agent change what the next launch runs with no prompt. launch itself checks
+// the command profile; only doctor knows the agent profile.
+func checkApprovedCopy(ctx context.Context, p profiles) checkResult {
+	r := checkResult{name: "approved copy"}
+	wd, err := os.Getwd()
+	if err != nil {
+		r.details = append(r.details, err.Error())
+		r.hint = "run doctor from the project directory"
+		return r
+	}
+	dir, err := launch.TrustedDir(wd)
+	if err != nil {
+		r.details = append(r.details, err.Error())
+		r.hint = "set HOME or XDG_CONFIG_HOME"
+		return r
+	}
+	r.details = append(r.details, "copy: "+dir)
+	writable, err := claude.ProfileAllowsWrite(ctx, runCommand, p.agent, dir)
+	if err != nil {
+		r.details = append(r.details, err.Error())
+		r.hint = "could not ask nono whether the agent profile can write " + dir
+		return r
+	}
+	if writable {
+		r.hint = "the agent profile grants write access to " + dir + ", which launch runs from; " +
+			"narrow the grant (`nono why --profile " + p.agent + " --path " + dir + " --op write` names it)"
 		return r
 	}
 	r.ok = true

@@ -171,3 +171,17 @@ func TestTemplateLaunchFilesAreExecutable(t *testing.T) {
 		}
 	}
 }
+
+// doctor checks context-mode only when CONTEXT_MODE_EXEC_BACKEND is set, so
+// the template must export it (when uncommented) before it runs doctor.
+func TestTemplateSelectsContextModeBeforeDoctor(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join(repoRoot(t), "templates", "minimal", ".agent-sandbox", "bin", "claude"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(body)
+	cm, doc := strings.Index(s, "CONTEXT_MODE_EXEC_BACKEND=execd"), strings.Index(s, "agent-sandbox doctor")
+	if cm < 0 || doc < 0 || cm > doc {
+		t.Errorf("the context-mode export (at %d) must come before `agent-sandbox doctor` (at %d)", cm, doc)
+	}
+}

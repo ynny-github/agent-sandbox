@@ -3,11 +3,13 @@
 package launch_test
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ynny-github/agent-sandbox/internal/launch"
 )
@@ -52,7 +54,21 @@ func TestLaunch_TemplateRoutesACommandThroughExecd(t *testing.T) {
 	if err := os.Mkdir(fakeBin, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	fake := "#!/bin/sh\nexecd exec -- echo routed-ok > \"$PWD/result\"\n"
+	// It also checks, from inside the agent sandbox, that the hook settings it
+	// was given are usable: inline JSON, or a file it can read. A settings file
+	// the sandbox cannot read would leave Claude without the hook.
+	fake := `#!/bin/sh
+settings=""
+while [ $# -gt 0 ]; do
+  if [ "$1" = --settings ]; then settings=$2; fi
+  shift
+done
+case "$settings" in
+  "{"*) ;;
+  *) cat "$settings" >/dev/null || { echo "settings unreadable: $settings" > "$PWD/result"; exit 1; } ;;
+esac
+execd exec -- echo routed-ok > "$PWD/result"
+`
 	if err := os.WriteFile(filepath.Join(fakeBin, "claude"), []byte(fake), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -68,15 +84,19 @@ func TestLaunch_TemplateRoutesACommandThroughExecd(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(trusted) })
-	run := exec.Command("script", "-qec", "agent-sandbox launch claude", "/dev/null")
+	// Bounded: a failing launch can leave nono waiting, and a hung e2e test
+	// would leave its sessions behind.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	run := exec.CommandContext(ctx, "script", "-qec", "agent-sandbox launch claude", "/dev/null")
 	run.Dir = proj
 	run.Env = append(os.Environ(), "PATH="+fakeBin+":"+bin+":"+os.Getenv("PATH"))
 	run.Stdin = strings.NewReader("y\n")
 	out, err := run.CombinedOutput()
-	if err != nil {
-		t.Fatalf("launch: %v\n%s", err, out)
-	}
 	got, _ := os.ReadFile(filepath.Join(proj, "result"))
+	if err != nil {
+		t.Fatalf("launch: %v\nresult: %s\n%s", err, got, out)
+	}
 	if strings.TrimSpace(string(got)) != "routed-ok" {
 		t.Errorf("result = %q, want routed-ok\n%s", got, out)
 	}

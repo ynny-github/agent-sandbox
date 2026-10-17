@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 // Dir is the project directory a launch is made of.
@@ -54,6 +55,10 @@ func TrustedDir(project string) (string, error) {
 	return filepath.Join(base, "agent-sandbox", "trusted", hex.EncodeToString(sum[:])[:16]), nil
 }
 
+// afterRead runs right after the project tree is read; tests use it to change
+// the directory between the read and the prompt.
+var afterRead = func() {}
+
 type file struct {
 	data []byte
 	exec bool
@@ -75,6 +80,7 @@ func Run(name string, args []string, o Options) error {
 	if err != nil {
 		return err
 	}
+	afterRead()
 	if f, ok := cur[filepath.Join("bin", name)]; !ok || !f.exec {
 		return fmt.Errorf("%s/bin/%s is not an executable file", Dir, name)
 	}
@@ -86,15 +92,23 @@ func Run(name string, args []string, o Options) error {
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	if diff := describe(old, cur, trusted, src); diff != "" {
-		ok, err := o.Prompt(diff)
+	if changes := summarize(old, cur); changes != "" {
+		// The diff is taken against a staging copy written from the tree just
+		// read, never against the project directory again: a concurrent writer
+		// must not be able to show one version and have another approved.
+		staging, err := writeTree(trusted, cur)
+		if err != nil {
+			return fmt.Errorf("stage the copy: %w", err)
+		}
+		defer os.RemoveAll(staging)
+		ok, err := o.Prompt(sanitize(changes + "\n" + diffTrees(trusted, old, staging, cur)))
 		if err != nil {
 			return fmt.Errorf("%s/ changed and needs approval: %w", Dir, err)
 		}
 		if !ok {
 			return ErrDeclined
 		}
-		if err := replaceTree(trusted, cur); err != nil {
+		if err := swapIn(trusted, staging); err != nil {
 			return fmt.Errorf("store the approved copy: %w", err)
 		}
 	}
@@ -146,9 +160,9 @@ func readTree(root string) (map[string]file, error) {
 	return tree, err
 }
 
-// describe returns "" when old and cur match, else a summary of added,
-// removed and changed files followed by `diff -ru` output when available.
-func describe(old, cur map[string]file, oldRoot, curRoot string) string {
+// summarize returns "" when old and cur match, else one line per added,
+// removed and changed file.
+func summarize(old, cur map[string]file) string {
 	var lines []string
 	for _, p := range sortedKeys(cur) {
 		o, ok := old[p]
@@ -167,17 +181,50 @@ func describe(old, cur map[string]file, oldRoot, curRoot string) string {
 	if len(lines) == 0 {
 		return ""
 	}
-	out := strings.Join(lines, "\n") + "\n"
-	if old != nil {
-		if d, err := exec.Command("diff", "-ru", oldRoot, curRoot).Output(); len(d) > 0 || err == nil {
-			out += "\n" + string(d)
-		}
-	} else {
-		for _, p := range sortedKeys(cur) {
-			out += fmt.Sprintf("\n--- %s\n%s", p, cur[p].data)
+	return strings.Join(lines, "\n") + "\n"
+}
+
+// diffTrees shows the content of every change: `diff -ruN` between the
+// approved copy (or nothing, on the first launch) and the staging copy, so an
+// added file's content is shown too. Without diff, the added and changed
+// files are printed whole.
+func diffTrees(oldRoot string, old map[string]file, staging string, cur map[string]file) string {
+	if old == nil {
+		empty, err := os.MkdirTemp("", "agent-sandbox-empty-")
+		if err == nil {
+			defer os.RemoveAll(empty)
+			oldRoot = empty
 		}
 	}
-	return out
+	out, err := exec.Command("diff", "-ruN", oldRoot, staging).Output()
+	if errors.Is(err, exec.ErrNotFound) {
+		var b strings.Builder
+		for _, p := range sortedKeys(cur) {
+			if o, ok := old[p]; !ok || !bytes.Equal(o.data, cur[p].data) {
+				fmt.Fprintf(&b, "--- %s\n%s\n", p, cur[p].data)
+			}
+		}
+		return b.String()
+	}
+	return string(out)
+}
+
+// sanitize makes every control character other than newline and tab visible,
+// so content written by a sandboxed command cannot move the cursor or
+// overwrite a line of the diff the user is approving.
+func sanitize(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r == '\n' || r == '\t':
+			b.WriteRune(r)
+		case unicode.IsControl(r):
+			fmt.Fprintf(&b, "\\x%02x", r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 func sortedKeys(m map[string]file) []string {
@@ -189,35 +236,41 @@ func sortedKeys(m map[string]file) []string {
 	return keys
 }
 
-// replaceTree writes tree into a fresh directory beside dst and swaps it in.
-func replaceTree(dst string, tree map[string]file) error {
+// writeTree writes tree into a fresh directory beside dst and returns it.
+func writeTree(dst string, tree map[string]file) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-		return err
+		return "", err
 	}
 	tmp, err := os.MkdirTemp(filepath.Dir(dst), filepath.Base(dst)+".new-")
 	if err != nil {
-		return err
+		return "", err
 	}
-	defer os.RemoveAll(tmp)
 	for rel, f := range tree {
 		p := filepath.Join(tmp, rel)
 		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
-			return err
+			os.RemoveAll(tmp)
+			return "", err
 		}
 		mode := os.FileMode(0o600)
 		if f.exec {
 			mode = 0o700
 		}
 		if err := os.WriteFile(p, f.data, mode); err != nil {
-			return err
+			os.RemoveAll(tmp)
+			return "", err
 		}
 	}
+	return tmp, nil
+}
+
+// swapIn replaces dst with the staged directory.
+func swapIn(dst, staged string) error {
 	old := dst + ".old"
 	os.RemoveAll(old)
 	if err := os.Rename(dst, old); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	if err := os.Rename(tmp, dst); err != nil {
+	if err := os.Rename(staged, dst); err != nil {
 		os.Rename(old, dst)
 		return err
 	}

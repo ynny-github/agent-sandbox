@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/ynny-github/agent-sandbox/internal/execd"
+	"github.com/ynny-github/agent-sandbox/internal/launch"
 )
 
 // shortStateDir returns a fresh, short-named temp directory suitable for
@@ -1233,5 +1234,32 @@ func TestCheckContextMode_SkippedWithoutTheVariable(t *testing.T) {
 	t.Setenv(claude.ContextModeEnvVar, "")
 	if r := checkContextMode(profiles{agent: "a.json"}); !r.ok {
 		t.Errorf("checkContextMode() without %s = %+v, want ok", claude.ContextModeEnvVar, r)
+	}
+}
+
+// Claude's own file tools run under the agent profile, not through the hook,
+// so an agent profile that can write the approved copy could change what the
+// next launch runs without any prompt.
+func TestCheckApprovedCopy_FailsWhenTheAgentProfileCanWriteIt(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	wd, _ := os.Getwd()
+	trusted, err := launch.TrustedDir(wd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stubRunCommand(nonoWritable(trusted))()
+	r := checkApprovedCopy(context.Background(), profiles{agent: "a.json", command: "c.json"})
+	if r.ok || !strings.Contains(r.hint, trusted) {
+		t.Errorf("checkApprovedCopy() = %+v, want a failure naming %s", r, trusted)
+	}
+}
+
+func TestCheckApprovedCopy_PassesWhenDenied(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	defer stubRunCommand(nonoAnswers(nil, "denied"))()
+	if r := checkApprovedCopy(context.Background(), profiles{agent: "a.json", command: "c.json"}); !r.ok {
+		t.Errorf("checkApprovedCopy() = %+v, want ok", r)
 	}
 }

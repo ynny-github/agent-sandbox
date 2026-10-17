@@ -5,6 +5,9 @@
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd)
 
+# Uncomment to run context-mode's code through execd; doctor then checks it.
+# export CONTEXT_MODE_EXEC_BACKEND=execd   # context-mode's execd backend
+
 agent-sandbox doctor --command-profile "$here/command-profile.json" \
   --agent-profile "$here/claude-profile.json"
 
@@ -14,8 +17,9 @@ trap 'execd down "$sock"' EXIT
 export AGENT_SANDBOX_EXECD_SOCKET="$sock"
 export CLAUDE_CODE_SHELL="$here/bash"
 export HERDR_AGENT=claude   # tells herdr the pane runs claude; drop if unused
-# export CONTEXT_MODE_EXEC_BACKEND=execd   # context-mode's execd backend
 
+# The hook settings are passed inline: the approved copy they live in is not
+# readable inside the agent's sandbox.
 # In a git worktree, also grant the main repository's .git:
 #   --allow "$(git rev-parse --path-format=absolute --git-common-dir)"
 nono run --allow-cwd --profile "$here/claude-profile.json" \
@@ -23,5 +27,5 @@ nono run --allow-cwd --profile "$here/claude-profile.json" \
   --read-file "$(realpath "$(command -v execd)")" \
   --read-file "$here/bash" \
   --allow-unix-socket "$sock" \
-  -- claude --settings "$here/settings.json" \
+  -- claude --settings "$(cat "$here/settings.json")" \
      --append-system-prompt "$(agent-sandbox ai pointer)" "$@"

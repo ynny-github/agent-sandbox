@@ -45,8 +45,8 @@ changed, and this document does not track it.
 
 Neither command reports environment variables: `nono profile show` does not print
 `environment.allow_vars`. If a variable is not arriving, read that list in the
-file itself. `agent-sandbox doctor` measures the one that matters most,
-`AGENT_SANDBOX_EXECD_SOCKET`, without which nothing reaches execd at all.
+file itself. The one that matters most is `AGENT_SANDBOX_EXECD_SOCKET`:
+without it, nothing reaches execd at all.
 
 ## Reading a failure
 - **Exit 126 with a reason naming `command_policies`** — a policy denial. The
@@ -89,5 +89,5 @@ Both are written in nono's own schema; agent-sandbox hands each path to nono.
 Editing **does not affect the current session**: the session runs from a copy
 of `.agent-sandbox/` the operator approved. The next `agent-sandbox launch`
 shows the operator your change and asks before using it. `agent-sandbox doctor`
-validates both profiles, probes that the hook runs under your profile, and
-asks nono whether execd's binary is writable from the command profile.
+probes that the hook runs under your profile and asks nono that neither the
+binaries nor the approved copy are writable from the sandbox.

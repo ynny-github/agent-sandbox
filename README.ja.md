@@ -30,7 +30,10 @@ agent-sandbox launch claude → .agent-sandbox/bin/claude (あなたのスクリ
 - Go 1.25 以降 (ソースからビルドする場合)
 - `PATH` の通った `claude` — `init` が書き出す起動スクリプト `claude` を使う場合
 
-`agent-sandbox doctor` で確認できます。
+起動に失敗したときやコマンドが拒否されたときは、nono に直接聞いてください。
+読み込めないプロファイルには `nono profile validate <profile>`、プロファイルが何を
+許可しているかには `nono why --profile <profile> --path <p> --op read|write`
+(または `--command <name>`) を使います。
 
 ## インストール
 
@@ -160,7 +163,7 @@ execd 自身のビルトインは 3 つ目の扱いで、execd プロセスの�
 |---|---|
 | `agent-sandbox init` | バイナリに埋め込まれた `.agent-sandbox/` とプロファイル用 skill をこのプロジェクトに書き出す。上書きはしない |
 | `agent-sandbox launch <name> [引数...]` | `.agent-sandbox/` の変更を承認したうえで `.agent-sandbox/bin/<name>` を実行する。実行されるのは承認済みの写し |
-| `agent-sandbox doctor` | 起動が依存するものを一通り確認: サンドボックスエンジン、execd ソケット、両プロファイルとそれが固定しているパス、フックがエージェントプロファイルで動くこと、コマンドプロファイルが `execd` と `agent-sandbox` のどちらも書き込み可能にしていないこと、そしてエージェントプロファイルが `launch` の実行する承認済みの写しに書き込めないこと。`--command-profile`/`--agent-profile` の既定は `.agent-sandbox/`。終了コード 0 / 1 |
+| `agent-sandbox doctor` | 起動が安全かを確認: フックがエージェントプロファイルで動くこと、コマンドプロファイルが `execd`(とその置き場所)と `agent-sandbox` のどちらも書き込み可能にしていないこと、エージェントプロファイルが `launch` の実行する承認済みの写しに書き込めないこと。起動スクリプトが最初に実行する。`--command-profile`/`--agent-profile` の既定は `.agent-sandbox/`。終了コード 0 / 1 |
 | `agent-sandbox ai explain` | エージェント向けのサンドボックス説明: コマンドの実行経路、2 つの層、拒否の理由 |
 | `agent-sandbox ai pointer` | 起動スクリプトが Claude に渡すシステムプロンプトの一文 |
 
@@ -179,9 +182,8 @@ execd 自身のビルトインは 3 つ目の扱いで、execd プロセスの�
 [context-mode](https://github.com/ynny-github/context-mode) は、`ctx_execute` が
 動かすコードを、エージェントプロファイルの中ではなく execd とコマンドプロファイル
 経由で実行できます。起動スクリプトの `export CONTEXT_MODE_EXEC_BACKEND=execd` の
-コメントを外してください。`doctor` がプラグインの有効状態と、選択が実際に
-サンドボックス内へ届いているかを確認します —— 変数が届かないことはエラーにならず、
-黙ってエージェントプロファイルでの実行に戻るためです。エージェントプロファイルの
+コメントを外してください。変数が届かないことはエラーにならず、黙ってエージェント
+プロファイルでの実行に戻るので、エージェントプロファイルの
 `environment.allow_vars` に `CONTEXT_MODE_EXEC_BACKEND` が必要で、`node` が実行
 できることも必要です。
 
@@ -213,8 +215,7 @@ stdin のソケットを rshd/sshd 経由の起動と解釈して `~/.bashrc` �
 権限エラーの行が付きます。起動スクリプトが `--read-file` で許可し、
 `CLAUDE_CODE_SHELL` で名指しします。エージェントプロファイルの
 `environment.allow_vars` にこの変数を書かないと nono が剥がし、Claude はホストの
-bash に戻ります。セッション自体は動きますが騒がしくなるので、`agent-sandbox doctor`
-が実測します。
+bash に戻ります。セッション自体は動きますが騒がしくなります。
 
 転送されるのはプロファイルの `environment.allow_vars` に並んでいるものだけなので、
 変数がエージェントに届くのはエージェントプロファイルがその名前を書いている場合

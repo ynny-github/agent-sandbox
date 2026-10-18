@@ -30,7 +30,10 @@ agent-sandbox launch claude → .agent-sandbox/bin/claude (your script)
 - Go 1.25 or later (to build from source).
 - `claude` on `PATH` — for the `claude` launch script `init` writes.
 
-Run `agent-sandbox doctor` to verify.
+When a launch fails or a command is refused, ask nono directly:
+`nono profile validate <profile>` for a profile that will not load, and
+`nono why --profile <profile> --path <p> --op read|write` (or `--command
+<name>`) for what a profile grants.
 
 ## Install
 
@@ -160,7 +163,7 @@ for `nono profile show` / `nono why`.
 |---|---|
 | `agent-sandbox init` | Write the embedded `.agent-sandbox/` and the profile skills into this project. Never overwrites |
 | `agent-sandbox launch <name> [args...]` | Run `.agent-sandbox/bin/<name>` after you approve any change to `.agent-sandbox/`; the approved copy is what runs |
-| `agent-sandbox doctor` | Check everything a launch depends on: the sandbox engine, the execd socket, both profiles and the paths they pin, that the hook runs under the agent profile, that the command profile leaves neither `execd` nor `agent-sandbox` writable, and that the agent profile cannot write the approved copy `launch` runs. `--command-profile`/`--agent-profile` default to `.agent-sandbox/`. Exit 0 / 1 |
+| `agent-sandbox doctor` | Check that a launch is safe: the hook runs under the agent profile, the command profile leaves neither `execd` (nor its directory) nor `agent-sandbox` writable, and the agent profile cannot write the approved copy `launch` runs. The launch script runs it first. `--command-profile`/`--agent-profile` default to `.agent-sandbox/`. Exit 0 / 1 |
 | `agent-sandbox ai explain` | Agent-facing description of the sandbox: how commands run, both tiers, and every denial's reason |
 | `agent-sandbox ai pointer` | The system-prompt line the launch script passes to Claude |
 
@@ -179,9 +182,8 @@ Sessions live under `$XDG_STATE_HOME/execd/` (`~/.local/state/execd/`). One whos
 [context-mode](https://github.com/ynny-github/context-mode) can run the code
 `ctx_execute` executes through execd and the command profile instead of inside
 the agent profile: uncomment `export CONTEXT_MODE_EXEC_BACKEND=execd` in the
-launch script. `doctor` then checks that the plugin is enabled and that the
-selection actually reaches the sandbox — an unforwarded variable is a silent
-fall back to the agent profile, not an error. It requires
+launch script. An unforwarded variable is a silent fall back to the agent
+profile, not an error, so it requires
 `CONTEXT_MODE_EXEC_BACKEND` in the agent profile's `environment.allow_vars` and
 a `node` the agent profile can execute.
 
@@ -214,7 +216,7 @@ profile here grants, so without the wrapper every tool result is prefixed with
 a permission error. The launch script grants it with `--read-file` and names it
 in `CLAUDE_CODE_SHELL`. The agent profile's `environment.allow_vars` must list
 that variable or nono strips it and Claude falls back to the host's bash; the
-session still works, it just gets noisy, so `agent-sandbox doctor` measures it.
+session still works, it just gets noisy.
 
 Only what a profile's `environment.allow_vars` lists is forwarded, so a
 variable reaches the agent only if the agent profile names it. Exposing one to a

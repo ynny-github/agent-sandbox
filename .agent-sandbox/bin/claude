@@ -5,7 +5,7 @@
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd)
 
-# Uncomment to run context-mode's code through execd; doctor then checks it.
+# Uncomment to run context-mode's code through execd.
 # export CONTEXT_MODE_EXEC_BACKEND=execd   # context-mode's execd backend
 
 agent-sandbox doctor --command-profile "$here/command-profile.json" \

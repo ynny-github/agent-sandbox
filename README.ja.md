@@ -54,10 +54,10 @@ go install github.com/ynny-github/agent-sandbox/cmd/...@latest
 
 ## クイックスタート
 
-プロジェクトのルートで `agent-sandbox init` を実行します。このリポジトリの
-`main` ブランチから出発点一式 —— `.agent-sandbox/`(起動スクリプト、フックの設定、
+プロジェクトのルートで `agent-sandbox init` を実行します。バイナリに埋め込まれた
+出発点一式 —— `.agent-sandbox/`(起動スクリプト、フックの設定、
 shell wrapper、最小のコマンドプロファイルとエージェントプロファイル)と、
-プロファイルの育て方を説明する 2 つの skill —— をダウンロードします。既存の
+プロファイルの育て方を説明する 2 つの skill —— を書き出します。既存の
 ファイルは決して上書きしません。存在するファイルは報告してそのまま残します。
 
 ```bash
@@ -158,7 +158,7 @@ execd 自身のビルトインは 3 つ目の扱いで、execd プロセスの�
 
 | コマンド | 内容 |
 |---|---|
-| `agent-sandbox init` | `.agent-sandbox/` とプロファイル用 skill をこのプロジェクトにダウンロードする。上書きはしない |
+| `agent-sandbox init` | バイナリに埋め込まれた `.agent-sandbox/` とプロファイル用 skill をこのプロジェクトに書き出す。上書きはしない |
 | `agent-sandbox launch <name> [引数...]` | `.agent-sandbox/` の変更を承認したうえで `.agent-sandbox/bin/<name>` を実行する。実行されるのは承認済みの写し |
 | `agent-sandbox doctor` | 起動が依存するものを一通り確認: サンドボックスエンジン、execd ソケット、両プロファイルとそれが固定しているパス、フックがエージェントプロファイルで動くこと、コマンドプロファイルが `execd` と `agent-sandbox` のどちらも書き込み可能にしていないこと、そしてエージェントプロファイルが `launch` の実行する承認済みの写しに書き込めないこと。`--command-profile`/`--agent-profile` の既定は `.agent-sandbox/`。終了コード 0 / 1 |
 | `agent-sandbox ai explain` | エージェント向けのサンドボックス説明: コマンドの実行経路、2 つの層、拒否の理由 |
@@ -236,11 +236,11 @@ mise run build        # `go install` で両バイナリのワーキングツリ�
 バイナリをこのワーキングツリーの外かつ `PATH` の通った場所に置けるのは `go install`
 だけで、起動にはそこに置かれている必要があります。
 
-`templates/minimal/` には `agent-sandbox init` が配るものが入っています。バイナリに
-埋め込まず実行時に `main` から取得するので、ここへの変更はリリースを挟まずに
-利用者へ届きます —— そして `go test ./...` がそれらのファイルに対して
-`nono profile validate` を実行することだけが、`main` が使える状態に保たれている
-保証です。このリポジトリ自身の `.agent-sandbox/` と混同しないでください。あちらはこのホスト向けに育てたもので、可搬ではありません。
+`templates/minimal/` と 2 つのプロファイル用 skill は、`agent-sandbox init` が書き出す
+ものです。バイナリに埋め込まれている (モジュールのルートの `embed.go`) ので、
+バイナリが書き出すひな形は常にそのバイナリと一致し、変更は利用者が入れ直したときに
+届きます。`go test ./...` がひな形のプロファイルに対して `nono profile validate` を
+実行します。このリポジトリ自身の `.agent-sandbox/` と混同しないでください。あちらはこのホスト向けに育てたもので、可搬ではありません。
 
 コミットは [Conventional Commits](https://www.conventionalcommits.org/) に従い、
 `lefthook` が `commit-msg` でタイトルを検証します。

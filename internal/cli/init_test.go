@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,32 +12,10 @@ import (
 	"github.com/ynny-github/agent-sandbox/internal/scaffold"
 )
 
-// serveTemplates answers every asset with a body naming its source.
-func serveTemplates(t *testing.T) *httptest.Server {
-	t.Helper()
-	mux := http.NewServeMux()
-	for _, a := range scaffold.Assets {
-		source := a.Source
-		mux.HandleFunc("/"+source, func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("ETag", `"etag-`+source+`"`)
-			_, _ = w.Write([]byte("body of " + source))
-		})
-	}
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	return srv
-}
-
-// initHarness points init at a local server, stubs the nono call out, and
-// moves the config path into a fresh directory.
+// initHarness stubs the nono call out and points init at a fresh directory.
+// The files written are the binary's real embedded ones.
 func initHarness(t *testing.T) (dir string, out *bytes.Buffer) {
 	t.Helper()
-	srv := serveTemplates(t)
-
-	origBase := initBaseURL
-	initBaseURL = srv.URL + "/"
-	t.Cleanup(func() { initBaseURL = origBase })
-
 	origValidate := initValidate
 	initValidate = func(ctx context.Context, fetched []scaffold.Fetched) ([]string, error) { return nil, nil }
 	t.Cleanup(func() { initValidate = origValidate })
@@ -54,7 +30,7 @@ func initHarness(t *testing.T) (dir string, out *bytes.Buffer) {
 	return dir, out
 }
 
-func TestRunInitWritesEveryAssetBesideTheConfigPath(t *testing.T) {
+func TestRunInitWritesEveryEmbeddedAsset(t *testing.T) {
 	dir, out := initHarness(t)
 	if err := runInit(initCmd, nil); err != nil {
 		t.Fatalf("runInit: %v", err)
@@ -64,22 +40,14 @@ func TestRunInitWritesEveryAssetBesideTheConfigPath(t *testing.T) {
 			t.Errorf("%s not written: %v", a.Dest, err)
 		}
 	}
-	// Profiles are a security boundary; init reports where each byte came
-	// from rather than leaving it implicit.
-	for _, want := range []string{"etag-", "bytes", "command-profile.json"} {
-		if !strings.Contains(out.String(), want) {
-			t.Errorf("report missing %q\n%s", want, out)
-		}
+	// The written files are the embedded templates, not placeholders: the hook
+	// settings must name the execd hook this binary ships.
+	settings, err := os.ReadFile(filepath.Join(dir, ".agent-sandbox", "settings.json"))
+	if err != nil || !strings.Contains(string(settings), "execd hook claude") {
+		t.Errorf("settings.json = %q (err %v), want the embedded template", settings, err)
 	}
-	// The per-asset lines must name the full URL the bytes were actually
-	// fetched from, not just a static repo-relative filename. runInit also
-	// prints a "fetching from <base>" banner line before the per-asset
-	// loop, so asserting on the base URL alone would pass even if the loop
-	// printed a bare filename; assert on a specific asset's full fetched
-	// URL (base + source path), which can only appear if f.URL was used.
-	wantURL := initBaseURL + "templates/minimal/.agent-sandbox/command-profile.json"
-	if !strings.Contains(out.String(), "http://") || !strings.Contains(out.String(), wantURL) {
-		t.Errorf("report does not contain the fetched URL %q\n%s", wantURL, out)
+	if !strings.Contains(out.String(), "wrote .agent-sandbox/settings.json") {
+		t.Errorf("report does not list the written file\n%s", out)
 	}
 }
 

@@ -54,8 +54,8 @@ a session will not start otherwise. `go install` already does this.
 
 ## Quick start
 
-Run `agent-sandbox init` in your project root. It downloads a starting point
-from this repository's `main` branch — `.agent-sandbox/` (a launch script, the
+Run `agent-sandbox init` in your project root. It writes a starting point
+embedded in the binary — `.agent-sandbox/` (a launch script, the
 hook settings, a shell wrapper, a minimal command profile and agent profile)
 and two skills that explain how to grow a profile. It never overwrites: a file
 that already exists is reported and left alone.
@@ -158,7 +158,7 @@ for `nono profile show` / `nono why`.
 
 | Command | What it does |
 |---|---|
-| `agent-sandbox init` | Download `.agent-sandbox/` and the profile skills into this project. Never overwrites |
+| `agent-sandbox init` | Write the embedded `.agent-sandbox/` and the profile skills into this project. Never overwrites |
 | `agent-sandbox launch <name> [args...]` | Run `.agent-sandbox/bin/<name>` after you approve any change to `.agent-sandbox/`; the approved copy is what runs |
 | `agent-sandbox doctor` | Check everything a launch depends on: the sandbox engine, the execd socket, both profiles and the paths they pin, that the hook runs under the agent profile, that the command profile leaves neither `execd` nor `agent-sandbox` writable, and that the agent profile cannot write the approved copy `launch` runs. `--command-profile`/`--agent-profile` default to `.agent-sandbox/`. Exit 0 / 1 |
 | `agent-sandbox ai explain` | Agent-facing description of the sandbox: how commands run, both tiers, and every denial's reason |
@@ -237,10 +237,11 @@ mise run build        # install working-tree builds of both binaries via go inst
 puts the binary outside this working tree and on `PATH`, which is where it
 has to be for a launch to work.
 
-`templates/minimal/` holds what `agent-sandbox init` serves. It is fetched from
-`main` at run time rather than embedded, so a change there reaches users
-without a release — and `go test ./...` runs `nono profile validate` against
-those files, which is the only thing guaranteeing `main` stays usable. Do not
+`templates/minimal/` and the two profile skills are what `agent-sandbox init`
+writes. They are embedded in the binary (`embed.go` at the module root), so a
+binary always writes templates that match it, and a change reaches users when
+they reinstall. `go test ./...` runs `nono profile validate` against the
+template profiles. Do not
 confuse them with this repository's own `.agent-sandbox/`, whose profiles are
 grown for this host and are not portable.
 

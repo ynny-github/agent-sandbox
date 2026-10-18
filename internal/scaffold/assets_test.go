@@ -6,12 +6,6 @@ import (
 	"testing"
 )
 
-func TestBaseURLPinsMain(t *testing.T) {
-	if !strings.HasSuffix(BaseURL, "/main/") {
-		t.Errorf("BaseURL does not fetch from main: %q", BaseURL)
-	}
-}
-
 func TestAssetsCoverEveryDestination(t *testing.T) {
 	want := []string{
 		".agent-sandbox/bin/claude",

@@ -1,19 +1,13 @@
-// Package scaffold downloads a starting set of files from this repository's
-// main branch and places them in a project. It never overwrites, and it never
-// transforms what it fetches: what is on main is what lands on disk.
+// Package scaffold places a starting set of files, embedded in the binary, in
+// a project. It never overwrites, and it never transforms them: what the
+// binary carries is what lands on disk.
 package scaffold
 
 import "os"
 
-// BaseURL is where every asset is fetched from. It is pinned to main on
-// purpose, not to the binary's own version: init then works the moment a
-// template lands on main, and the profiles are validated against the
-// operator's own nono before anything is written.
-const BaseURL = "https://raw.githubusercontent.com/ynny-github/agent-sandbox/main/"
-
 // Asset is one file init places.
 type Asset struct {
-	// Source is the path under the repository root, appended to BaseURL.
+	// Source is the path under the repository root, as embedded.
 	Source string
 	// Dest is the path relative to the project directory.
 	Dest string

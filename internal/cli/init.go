@@ -4,19 +4,17 @@ package cli
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"time"
 
 	"github.com/spf13/cobra"
+	agentsandbox "github.com/ynny-github/agent-sandbox"
 	"github.com/ynny-github/agent-sandbox/internal/scaffold"
 )
 
-// Seams for tests: one points the fetch at a local server, the other removes
-// the dependency on nono being installed. initValidate takes the command's
+// Seam for tests: removes the dependency on nono being installed. It takes the command's
 // own context so a cancellation (Ctrl-C, the 60-second timeout below) reaches
 // the nono subprocess instead of stopping short at this seam.
 var (
-	initBaseURL  = scaffold.BaseURL
 	initValidate = func(ctx context.Context, fetched []scaffold.Fetched) ([]string, error) {
 		return scaffold.Validate(ctx, fetched)
 	}
@@ -24,9 +22,8 @@ var (
 
 var initCmd = &cobra.Command{
 	Use:   "init",
-	Short: "Download the .agent-sandbox/ launch template and the profile skills into this project",
-	Long: `Download a starting point from this repository's main branch and write it
-into the current directory: .agent-sandbox/ (the launch script bin/claude, the
+	Short: "Write the .agent-sandbox/ launch template and the profile skills into this project",
+	Long: `Write a starting point, embedded in this binary, into the current directory: .agent-sandbox/ (the launch script bin/claude, the
 hook settings, the shell wrapper, a minimal command profile and agent profile)
 and the two skills that explain how to grow a profile.
 
@@ -62,13 +59,9 @@ func runInit(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithTimeout(parent, 60*time.Second)
 	defer cancel()
 
-	fmt.Fprintf(out, "fetching from %s\n", initBaseURL)
-	fetched, err := scaffold.Fetch(ctx, &http.Client{Timeout: 30 * time.Second}, initBaseURL)
+	fetched, err := scaffold.Load(agentsandbox.Assets)
 	if err != nil {
-		return fmt.Errorf("fetch: %w", err)
-	}
-	for _, f := range fetched {
-		fmt.Fprintf(out, "  %s  %d bytes  %s\n", f.URL, len(f.Body), f.ETag)
+		return fmt.Errorf("read the embedded templates: %w", err)
 	}
 
 	warnings, err := initValidate(ctx, fetched)

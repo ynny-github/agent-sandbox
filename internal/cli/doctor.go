@@ -891,18 +891,15 @@ func profileFilesExist(p profiles) checkResult {
 // then runs unwrapped, outside execd, with nothing on screen.
 func checkHook(p profiles) checkResult {
 	r := checkResult{name: "hook"}
-	self, err := selfPath()
+	execdBin, err := execdPath()
 	if err != nil {
 		r.details = append(r.details, err.Error())
-		r.hint = "investigate why os.Executable() failed"
+		r.hint = "install execd: go install github.com/ynny-github/agent-sandbox/cmd/execd@latest"
 		return r
 	}
-	if resolved, rerr := filepath.EvalSymlinks(self); rerr == nil {
-		self = resolved
-	}
-	if err := probeHook(p.agent, self); err != nil {
+	if err := probeHook(p.agent, execdBin); err != nil {
 		r.details = append(r.details, err.Error())
-		r.hint = "grant agent-sandbox to the agent (the launch script's --read-file does) and keep the profile able to run it"
+		r.hint = "grant execd to the agent (the launch script's --read-file does) and keep the profile able to run it"
 		return r
 	}
 	r.ok = true

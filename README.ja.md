@@ -163,7 +163,6 @@ execd 自身のビルトインは 3 つ目の扱いで、execd プロセスの�
 | `agent-sandbox doctor` | 起動が依存するものを一通り確認: サンドボックスエンジン、execd ソケット、両プロファイルとそれが固定しているパス、フックがエージェントプロファイルで動くこと、コマンドプロファイルが `execd` と `agent-sandbox` のどちらも書き込み可能にしていないこと、そしてエージェントプロファイルが `launch` の実行する承認済みの写しに書き込めないこと。`--command-profile`/`--agent-profile` の既定は `.agent-sandbox/`。終了コード 0 / 1 |
 | `agent-sandbox ai explain` | エージェント向けのサンドボックス説明: コマンドの実行経路、2 つの層、拒否の理由 |
 | `agent-sandbox ai pointer` | 起動スクリプトが Claude に渡すシステムプロンプトの一文 |
-| `agent-sandbox hook` | PreToolUse アダプタ (`.agent-sandbox/settings.json` に書かれ、Claude が呼ぶもので、手で叩くものではない) |
 
 `execd` は独立したバイナリで、設定ファイルを持ちません。
 
@@ -173,6 +172,7 @@ execd 自身のビルトインは 3 つ目の扱いで、execd プロセスの�
 | `execd down [<socket>]` | そのセッションを止めてディレクトリを消す。socket を省くと、このシェルが起動したセッションをすべて止める。起動スクリプトが終了時に実行する |
 | `execd gc [--idle <duration>] [--dry-run]` | 死んでいる・シェルが消えた・`--idle`(既定 168h)より長く使われていないセッションを片付ける |
 | `execd exec [--timeout d] -- <command>` | `AGENT_SANDBOX_EXECD_SOCKET` のソケットにコマンドを 1 つ送り、出力をストリームする |
+| `execd hook <agent>` | エージェントのツールフック: シェルコマンドを `execd exec -- …` に書き換える。今あるのは `claude` だけ。`.agent-sandbox/settings.json` に書かれ、Claude が呼ぶもので、手で叩くものではない |
 
 セッションは `$XDG_STATE_HOME/execd/`(`~/.local/state/execd/`)に置かれます。起動スクリプトが kill されるなどで `execd down` まで届かなかったセッションは、`execd gc` が片付けるまで動き続けます。
 

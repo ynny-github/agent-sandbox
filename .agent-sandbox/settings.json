@@ -1,4 +1,4 @@
 {"hooks":{"PreToolUse":[
-  {"matcher":"Bash","hooks":[{"type":"command","command":"agent-sandbox hook"}]},
-  {"matcher":"Monitor","hooks":[{"type":"command","command":"agent-sandbox hook"}]}
+  {"matcher":"Bash","hooks":[{"type":"command","command":"execd hook claude"}]},
+  {"matcher":"Monitor","hooks":[{"type":"command","command":"execd hook claude"}]}
 ]}}

@@ -5,6 +5,7 @@
 //	execd down [<socket>]                stop that session, or every session this shell started
 //	execd gc [--idle d] [--dry-run]      clean up dead, orphaned and idle sessions
 //	execd exec [--timeout d] -- <cmd>    send one command line, exit with its status
+//	execd hook <agent>                   the agent's tool hook: route its shell commands through execd exec
 //
 // up runs the server itself as `execd serve --socket <path>` inside the nono
 // session. serve is internal and left out of the usage: outside a sandbox it
@@ -16,6 +17,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -29,7 +31,8 @@ const usage = `usage:
   execd up --profile <path> [--workdir <dir>]
   execd down [<socket>]
   execd gc [--idle <duration>] [--dry-run]
-  execd exec [--timeout d] -- <command>`
+  execd exec [--timeout d] -- <command>
+  execd hook <agent>`
 
 func main() { os.Exit(run(os.Args[1:])) }
 
@@ -43,6 +46,12 @@ func run(args []string) int {
 		return serve(args[1:])
 	case "exec":
 		return execCommand(args[1:])
+	case "hook":
+		if len(args) != 2 {
+			fmt.Fprintln(os.Stderr, "execd hook: takes exactly one agent name")
+			return 2
+		}
+		return runHook(args[1], os.Stdin, os.Stdout, os.Stderr)
 	case "up":
 		return up(args[1:])
 	case "down":
@@ -187,6 +196,30 @@ func gc(args []string) int {
 	if err := execd.GC(*idle, *dryRun, os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "execd gc: %v\n", err)
 		return 1
+	}
+	return 0
+}
+
+// hooks maps an agent name to its tool-hook adapter: read the agent's hook
+// payload, write the response that rewrites the command to `execd exec -- …`.
+// Adding an agent is one adapter in internal/execd and one entry here.
+var hooks = map[string]func(in io.Reader, out io.Writer) error{
+	"claude": execd.ClaudeHook,
+}
+
+// runHook runs agent's hook and turns every failure into exit 2. For Claude
+// Code only exit 2 blocks the tool call; any other failure lets the ORIGINAL
+// command run unwrapped in the agent's own sandbox. An unknown agent name is
+// a failure too.
+func runHook(agent string, in io.Reader, out, errOut io.Writer) int {
+	hook, ok := hooks[agent]
+	if !ok {
+		fmt.Fprintf(errOut, "execd hook: no hook for agent %q\n", agent)
+		return 2
+	}
+	if err := hook(in, out); err != nil {
+		fmt.Fprintf(errOut, "execd hook %s: %v\n", agent, err)
+		return 2
 	}
 	return 0
 }

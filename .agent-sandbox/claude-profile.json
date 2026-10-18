@@ -6,11 +6,11 @@
   // is not routed through execd). Shell commands do not run here at all: they
   // go through execd, under command-profile.json. Nothing needed only to *run
   // a command* belongs in this file.
-  // You do not grant the agent-sandbox binary here. The agent runs
-  // `agent-sandbox hook` and `agent-sandbox serve` as its own direct children,
-  // so it must be able to exec that binary — but only the launcher knows where
-  // it lives (a mise-managed toolchain puts the Go version in the path), so it
-  // passes `--read-file <its own path>` on the nono command line instead.
+  // You do not grant the execd or agent-sandbox binaries here. The agent runs
+  // `execd hook claude` (and `agent-sandbox ai explain`) as its own direct
+  // children, so it must be able to exec them — but only the launch script
+  // knows where they live (a mise-managed toolchain puts the Go version in the
+  // path), so .agent-sandbox/bin/claude passes `--read-file` for both instead.
   //
   // The base is the nolabs-ai/claude registry pack (profile `claude-code`,
   // installed with `nono pull nolabs-ai/claude`). nono 0.78.0 no longer

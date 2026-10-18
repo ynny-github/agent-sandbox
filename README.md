@@ -163,7 +163,6 @@ for `nono profile show` / `nono why`.
 | `agent-sandbox doctor` | Check everything a launch depends on: the sandbox engine, the execd socket, both profiles and the paths they pin, that the hook runs under the agent profile, that the command profile leaves neither `execd` nor `agent-sandbox` writable, and that the agent profile cannot write the approved copy `launch` runs. `--command-profile`/`--agent-profile` default to `.agent-sandbox/`. Exit 0 / 1 |
 | `agent-sandbox ai explain` | Agent-facing description of the sandbox: how commands run, both tiers, and every denial's reason |
 | `agent-sandbox ai pointer` | The system-prompt line the launch script passes to Claude |
-| `agent-sandbox hook` | PreToolUse adapter, named in `.agent-sandbox/settings.json` and invoked by Claude, not by you |
 
 `execd` is its own binary and takes no config file:
 
@@ -173,6 +172,7 @@ for `nono profile show` / `nono why`.
 | `execd down [<socket>]` | Stop that session and remove its directory; without a socket, stop every session this shell started. The launch script runs this on exit |
 | `execd gc [--idle <duration>] [--dry-run]` | Clean up sessions that are dead, whose shell is gone, or unused for longer than `--idle` (default 168h) |
 | `execd exec [--timeout d] -- <command>` | Send one command to the socket named by `AGENT_SANDBOX_EXECD_SOCKET` and stream its output |
+| `execd hook <agent>` | The agent's tool hook: rewrite its shell command to `execd exec -- …`. Only `claude` exists today; `.agent-sandbox/settings.json` names it and Claude invokes it, not you |
 
 Sessions live under `$XDG_STATE_HOME/execd/` (`~/.local/state/execd/`). One whose launch script never reached `execd down` — it was killed — keeps running until `execd gc` collects it.
 

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ynny-github/agent-sandbox/internal/execd"
@@ -100,5 +102,47 @@ func TestDown_WithoutASocketSucceedsWhenNothingIsRunning(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	if code := run([]string{"down"}); code != 0 {
 		t.Errorf("run(down) = %d, want 0", code)
+	}
+}
+
+// Claude Code blocks a tool call only on exit 2. Every other non-zero exit is a
+// non-blocking error, after which the ORIGINAL command runs — unwrapped, in the
+// agent's own sandbox. So every failure of `execd hook claude` has to be a 2,
+// and so does an unknown agent name.
+func TestHook_FailsClosedWithExitCode2(t *testing.T) {
+	for name, payload := range map[string]string{
+		"unparseable": `not json at all`,
+		"no command":  `{"tool_name":"Bash","tool_input":{}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			if code := runHook("claude", strings.NewReader(payload), &out, &errOut); code != 2 {
+				t.Errorf("exit code = %d, want 2", code)
+			}
+			if errOut.Len() == 0 {
+				t.Error("a refusal must say why on stderr; Claude Code feeds it back to the agent")
+			}
+		})
+	}
+}
+
+func TestHook_ClaudeSucceedsWithExitCode0(t *testing.T) {
+	var out, errOut bytes.Buffer
+	in := strings.NewReader(`{"tool_name":"Bash","tool_input":{"command":"git status"}}`)
+	if code := runHook("claude", in, &out, &errOut); code != 0 {
+		t.Errorf("exit code = %d, want 0; stderr: %s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "execd exec --") {
+		t.Errorf("expected the rewritten command; got %q", out.String())
+	}
+}
+
+func TestHook_UnknownOrMissingAgentExits2(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := runHook("codex", strings.NewReader("{}"), &out, &errOut); code != 2 {
+		t.Errorf("runHook(codex) = %d, want 2", code)
+	}
+	if code := run([]string{"hook"}); code != 2 {
+		t.Errorf("run(hook) = %d, want 2", code)
 	}
 }

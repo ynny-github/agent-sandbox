@@ -1263,3 +1263,19 @@ func TestCheckApprovedCopy_PassesWhenDenied(t *testing.T) {
 		t.Errorf("checkApprovedCopy() = %+v, want ok", r)
 	}
 }
+
+// The hook is `execd hook claude`, so the probe must run the execd binary
+// doctor resolved, not agent-sandbox.
+func TestCheckHook_ProbesTheExecdBinary(t *testing.T) {
+	defer stubSelfPath("/opt/bin/agent-sandbox")()
+	var probed string
+	prev := probeHook
+	probeHook = func(_ string, bin string) error { probed = bin; return nil }
+	t.Cleanup(func() { probeHook = prev })
+	if r := checkHook(profiles{agent: "a.json"}); !r.ok {
+		t.Fatalf("checkHook() = %+v", r)
+	}
+	if probed != "/opt/bin/execd" {
+		t.Errorf("probed %q, want the execd binary /opt/bin/execd", probed)
+	}
+}

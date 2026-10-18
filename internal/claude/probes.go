@@ -41,7 +41,7 @@ const (
 	hookProbeWant    = "execd exec --"
 )
 
-// ProbeHook runs the PreToolUse hook inside the agent's own sandbox and checks
+// ProbeHook runs the PreToolUse hook (`execd hook claude`) inside the agent's own sandbox and checks
 // that it rewrites a command, before the agent is launched.
 //
 // It exists because the failure it catches is invisible and unsafe. Claude Code
@@ -54,13 +54,13 @@ const (
 //
 // --allow-cwd is required because nono refuses working-directory access in
 // non-interactive mode, which is how this runs.
-func ProbeHook(profilePath, self string) error {
+func ProbeHook(profilePath, execdPath string) error {
 	nonoPath, err := exec.LookPath("nono")
 	if err != nil {
 		return fmt.Errorf("nono not found in PATH: %w", err)
 	}
 	cmd := exec.Command(nonoPath, "wrap", "--silent", "--allow-cwd",
-		"--profile", profilePath, "--read-file", self, "--", self, "hook")
+		"--profile", profilePath, "--read-file", execdPath, "--", execdPath, "hook", "claude")
 	cmd.Stdin = strings.NewReader(hookProbePayload)
 	out, runErr := cmd.CombinedOutput()
 	if runErr != nil {

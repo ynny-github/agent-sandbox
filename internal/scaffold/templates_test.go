@@ -1,6 +1,7 @@
 package scaffold
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path"
@@ -183,5 +184,38 @@ func TestTemplateSelectsContextModeBeforeDoctor(t *testing.T) {
 	cm, doc := strings.Index(s, "CONTEXT_MODE_EXEC_BACKEND=execd"), strings.Index(s, "agent-sandbox doctor")
 	if cm < 0 || doc < 0 || cm > doc {
 		t.Errorf("the context-mode export (at %d) must come before `agent-sandbox doctor` (at %d)", cm, doc)
+	}
+}
+
+// The template's hook settings must name the execd hook for Bash and Monitor:
+// a hook Claude cannot run lets commands run unwrapped.
+func TestTemplateSettingsNameTheExecdHook(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join(repoRoot(t), "templates", "minimal", ".agent-sandbox", "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var s struct {
+		Hooks struct {
+			PreToolUse []struct {
+				Matcher string `json:"matcher"`
+				Hooks   []struct {
+					Command string `json:"command"`
+				} `json:"hooks"`
+			} `json:"PreToolUse"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal(body, &s); err != nil {
+		t.Fatalf("settings.json: %v", err)
+	}
+	got := map[string]string{}
+	for _, e := range s.Hooks.PreToolUse {
+		for _, h := range e.Hooks {
+			got[e.Matcher] = h.Command
+		}
+	}
+	for _, m := range []string{"Bash", "Monitor"} {
+		if got[m] != "execd hook claude" {
+			t.Errorf("%s hook = %q, want %q", m, got[m], "execd hook claude")
+		}
 	}
 }

@@ -12,8 +12,8 @@ import (
 )
 
 // RunCLI sends command to execd and returns the exit code. There is no
-// routing left to do: the command profile decides what may run, and execd's
-// interpreter decides how the line is executed.
+// routing left to do: the command profile decides what may run, and bash,
+// inside execd's sandbox, runs the line.
 //
 // stdio is this process's own stdin, stdout and stderr. They are passed to
 // execd as descriptors, so the command writes to this process's terminal (or

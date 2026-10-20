@@ -9,16 +9,9 @@ import (
 	"time"
 )
 
-// A Job is one request. It owns the process groups that request created, and
-// teardown is the same path whatever triggered it: the interpreter returning,
-// the connection dropping, the timeout firing, or the client asking.
-//
-// One group per command, not one per request. A group's id is its leader's pid
-// and the group ceases to exist when its last member exits, so a per-request
-// group led by the request's first command would be empty by the time the
-// second command tried to join it, and setpgid would fail with ESRCH. Keeping
-// it alive would need an anchor process, and an anchor costs one policy launch
-// per request — the exact resource launchPacer rations.
+// A Job is one request. It owns the process group the request's bash leads,
+// and teardown is the same path whatever triggered it: bash exiting, the
+// connection dropping, the timeout firing, or the client asking.
 //
 // Group membership is inherited across fork, which is what lets one killpg
 // reach a command's grandchildren. It is not a hierarchy: a process that calls
@@ -30,9 +23,7 @@ import (
 // limit. Measured on nono 0.74.0, 2026-09-20: `sh -c 'sleep 60'` under a
 // 3000ms request timeout reports 124 and the sleep survives the session and
 // keeps running — 3/3 runs, one stranded process each, still running after
-// the session was gone (probe log set ss1-3). The 124 did not arrive at
-// 3000ms: those runs returned at 5004-5005ms, because the request still pays
-// DrainGrace on the way out (see ExitTimeout for that bound). The identical
+// the session was gone (probe log set ss1-3). The identical
 // line as a floor command, `sleep 60` with no policy command in it, is killed
 // at the timeout and leaves no survivor, 3/3, returning at 3002-3003ms with no
 // drain to wait for (log set fs1-3). Piping the policy command from another
@@ -47,10 +38,7 @@ type Job struct {
 	stdio  Stdio
 }
 
-// NewJob returns a Job for a request running on stdio. The trio is kept so the
-// wiring can tell the request's own files from the interpreter's: a descriptor
-// the client passed may be a pipe, and a pipe the interpreter made may not be
-// given to a child, so the question can only be settled by identity.
+// NewJob returns a Job for a request running on stdio.
 func NewJob(stdio Stdio) *Job { return &Job{stdio: stdio} }
 
 // Stdio returns the request's own three files.
@@ -60,13 +48,13 @@ func (j *Job) Stdio() Stdio { return j.stdio }
 // package can put one on a context or read one back.
 type jobKey struct{}
 
-// withJob returns a context carrying j, for the exec handler to find.
+// withJob returns a context carrying j, for Run to start bash in.
 func withJob(ctx context.Context, j *Job) context.Context {
 	return context.WithValue(ctx, jobKey{}, j)
 }
 
-// jobFrom returns the Job on ctx, or nil when there is none (a caller that
-// builds an interpreter by hand in a test).
+// jobFrom returns the Job on ctx, or nil when there is none (Run called
+// directly, as tests do).
 func jobFrom(ctx context.Context) *Job {
 	j, _ := ctx.Value(jobKey{}).(*Job)
 	return j
@@ -77,114 +65,6 @@ func jobFrom(ctx context.Context) *Job {
 // request still returns promptly. Terminate does not spend it when nothing is
 // alive to spend it on.
 const TerminateGrace = 200 * time.Millisecond
-
-// DrainGrace bounds how long a finished command's output is waited for once
-// its process tree is gone. Exceeding it means something outside the group
-// still holds a write end; the request ends with a truncation note rather than
-// hanging, which is what the old wiring did.
-//
-// This is the bound a pipeline with a policy-controlled command on both ends
-// now runs into, and it is why this package no longer refuses that shape
-// outright. Measured on nono 0.74.0 against this repository's
-// command-profile.json, 2026-09-20, with `git log --oneline | git cat-file
-// --batch-check` — the writer exits, the reader blocks on stdin — run 21
-// times. Sixteen of those carried a 5000ms request timeout and five carried
-// 20000ms; both are far above this grace, so the grace is the only bound in
-// play either way. Probe log set: runB1-6, full, full2, bb1-10, plus three
-// runs that reached the transcript only.
-//
-//	14 runs   the writer's drain never saw EOF: something on nono's side still
-//	          held a duplicate of the write end, so waitDrains gave up and its
-//	          forced close is what released the blocked reader. Requests ended
-//	          at 2018-2023ms.
-//	 7 runs   no stall at all; requests ended at 15-20ms.
-//
-// Only 9 of those 14 recorded per-stage timings — runs 1-6 of the set predate
-// the instrumentation — and over those 9 the writer's own Wait returned in
-// 14-16ms, waitDrains gave up at 2000-2001ms, and the reader's Wait then
-// returned at 2018-2020ms. The stalled/clean split above needs no timing line,
-// being read off elapsed time alone, which is why its denominator is 14 and
-// this one is 9.
-//
-// All 21 returned. Three other aggregates have smaller denominators, because
-// not every run recorded every figure: 18 of the 21 have a byte count, and all
-// 18 are identical at 30585 bytes; 16 had a survivor check afterwards, and all
-// 16 were clean. The remaining runs were not measured for those, which is not
-// the same as having been measured clean.
-//
-// Three further run sets, each separate from those 21 and from each other.
-// `git log --oneline | cat | git cat-file --batch-check`, a floor command
-// between the two policy stages, 5 runs at a 5000ms timeout (log set cc1-5):
-// 3 stalled, ending at 2023-2029ms, and 2 clean at 15-16ms, all complete.
-// `git log --oneline | cat` — a policy writer into a floor reader — 8 runs
-// (log set dd1-8): 14-19ms, 27361 bytes, and not one stall. That last set is
-// the discriminator: the same writer stalls above and never stalls there, so
-// what the stall takes is a policy-controlled *reader*, not merely piping a
-// shim's output somewhere. The third set is the timeout leg (log set bt1-5),
-// cited on ExitTimeout, and is deliberately not folded in here: those runs
-// ended on a timeout mid-flight and cannot support a claim about complete
-// output.
-//
-// Every figure above names the log set it came from, and that is deliberate.
-// Three successive revisions of this comment carried numbers belonging to a
-// neighbouring set — the 2028-2029ms pair above is exactly what leaked into
-// the 21-run range twice. If you change a number here, re-derive it from the
-// named set rather than from this comment's previous wording;
-// docs/superpowers/probes/2026-09-19-policy-pipe-hang.md carries the per-run
-// tables each log set above is named for.
-//
-// So the hazard is unchanged — the fd is still leaked, inside nono's own
-// machinery — but it is a bounded incident now rather than a permanent one.
-//
-// What this bound no longer reaches is the outer boundary, and that changed
-// with descriptor passing. A top-level simple command's cmd.Stdout is now the
-// caller's own file, so nothing is interposed there and waitDrains has no read
-// end to force-close. A descendant that outlives Job.Terminate —
-// `sh -c 'sleep 60'` does, 3/3, inside nono's child sandbox; see the Job doc
-// above — therefore holds a duplicate of the *caller's* pipe, which this
-// package cannot touch. Pre-branch it held execd's interposed pipe instead,
-// and this grace force-closing that pipe is why those runs returned at 5004ms.
-// Post-branch the request itself returns sooner, ~3000ms, the timeout alone;
-// but `execd exec … | downstream` leaves `downstream` waiting for an
-// EOF for as long as the strand lives, and nothing here bounds that.
-//
-// Accepted, not overlooked. It is inherent to handing a descriptor to a
-// command — ssh has the same shape — and the only way to bound it again is to
-// re-interpose a pipe at the boundary, which is the relay this branch removed.
-// The shape that produces it is narrow and nameable: a command that leaves a
-// descendant running past its own exit, with the caller's stdout a pipe rather
-// than a terminal or a file. What stays bounded is the request; what is not
-// bounded is whoever reads the other end of the caller's pipe.
-//
-// What that split does and does not say about this constant's value. EOF
-// either arrived within ~15ms or had not arrived by 2000ms; nothing landed in
-// between. So shortening the grace would not make stalls rarer or commoner —
-// it would only make each one cheaper. The hazard in shortening it is
-// elsewhere: waitDrains ends a stall by force-closing the read ends, so a
-// producer still writing at that moment loses its tail. That did not bite in
-// any of the 18 runs that have a byte count — the producer had exited ~2s
-// earlier and its bytes were already in the pipe — but a grace short enough to
-// land while output is still in flight would truncate for real. The note
-// saying so does reach the caller (below), and is the only thing that would
-// tell them; revisions of this comment before 2026-09-21 argued from the
-// opposite premise, so do not resurrect it. Raising the grace lengthens every
-// stalled request by the same amount. Re-measure before moving it either way.
-//
-// That note is the last thing to know here, and what this comment said about
-// it until 2026-09-21 was false. It claimed the note never reaches the caller
-// from a non-final pipeline stage, because mvdan.cc/sh drops such a stage's
-// stderr entirely, so a policy-to-policy pipe presents as a silent ~2s stall.
-// The drop is real but belongs to the harness that measured it: 2026-09-19
-// drove ShellExecutor.Execute in-process with a bytes.Buffer as stderr.
-// Through the client, where stderr is a real descriptor, the note arrives —
-// 80 bytes, one distinct text, in 69 of 69 stalled runs across three log sets,
-// on this branch and on the pre-branch binary alike
-// (docs/superpowers/probes/2026-09-21-fd-passing.md §8, which is never
-// committed, so this sentence is where that correction survives). A user of
-// `execd exec` therefore sees a ~2s stall, the note naming the command
-// that caused it, complete output, and — unless the request timeout fired
-// first — a correct exit status.
-const DrainGrace = 2 * time.Second
 
 // Start puts cmd in a process group of its own and starts it.
 func (j *Job) Start(cmd *exec.Cmd) error {

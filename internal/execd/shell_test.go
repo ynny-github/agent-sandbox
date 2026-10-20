@@ -10,8 +10,6 @@ import (
 	"time"
 
 	"github.com/ynny-github/agent-sandbox/internal/execd"
-	"mvdan.cc/sh/v3/interp"
-	"mvdan.cc/sh/v3/syntax"
 )
 
 // runShell executes command in dir and returns exit code, stdout and stderr.
@@ -366,176 +364,6 @@ func TestExecuteTimesOut(t *testing.T) {
 	}
 }
 
-// fakePolicyShim creates a real, executable file at
-// <dir>/nono-tool-sandbox-<id>/shims/<name>, a script that execs "cat" by
-// name. This is the directory shape isPolicyControlledPath matches, which
-// lets these tests drive the launch pacer through the executor's public API
-// without a real nono session — the shape of the resolved path is all that
-// tier check ever looks at. cat, not a symlink straight to its own
-// resolved binary, because on a host where coreutils are one combined
-// multi-call binary dispatching on argv[0], a symlink named anything other
-// than "cat" would exec that binary with the wrong argv[0] and fail outright.
-// NixOS is such a host, and it is checkable in one line there:
-// `readlink -f "$(command -v cat)"` ends at .../bin/coreutils, not at a binary
-// named cat. Shelling out here is
-// fine: this file drives the executor under test from the host, unsandboxed,
-// same as every other fixture in this file.
-func fakePolicyShim(t *testing.T, dir, id, name string) string {
-	t.Helper()
-	if _, err := exec.LookPath("cat"); err != nil {
-		t.Skipf("cat not found on PATH, needed to build a fake policy-command shim: %v", err)
-	}
-	shimsDir := filepath.Join(dir, "nono-tool-sandbox-"+id, "shims")
-	if err := os.MkdirAll(shimsDir, 0o755); err != nil {
-		t.Fatalf("mkdir shims dir: %v", err)
-	}
-	script := filepath.Join(shimsDir, name)
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nexec cat\n"), 0o755); err != nil {
-		t.Fatalf("write fake shim script: %v", err)
-	}
-	return shimsDir
-}
-
-// TestShellExecutorRunsTwoPolicyCommandsInOnePipe pins the behaviour that
-// replaced refusePolicyPipeChains, deleted 2026-09-20: a pipeline with a
-// policy-controlled command on both ends is no longer refused, it runs.
-//
-// This guards the reintroduction of a refusal, and that is all it can guard.
-// The hazard the refusal stood in for lives on nono's side of the boundary —
-// nono retains a duplicate of the pipe's write end, the downstream stage waits
-// for an EOF that never comes, and DrainGrace is what breaks the stall — and
-// these fake shims are ordinary host processes that hold no such duplicate, so
-// nothing here exercises it. The measurement that does — 21 runs of `git log
-// --oneline | git cat-file --batch-check` against nono 0.74.0, 14 of them
-// ending only because the grace expired — is recorded on DrainGrace in job.go,
-// with the denominator for each of its figures. Read it there rather than
-// restating it here: those aggregates do not all share one denominator, and two
-// copies of them is two things to keep true.
-func TestShellExecutorRunsTwoPolicyCommandsInOnePipe(t *testing.T) {
-	dir := t.TempDir()
-	shimsDir := fakePolicyShim(t, dir, "pipe-test", "fakepolicy")
-	t.Setenv("PATH", shimsDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-
-	for _, tc := range []struct {
-		name    string
-		command string
-	}{
-		{"two stages", "fakepolicy | fakepolicy"},
-		{"floor command between two policy stages", "fakepolicy | cat | fakepolicy"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			code, out, errOut := runShell(t, dir, tc.command, "hello\n")
-			if code != 0 {
-				t.Errorf("exit = %d, want 0 (a refusal would be %d); stderr = %q",
-					code, execd.ExitCannotStart, errOut)
-			}
-			if strings.TrimSpace(out) != "hello" {
-				t.Errorf("stdout = %q, want %q: both stages must run and the bytes reach the end of the pipe", out, "hello")
-			}
-			if strings.Contains(errOut, "refused") {
-				t.Errorf("stderr = %q, want no refusal: piping two policy-controlled commands together is allowed now", errOut)
-			}
-		})
-	}
-}
-
-// TestShellExecutorPacesConsecutivePolicyCommands covers the launch-rate
-// defect measured on nono 0.77.0 (Ubuntu 24.04, this repository's
-// command-profile.json): policy-controlled commands launched back-to-back
-// inside one nono session exhaust something the session reclaims only over
-// time, and the shim for every launch past that point fails with "Sandbox
-// initialization failed: tool-sandbox shim failed to connect to
-// .../supervisor.sock". Measured with `git --version` run 12 times through
-// xargs in a single session: at ~50ms apart, 6 succeed and the rest fail
-// (3/3 runs); at 500ms apart, 12/12 succeed (3/3 runs). Spacing the launches
-// is what avoids it, so that is what this asserts.
-func TestShellExecutorPacesConsecutivePolicyCommands(t *testing.T) {
-	dir := t.TempDir()
-	shimsDir := fakePolicyShim(t, dir, "pacing-test", "fakepolicy")
-	t.Setenv("PATH", shimsDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-
-	line := strings.TrimSuffix(strings.Repeat("fakepolicy; ", execd.PolicyLaunchBurst+2), "; ")
-	start := time.Now()
-	code, _, errOut := runShell(t, dir, line, "")
-	elapsed := time.Since(start)
-
-	if code != 0 {
-		t.Fatalf("exit = %d, want 0 (stderr: %q)", code, errOut)
-	}
-	if want := 2 * execd.PolicyLaunchInterval; elapsed < want {
-		t.Errorf("elapsed = %v, want at least %v: the two launches past the burst should each wait for the bucket to refill", elapsed, want)
-	}
-}
-
-// TestShellExecutorDoesNotPaceFloorCommands guards the other side of the
-// pacing rule: only policy-controlled commands spend the session budget
-// launchPacer rations, so a line made of floor commands must run at full
-// speed. A regression here would slow every command execd serves.
-func TestShellExecutorDoesNotPaceFloorCommands(t *testing.T) {
-	dir := t.TempDir()
-
-	// cat, not the `true` builtin: a builtin never reaches the exec handler
-	// at all, so it could not show a pacing regression even if one existed.
-	line := strings.TrimSuffix(strings.Repeat("cat /dev/null; ", execd.PolicyLaunchBurst+2), "; ")
-	start := time.Now()
-	code, _, errOut := runShell(t, dir, line, "")
-	elapsed := time.Since(start)
-
-	if code != 0 {
-		t.Fatalf("exit = %d, want 0 (stderr: %q)", code, errOut)
-	}
-	if elapsed >= execd.PolicyLaunchInterval {
-		t.Errorf("elapsed = %v, want well under %v: floor commands must not be paced", elapsed, execd.PolicyLaunchInterval)
-	}
-}
-
-// TestShellExecutorStopsPacingWhenTheContextIsCancelled covers execd's
-// own cancellation path: Server.handle cancels the request context when the
-// client goes away, and a pacing wait that ignored it would keep a dead
-// request's line crawling through its remaining launches, one per interval.
-func TestShellExecutorStopsPacingWhenTheContextIsCancelled(t *testing.T) {
-	dir := t.TempDir()
-	shimsDir := fakePolicyShim(t, dir, "pacing-cancel-test", "fakepolicy")
-	t.Setenv("PATH", shimsDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-
-	// Six launches past the burst: finishing this line unpaced-by-nothing
-	// would take six intervals of waiting.
-	line := strings.TrimSuffix(strings.Repeat("fakepolicy; ", execd.PolicyLaunchBurst+6), "; ")
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() {
-		time.Sleep(PolicyLaunchCancelDelay)
-		cancel()
-	}()
-
-	start := time.Now()
-	code, err := execd.NewShellExecutor().Run(ctx, line, dir,
-		execd.Stdio{In: devNull(t), Out: nullOut(t), Err: nullOut(t)})
-	elapsed := time.Since(start)
-
-	if err != nil {
-		t.Fatalf("Run(): %v", err)
-	}
-	if code == 0 {
-		t.Errorf("exit = 0, want non-zero: the line was cancelled partway through")
-	}
-	// The bound is what makes this test about the pacer rather than about
-	// the interpreter: mvdan.cc/sh checks the context between statements, so
-	// a pacer that ignored it would still stop the line — but only after
-	// sitting out the full interval it was already waiting. Returning inside
-	// that wait is the behaviour under test, so the bound sits between the
-	// cancellation delay and one interval.
-	if want := execd.PolicyLaunchInterval / 2; elapsed >= want {
-		t.Errorf("elapsed = %v, want under %v: the cancellation must interrupt the pacing wait, not merely follow it", elapsed, want)
-	}
-}
-
-// PolicyLaunchCancelDelay fires the cancellation above early in the first
-// paced launch's wait, leaving room to tell "the wait was interrupted" apart
-// from "the wait finished and then the line stopped".
-const PolicyLaunchCancelDelay = execd.PolicyLaunchInterval / 10
-
 // TestRunLeavesNoDescendants reproduces the measured defect this branch
 // exists to fix: before Job was wired in, cancelling a command killed only
 // its direct child, a surviving grandchild kept the command's stdout pipe
@@ -630,43 +458,16 @@ func TestRunLeavesNoDescendants(t *testing.T) {
 	}
 }
 
-// The wiring in this package decides whether a child may receive a writer
-// directly by asking whether it is one of the request's own files. That
-// question is only answerable if the interpreter hands the exec handler the
-// same *os.File it was given, rather than a wrapper around it. mvdan.cc/sh
-// documents HandlerContext.Stdin as always being an *os.File; this pins the
-// stdout side, which is not documented.
-func TestInterpHandsTheSameFileToTheExecHandler(t *testing.T) {
-	f, err := os.CreateTemp(t.TempDir(), "out")
-	if err != nil {
+// A non-interactive bash sources $BASH_ENV before the command line; execd's
+// own environment must not get to inject a script that way.
+func TestShellExecutorDoesNotSourceBashEnv(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "env.sh")
+	if err := os.WriteFile(script, []byte("echo SOURCED\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { f.Close() })
-
-	var gotOut, gotErr any
-	r, err := interp.New(
-		interp.Dir(t.TempDir()),
-		interp.StdIO(nil, f, f),
-		interp.ExecHandler(func(ctx context.Context, args []string) error {
-			hc := interp.HandlerCtx(ctx)
-			gotOut, gotErr = hc.Stdout, hc.Stderr
-			return nil
-		}),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	src, err := syntax.NewParser().Parse(strings.NewReader("probe"), "t")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := r.Run(context.Background(), src); err != nil {
-		t.Fatal(err)
-	}
-	if gotOut != any(f) {
-		t.Errorf("hc.Stdout = %T %v, want the very *os.File passed to StdIO", gotOut, gotOut)
-	}
-	if gotErr != any(f) {
-		t.Errorf("hc.Stderr = %T %v, want the very *os.File passed to StdIO", gotErr, gotErr)
+	t.Setenv("BASH_ENV", script)
+	code, out, _ := runShell(t, t.TempDir(), "echo ran", "")
+	if code != 0 || strings.Contains(out, "SOURCED") {
+		t.Errorf("exit %d, stdout %q: BASH_ENV must not be sourced", code, out)
 	}
 }

@@ -11,10 +11,6 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
-
-	"mvdan.cc/sh/v3/expand"
-	"mvdan.cc/sh/v3/interp"
-	"mvdan.cc/sh/v3/syntax"
 )
 
 // The statuses execd reports for outcomes that are not the command's own.
@@ -23,290 +19,94 @@ import (
 //	the command's own   the last command's exit status
 //	128 + signum        died from a signal
 //	127                 command not found
-//	126                 could not be started (exec or wiring failure)
+//	126                 could not be started
 //	124                 timed out
 //	2                   syntax error
-//	1                   the interpreter failed for a reason that is not an exit status
 //
 // An error frame is never used for any of these: it reports a fault of execd
 // itself, and a command that fails is not a fault of execd.
 const (
 	ExitSyntaxError = 2
 	// ExitTimeout is the status a timed-out request reports. It follows GNU
-	// timeout(1), so a caller that already knows that convention reads it
-	// right.
-	//
-	// Two ways it is weaker than GNU timeout(1), both measured on nono 0.74.0,
-	// 2026-09-20. It does not return AT the timeout: cancellation tears the
-	// process groups down then, but the request still pays out whatever of
-	// DrainGrace the drains have left, so it returns at the timeout plus up to
-	// that grace. Measured with `git log --oneline | git cat-file
-	// --batch-check` at a 1000ms timeout, 5 runs (probe log set bt1-5): the 4
-	// that hit a stall reported 124 at 2017-2024ms, and the 1 that did not
-	// finished 0 at 18ms.
-	// And what it kills is what execd started: a policy-controlled command's
-	// own children survive it — `sh -c 'sleep 60'` at a 3000ms timeout
-	// reported 124 at 5004-5005ms and left the sleep running, 3/3 (log set
-	// ss1-3). See Job and DrainGrace for both.
+	// timeout(1). At the timeout the request's process group gets SIGTERM, a
+	// grace, then SIGKILL; a policy-controlled command's own children run in
+	// nono's child sandbox outside that group and can survive it (measured on
+	// nono 0.74.0, `sh -c 'sleep 60'` under a 3000ms timeout, 3/3). See Job.
 	ExitTimeout     = 124
 	ExitCannotStart = 126
 	ExitNotFound    = 127
 )
 
-// ShellExecutor runs one command line. It parses and evaluates the shell
-// language in this process with mvdan.cc/sh and executes every simple command
-// itself, which is what keeps each execution mediated: execd runs inside a
-// nono session whose command policies decide what may be executed at all, and
-// handing the line to a real shell would hand that decision to the shell.
-//
-// Everything the shell language does with the filesystem — globbing, redirects,
-// command substitution — is performed here and is therefore bounded by
-// execd's own sandbox, not by the agent's.
+// ShellExecutor runs one command line with bash, inside execd's own sandbox.
+// nono mediates every command bash executes at execve — by name, by path,
+// through env, sh -c or a function alike — so bash parsing the line costs no
+// policy (measured on nono 0.78.0, 2026-10-20, against an in-process
+// interpreter: identical denials, and a policy-to-policy pipe that the
+// interpreter stalled on finished at once). What bash gives up is pacing:
+// nono admits only about five policy-controlled launches in quick
+// succession, and a line that launches more can fail with exit 126.
 type ShellExecutor struct {
-	// pacer is shared by every request this executor serves, which is what
-	// makes it process-wide: internal/cli/execd.go builds exactly one
-	// ShellExecutor and hands it to the server, whose Serve spawns a
-	// goroutine per connection. The budget being paced belongs to the one
-	// nono session all of those goroutines launch into, so a per-request
-	// limiter would not bound anything.
-	pacer *launchPacer
+	bash string // resolved once; empty when bash is not on PATH
 }
 
-// NewShellExecutor returns a ShellExecutor. Its only state is the launch pacer
-// below, which is deliberately per-executor rather than per-request: see the
-// pacer field.
-func NewShellExecutor() *ShellExecutor { return &ShellExecutor{pacer: &launchPacer{}} }
+// NewShellExecutor resolves bash once, so every request runs the same one.
+func NewShellExecutor() *ShellExecutor {
+	bash, _ := exec.LookPath("bash")
+	return &ShellExecutor{bash: bash}
+}
 
-// Run evaluates command with cwd as the working directory, writing output
-// directly to the caller's own stdout and stderr descriptors, and returns the
-// exit status of the last command.
-//
-// The error is non-nil only for a failure of Run itself. A syntax error, a
-// command that does not exist, and a command that fails are all reported
-// through the exit status with a message on stderr, because they are outcomes
-// of the agent's line rather than faults of execd itself.
-func (e *ShellExecutor) Run(ctx context.Context, command, cwd string,
-	stdio Stdio) (int, error) {
-	file, err := syntax.NewParser().Parse(strings.NewReader(command), "command")
-	if err != nil {
-		fmt.Fprintf(stdio.Err, "agent-sandbox: %v\n", err)
-		return ExitSyntaxError, nil
+// Run executes command with bash in cwd and returns its exit status. bash
+// runs in the request's Job (its own process group), so its children share
+// the group and the Job's signal relay and teardown reach them.
+func (e *ShellExecutor) Run(ctx context.Context, command, cwd string, stdio Stdio) (int, error) {
+	if e.bash == "" {
+		fmt.Fprintln(stdio.Err, "execd: bash not found in PATH")
+		return ExitNotFound, nil
 	}
-
-	// The interpreter is given the caller's own three files, not copies of
-	// them and nothing wrapping them: identity is what the wiring later uses to
-	// tell a descriptor the caller passed from a pipe the interpreter made, and
-	// a wrapper here would make that question unanswerable.
-	runner, err := interp.New(
-		interp.Dir(cwd),
-		interp.StdIO(stdio.In, stdio.Out, stdio.Err),
-		interp.ExecHandler(e.execHandler),
-	)
-	if err != nil {
-		return 0, fmt.Errorf("execd: build interpreter: %w", err)
-	}
-
-	// One Job per request: every command the line starts, across every
-	// pipeline stage, belongs to it. Ownership follows creation — whoever
-	// makes the Job tears it down — so when the caller already put one on the
-	// context (ExecuteWithSignals does, because it has to relay signals into
-	// it) Run borrows it and leaves the teardown there. A caller that builds
-	// an interpreter by hand, as tests do, gets a Job of Run's own, torn down
-	// on every path out of Run — normal completion, a parse or exec error, or
-	// the context being cancelled — so nothing execd started for that caller
-	// outlives Run either. Not "nothing outlives Run": teardown is killpg over
-	// the groups this side created, and a policy-controlled command's own
-	// children sit inside nono's child sandbox, outside them. Measured; see
-	// Job.
+	cmd := exec.Command(e.bash, "--norc", "--noprofile", "-c", command)
+	cmd.Dir = cwd
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdio.In, stdio.Out, stdio.Err
+	cmd.Env = bashEnv(os.Environ())
 	job := jobFrom(ctx)
 	if job == nil {
 		job = NewJob(stdio)
 		defer job.Terminate()
-		ctx = withJob(ctx, job)
 	}
-
-	if err := runner.Run(ctx, file); err != nil {
-		if status, ok := interp.IsExitStatus(err); ok {
-			return int(status), nil
-		}
-		fmt.Fprintf(stdio.Err, "agent-sandbox: %v\n", err)
-		return 1, nil
-	}
-	return 0, nil
-}
-
-// execHandler is the only place this process performs an execve. Everything the
-// interpreter treats as a simple command — and nothing else — arrives here.
-func (e *ShellExecutor) execHandler(ctx context.Context, args []string) error {
-	hc := interp.HandlerCtx(ctx)
-
-	// LookPathDir resolves against hc.Dir and hc.Env rather than this process's
-	// own cwd and PATH: the whole premise of this executor is the caller's
-	// explicitly supplied working directory, and exec.LookPath would silently
-	// resolve "./script.sh" against execd's cwd instead of the command's.
-	path, err := interp.LookPathDir(hc.Dir, hc.Env, args[0])
-	if err != nil {
-		fmt.Fprintf(hc.Stderr, "agent-sandbox: %s: command not found\n", args[0])
-		return interp.NewExitStatus(ExitNotFound)
-	}
-
-	// Pace only the policy-controlled commands: they are the ones whose
-	// launch spends the session budget launchPacer rations, and delaying a
-	// floor command would buy nothing.
-	if isPolicyControlledPath(path) && !e.pacer.wait(ctx) {
-		return interp.NewExitStatus(ExitCannotStart)
-	}
-
-	// exec.Command, not exec.CommandContext: cancellation is the Job's
-	// responsibility now (see the watcher below), and CommandContext's own
-	// kill would race Job.Terminate's killpg, two mechanisms killing the same
-	// process by different means.
-	cmd := exec.Command(path, args[1:]...)
-	cmd.Dir = hc.Dir
-	cmd.Env = execEnv(hc)
-
-	// Never hand a child the interpreter's own pipe ends. A policy-controlled
-	// command is reached through nono's shim, and the shim duplicates every fd
-	// it is given and keeps the copy: pass the interpreter's pipe writer
-	// straight through and it stays open after the command exits, so the next
-	// stage of the pipeline never sees EOF and the pipeline hangs after
-	// producing its complete output. Interposing a pipe this side owns confines
-	// that leak instead of curing it. The interpreter's own writer is never
-	// touched by the child or the shim, so it stays exactly as open or closed
-	// as the interpreter left it — but nono retains a duplicate of the
-	// interposed pipe's write end too, measured, so the leak lands on an fd
-	// this side can close on a deadline rather than on one it must never touch.
-	//
-	// So a pipeline stage ends by one of three closes, not two: the child's on
-	// exit, this side's in closeJobEnds, and — when a duplicate outlives both —
-	// waitDrains force-closing the read end at DrainGrace, which is what ended
-	// the stage in 14 of the 21 measured runs of a policy-to-policy pipe (probe
-	// log set runB1-6, full, full2, bb1-10 plus three transcript-only runs).
-	// See DrainGrace for the rest of the numbers. A real file needs none of
-	// this and goes straight to the child: see wiring.
-	//
-	// job is looked up before the wiring is built, not just before Start, so
-	// wiring can be told the request's own three files: that trio is what lets
-	// passthrough tell a descriptor the client passed from a pipe the
-	// interpreter made.
-	job := jobFrom(ctx)
-	if job == nil {
-		// Unreachable. execHandler runs only as the interpreter Run builds,
-		// and Run puts a Job on the context before it runs anything — its own
-		// when the caller supplied none. No caller in this package or its
-		// tests reaches here; an earlier version of this comment claimed a
-		// bare interpreter in a test does, and none does.
-		//
-		// Kept anyway, because it fails in the safe direction and a nil
-		// dereference would not: an empty Stdio matches nothing by identity,
-		// so every descriptor is decided by kind alone and no interpreter pipe
-		// can reach a child by mistake.
-		job = NewJob(Stdio{})
-	}
-	w := &wiring{inherited: job.Stdio().files()}
-	if err := w.wireOutputs(cmd, hc); err != nil {
-		fmt.Fprintf(hc.Stderr, "agent-sandbox: %s: %v\n", args[0], err)
-		return interp.NewExitStatus(ExitCannotStart)
-	}
-
-	// stdin is an *os.File either way — the redirect's own file, or the read
-	// end of a pipe this side owns and pumps hc.Stdin into. That is what keeps
-	// Wait from blocking: with an io.Reader in cmd.Stdin, os/exec runs its own
-	// copier and Wait waits for it, and that copier sits in Read(), which
-	// nothing interrupts while the upstream end of the pipeline is still open.
-	if err := w.wireStdin(cmd, hc); err != nil {
-		w.abort()
-		fmt.Fprintf(hc.Stderr, "agent-sandbox: %s: %v\n", args[0], err)
-		return interp.NewExitStatus(ExitCannotStart)
-	}
-
-	// Start, then close this side's copies of the fds the child was given, then
-	// Wait, then drain. No ordering rule is being obeyed here: every fd belongs
-	// to this side rather than to os/exec, so Wait has nothing to close and
-	// cannot truncate output still in flight — the hazard the old
-	// "Start, then drain, then Wait, never any other order" rule existed to
-	// avoid is unreachable rather than avoided. The one thing that does matter
-	// is closeJobEnds: while this side still holds a write end, the drain's EOF
-	// can never arrive.
 	if err := job.Start(cmd); err != nil {
-		w.abort()
-		fmt.Fprintf(hc.Stderr, "agent-sandbox: %s: %v\n", args[0], err)
-		return interp.NewExitStatus(ExitCannotStart)
+		fmt.Fprintf(stdio.Err, "execd: start bash: %v\n", err)
+		return ExitCannotStart, nil
 	}
-	// Right after Start, and before anything that waits: exec.Cmd has now
-	// duplicated these into the child, and while this side still holds a write
-	// end the drain below can never see EOF.
-	w.closeJobEnds()
-
-	// Tear the whole group down the instant the context is cancelled, not
-	// just when the interpreter next checks it between statements — this is
-	// what makes a cancelled request return promptly even while this one
-	// command is still running. stop stops the watcher once execHandler no
-	// longer needs it — but only on the path where nothing has cancelled:
-	// once the select below has taken the ctx.Done() branch, it is committed
-	// to job.Terminate(), and closing stop afterwards does nothing. So the
-	// goroutine can outlive execHandler, and possibly Run, by up to
-	// TerminateGrace: that is how long Terminate may poll before it returns.
-	// That is bounded and harmless — Terminate touches only the Job's own
-	// state, nothing execHandler or Run still hold — but it is a real bound,
-	// not "never outlives the command it watches".
-	stop := make(chan struct{})
-	defer close(stop)
+	done := make(chan struct{})
 	go func() {
 		select {
 		case <-ctx.Done():
 			job.Terminate()
-		case <-stop:
+		case <-done:
 		}
 	}()
-
-	err = cmd.Wait()
-
-	if truncated := w.waitDrains(DrainGrace); truncated {
-		// Not an exit code: inventing one would hide the command's real result.
-		//
-		// It does reach the caller, including from a non-final pipeline stage
-		// — which is the common case for this note, since the stall that
-		// produces it needs a downstream stage to be stalled by. This comment
-		// said the opposite until 2026-09-21, on the strength of an in-process
-		// measurement whose stderr was a bytes.Buffer; mvdan.cc/sh really does
-		// drop a non-final stage's stderr in that arrangement, but not when
-		// stderr is a real descriptor, which is every production path. Through
-		// the client the note arrived in 69 of 69 stalled runs. See DrainGrace.
-		fmt.Fprintf(hc.Stderr,
-			"agent-sandbox: output truncated: %s left a process holding its output after %s\n",
-			args[0], DrainGrace)
+	err := cmd.Wait()
+	close(done)
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return exitStatusOf(exitErr.ProcessState), nil
+		}
+		return ExitCannotStart, nil
 	}
-
-	if err == nil {
-		return nil
-	}
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
-		return interp.NewExitStatus(uint8(exitStatusOf(exitErr.ProcessState)))
-	}
-	fmt.Fprintf(hc.Stderr, "agent-sandbox: %s: %v\n", args[0], err)
-	return interp.NewExitStatus(ExitCannotStart)
+	return 0, nil
 }
 
-// execEnv renders the interpreter's environment for the child. execd's
-// own environment is already filtered by nono before it starts, and each
-// command's is decided by its entry in the command profile, so nothing is
-// filtered here.
-//
-// env starts as an empty (non-nil) slice rather than a nil one: cmd.Env == nil
-// means "inherit this process's entire environment", which is exactly what a
-// sandboxed child must never do, even when the interpreter's own environment
-// happens to be empty.
-func execEnv(hc interp.HandlerContext) []string {
-	env := []string{}
-	hc.Env.Each(func(name string, v expand.Variable) bool {
-		if v.IsSet() {
-			env = append(env, name+"="+v.String())
+// bashEnv drops the variables a non-interactive bash would source a file
+// from, so nothing in execd's environment injects a script into every line.
+func bashEnv(environ []string) []string {
+	out := make([]string, 0, len(environ))
+	for _, kv := range environ {
+		if strings.HasPrefix(kv, "BASH_ENV=") || strings.HasPrefix(kv, "ENV=") {
+			continue
 		}
-		return true
-	})
-	return env
+		out = append(out, kv)
+	}
+	return out
 }
 
 // Execute satisfies Executor so the server can run a request directly. The
@@ -386,7 +186,7 @@ func (e *ShellExecutor) ExecuteWithSignals(ctx context.Context, req Request,
 // executor does not reproduce that check, because the bound it enforced now
 // comes from execd's own nono session instead: execd runs under --profile
 // with no --allow-cwd (see ExecdArgs), so every filesystem access the
-// interpreter or a child process makes — cwd included — is already confined to
+// line's bash or a child process makes — cwd included — is already confined to
 // whatever that profile grants, whatever req.Cwd claims. What is checked here
 // is only the request's shape, not its reach: a non-absolute Cwd (including
 // the empty string a client sends when its own os.Getwd fails) is refused

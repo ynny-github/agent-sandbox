@@ -5,13 +5,11 @@
   transparently routes each one through execd.
 - Command output is returned inline in the tool result.
 
-There is no shell in the loop. execd parses your command line itself
-(pipelines, `&&`/`||`/`;`, redirections, globbing, `$(…)`, `for`/`if`, `cd` and
-the other shell builtins all work) and executes each simple command directly —
-never implicitly through `bash` or `sh` (invoking either yourself is a
-different thing — see below). Builtins run inside execd itself, at
-execd's own grants, so a redirect or glob you write is bounded by those, not by
-whichever command's output it is attached to.
+execd runs your command line with bash, inside execd's own sandbox. nono
+applies each command's policy when it is executed, however the line names it
+(by name, by path, through env, sh -c or a function). Builtins, redirects and
+globs run in that bash, at execd's own grants, so a redirect or glob you write
+is bounded by those, not by whichever command's output it is attached to.
 
 ## Where the boundary is
 Some commands run in their own child sandbox with their own filesystem and
@@ -53,17 +51,11 @@ without it, nothing reaches execd at all.
   reason names the exact edge. Do not retry; ask the operator to change the
   profile.
 - **Exit 126 saying the shim `failed to connect to … supervisor.sock`** — not a
-  policy denial. Policy-controlled commands launched in quick succession inside
-  one nono session exhaust a budget the session refills only over time. The
-  execd paces its own launches to stay under it, so this should be rare; when
-  it does appear, re-running the command is worth one attempt.
+  policy denial. nono admits only about five policy-controlled launches in
+  quick succession; more in one command line (a loop over git, say) fail this
+  way. Run them as separate commands, or fewer per line.
 - **Exit 127, or `Permission denied` from the program itself** — the path, host
   or binary is outside what the profile grants. Not a rule to phrase around.
-- **`agent-sandbox: refused: this pipeline pipes two or more policy-controlled
-  commands together …`, exit 126** — not a nono denial; execd refused it
-  itself, before running anything, because two policy-controlled commands were
-  piped directly together (`nono why --command <name>` says which ones are).
-  Run them as separate commands instead.
 - **`fatal: cannot exec '.git/hooks/commit-msg': Permission denied`** (or any
   other `.git/hooks/*`) — not a policy denial. Git hooks do not execute inside
   this sandbox at all; use `git commit --no-verify`. Because of that,

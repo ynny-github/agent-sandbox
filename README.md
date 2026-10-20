@@ -134,13 +134,15 @@ profile; the other is execd under the command profile, started by `execd up`.
 Sandboxes cannot nest, which is why execd does not run inside the
 agent's session.
 
-**There is no shell in the loop.** Every command the agent issues reaches
-execd over a unix socket, and execd parses the line itself with an
-embedded interpreter — pipelines, `&&`/`||`/`;`, redirections, globbing,
-`$(…)`, `for`/`if`, `cd` and the other builtins all work — then calls
-`execve` directly for each simple command. Handing the line to `bash -c`
-instead cannot be made safe: a denial written for `git reset --hard` is
-defeated by invoking git through its store path instead of by name.
+**bash runs the line, nono applies the policy.** Every command the agent issues
+reaches execd over a unix socket, and execd runs the line with
+`bash --norc --noprofile -c` inside its own sandbox. nono applies each
+command's policy when it is executed — by name, by path, through `env`,
+`sh -c` or a function alike (measured on nono 0.78.0) — so who parses the line
+does not change what is enforced. One limit: nono admits only about five
+policy-controlled launches in quick succession, so a line that loops over a
+policy-controlled command can fail with exit 126 naming `supervisor.sock`; run
+such commands separately.
 
 **Two tiers.** Commands declared in the command profile get their own child
 sandbox, reached only through the generated shim; everything else runs

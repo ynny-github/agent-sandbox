@@ -20,11 +20,8 @@ import (
 //
 // The three streams are files, because that is what Run takes now: a request
 // runs on the caller's own descriptors and there is no writer for this side to
-// collect bytes into. That also removes the mutex-protected buffer this helper
-// used to need — a pipeline stage can run more than one command concurrently
-// (mvdan.cc/sh's own Pipe case does exactly this), and a plain bytes.Buffer
-// written by two of them at once was measured losing output here. A file has
-// no such bookkeeping to corrupt.
+// collect bytes into. A file also tolerates several commands of one pipeline
+// writing to it at once, which a plain bytes.Buffer did not.
 func runShell(t *testing.T, dir, command string, stdin string) (int, string, string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

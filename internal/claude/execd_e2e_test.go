@@ -237,3 +237,34 @@ func TestExecdUp_TwiceReturnsTheSamePath(t *testing.T) {
 		t.Errorf("second execd up = %s, want %s", got, first)
 	}
 }
+
+// Two policy-controlled commands piped together used to stall ~2s and lose
+// output under the in-process interpreter; under bash they finish at once.
+func TestExecdCommand_PolicyPipeFinishes(t *testing.T) {
+	if _, err := exec.LookPath("nono"); err != nil {
+		t.Skip("nono not on PATH")
+	}
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	execdPath := buildExecd(t, root)
+	t.Cleanup(func() { os.Remove(execdPath) })
+	profile := filepath.Join(root, "templates", "minimal", ".agent-sandbox", "command-profile.json")
+	sock := startExecdSession(t, execdPath, profile, root)
+
+	start := time.Now()
+	cmd := exec.Command(execdPath, "exec", "--", "git log --oneline -1 | git hash-object --stdin")
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), execd.SocketEnvVar+"="+sock)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("exec: %v\n%s", err, out)
+	}
+	if d := time.Since(start); d > 1500*time.Millisecond {
+		t.Errorf("took %v, want the pipe to finish without the old ~2s stall", d)
+	}
+	if got := strings.TrimSpace(string(out)); len(got) != 40 {
+		t.Errorf("output = %q, want one 40-hex object id", got)
+	}
+}

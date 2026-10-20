@@ -427,15 +427,36 @@ func TestRunDoctor_RunsOnlyTheSafetyChecks(t *testing.T) {
 	if err := runDoctor(doctorCmd, nil); err != nil {
 		t.Fatalf("runDoctor: %v\n%s", err, buf.String())
 	}
+	// The launch script runs doctor on every launch: a passing run says
+	// nothing.
+	if out := buf.String(); out != "" {
+		t.Errorf("a passing doctor printed:\n%s", out)
+	}
+}
+
+// A failing run prints every check, so the failure is read in context.
+func TestRunDoctor_PrintsAllChecksWhenOneFails(t *testing.T) {
+	stubAllSeamsOK(t)
+	prev := probeHook
+	probeHook = func(string, string) error { return errors.New("hook did not run") }
+	t.Cleanup(func() { probeHook = prev })
+	dir := t.TempDir()
+	configWithBothProfiles(t, dir)
+	useProfiles(t, dir)
+	defer stubSelfPath(filepath.Join(t.TempDir(), "agent-sandbox"))()
+	t.Chdir(t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	var buf bytes.Buffer
+	doctorCmd.SetOut(&buf)
+	t.Cleanup(func() { doctorCmd.SetOut(nil) })
+	if err := runDoctor(doctorCmd, nil); !errors.Is(err, errDoctorChecksFailed) {
+		t.Fatalf("runDoctor = %v, want errDoctorChecksFailed", err)
+	}
 	out := buf.String()
-	for _, want := range []string{"[OK] hook", "[OK] binaries", "[OK] approved copy"} {
+	for _, want := range []string{"[NG] hook", "hook did not run", "[OK] binaries", "[OK] approved copy"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q:\n%s", want, out)
-		}
-	}
-	for _, gone := range []string{"] nono", "tool-sandbox", "exec daemon", "profile paths", "context-mode"} {
-		if strings.Contains(out, gone) {
-			t.Errorf("output still has the diagnostic %q:\n%s", gone, out)
 		}
 	}
 }

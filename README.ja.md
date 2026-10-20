@@ -168,7 +168,7 @@ execd 自身のビルトインは 3 つ目の扱いで、execd プロセスの�
 |---|---|
 | `agent-sandbox init` | バイナリに埋め込まれた `.agent-sandbox/` とプロファイル用 skill をこのプロジェクトに書き出す。上書きはしない |
 | `agent-sandbox launch <name> [引数...]` | `.agent-sandbox/` の変更を承認したうえで `.agent-sandbox/bin/<name>` を実行する。実行されるのは承認済みの写し |
-| `agent-sandbox doctor` | 起動が安全かを確認: フックがエージェントプロファイルで動くこと、コマンドプロファイルが `execd`(とその置き場所)と `agent-sandbox` のどちらも書き込み可能にしていないこと、エージェントプロファイルが `launch` の実行する承認済みの写しに書き込めないこと。起動スクリプトが最初に実行する。`--command-profile`/`--agent-profile` の既定は `.agent-sandbox/`。終了コード 0 / 1 |
+| `agent-sandbox doctor` | 起動が安全かを確認: フックがエージェントプロファイルで動くこと、コマンドプロファイルが `execd`(とその置き場所)と `agent-sandbox` のどちらも書き込み可能にしていないこと、エージェントプロファイルが `launch` の実行する承認済みの写しに書き込めないこと。起動スクリプトが最初に実行する。全項目が合格なら何も表示せず、失敗があれば全項目を表示する。`--command-profile`/`--agent-profile` の既定は `.agent-sandbox/`。終了コード 0 / 1 |
 | `agent-sandbox ai explain` | エージェント向けのサンドボックス説明: コマンドの実行経路、2 つの層、拒否の理由 |
 | `agent-sandbox ai pointer` | 起動スクリプトが Claude に渡すシステムプロンプトの一文 |
 

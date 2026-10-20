@@ -168,7 +168,7 @@ for `nono profile show` / `nono why`.
 |---|---|
 | `agent-sandbox init` | Write the embedded `.agent-sandbox/` and the profile skills into this project. Never overwrites |
 | `agent-sandbox launch <name> [args...]` | Run `.agent-sandbox/bin/<name>` after you approve any change to `.agent-sandbox/`; the approved copy is what runs |
-| `agent-sandbox doctor` | Check that a launch is safe: the hook runs under the agent profile, the command profile leaves neither `execd` (nor its directory) nor `agent-sandbox` writable, and the agent profile cannot write the approved copy `launch` runs. The launch script runs it first. `--command-profile`/`--agent-profile` default to `.agent-sandbox/`. Exit 0 / 1 |
+| `agent-sandbox doctor` | Check that a launch is safe: the hook runs under the agent profile, the command profile leaves neither `execd` (nor its directory) nor `agent-sandbox` writable, and the agent profile cannot write the approved copy `launch` runs. The launch script runs it first. Silent when every check passes; on a failure it prints every check. `--command-profile`/`--agent-profile` default to `.agent-sandbox/`. Exit 0 / 1 |
 | `agent-sandbox ai explain` | Agent-facing description of the sandbox: how commands run, both tiers, and every denial's reason |
 | `agent-sandbox ai pointer` | The system-prompt line the launch script passes to Claude |
 

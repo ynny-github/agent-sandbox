@@ -52,9 +52,11 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	if results[0].ok {
 		results = append(results, checkHook(p), checkBinaries(ctx, p), checkApprovedCopy(ctx, p))
 	}
-	renderResults(cmd.OutOrStdout(), results)
+	// The launch script runs doctor on every launch, so a passing run is
+	// silent; a failing one prints every check for context.
 	for _, r := range results {
 		if !r.ok {
+			renderResults(cmd.OutOrStdout(), results)
 			return errDoctorChecksFailed
 		}
 	}

@@ -119,7 +119,10 @@ directory — `.agent-sandbox/`, the profiles, even `.git` — is writable by th
 commands the agent runs, so a script could be rewritten between launches.
 `launch` compares `.agent-sandbox/` with the copy you last approved, kept in
 `~/.config/agent-sandbox/trusted/`, shows any change as a diff and asks on the
-terminal, then runs the approved copy. Do not put `.agent-sandbox/bin` on
+terminal, then runs the approved copy. The first launch in a project has no
+copy to compare with, so it approves `.agent-sandbox/` as it stands without
+asking — read a cloned repository's `.agent-sandbox/` before its first launch.
+Do not put `.agent-sandbox/bin` on
 `PATH`: that would run it unapproved, and a script named `claude` would call
 itself. A shell alias in your own rc file is the shortcut:
 

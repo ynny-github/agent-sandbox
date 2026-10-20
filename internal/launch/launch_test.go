@@ -66,14 +66,23 @@ func trusted(t *testing.T) string {
 	return d
 }
 
-func TestRun_FirstLaunchAsksAndCopies(t *testing.T) {
+// With no approved copy yet, the first launch records .agent-sandbox/ as
+// approved without asking — an accepted trade-off: a cloned repository's
+// script runs unapproved the first time.
+func TestRun_FirstLaunchCopiesWithoutAsking(t *testing.T) {
 	project(t, basic)
 	var r recorder
-	if err := Run("claude", []string{"-p", "x"}, fakes(&r, true)); err != nil {
+	var out strings.Builder
+	o := fakes(&r, false)
+	o.Out = &out
+	if err := Run("claude", []string{"-p", "x"}, o); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if r.prompts != 1 || !strings.Contains(r.diff, "bin/claude") {
-		t.Errorf("prompts = %d, diff = %q; want one prompt naming bin/claude", r.prompts, r.diff)
+	if r.prompts != 0 {
+		t.Errorf("prompts = %d, want none on the first launch", r.prompts)
+	}
+	if !strings.Contains(out.String(), "first launch") {
+		t.Errorf("output = %q, want a note that the first launch was approved without asking", out.String())
 	}
 	if b, err := os.ReadFile(filepath.Join(trusted(t), "bin", "claude")); err != nil || !strings.Contains(string(b), "echo hi") {
 		t.Errorf("approved copy of bin/claude = %q (err %v)", b, err)
@@ -189,7 +198,9 @@ func TestRun_MissingDirAndScript(t *testing.T) {
 }
 
 func TestRun_NoTerminalRefusesAChange(t *testing.T) {
-	project(t, basic)
+	dir := project(t, basic)
+	Run("claude", nil, fakes(&recorder{}, true))
+	os.WriteFile(filepath.Join(dir, Dir, "bin", "claude"), []byte("#!/bin/sh\nchanged\n"), 0o755)
 	o := fakes(&recorder{}, true)
 	o.Prompt = func(string) (bool, error) { return false, errors.New("no terminal") }
 	if err := Run("claude", nil, o); err == nil {

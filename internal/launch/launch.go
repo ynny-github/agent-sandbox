@@ -101,12 +101,22 @@ func Run(name string, args []string, o Options) error {
 			return fmt.Errorf("stage the copy: %w", err)
 		}
 		defer os.RemoveAll(staging)
-		ok, err := o.Prompt(sanitize(changes + "\n" + diffTrees(trusted, old, staging, cur)))
-		if err != nil {
-			return fmt.Errorf("%s/ changed and needs approval: %w", Dir, err)
-		}
-		if !ok {
-			return ErrDeclined
+		if old == nil {
+			// First launch in this project: there is nothing approved to
+			// compare with, so the directory as it stands becomes the approved
+			// copy without asking. Accepted trade-off: a cloned repository's
+			// script runs unapproved this once, and so does a launch from a
+			// path (a symlink, say) that has no copy yet.
+			fmt.Fprintf(o.Out, "agent-sandbox launch: first launch in %s; approved %s/ as it is, without asking\n",
+				project, Dir)
+		} else {
+			ok, err := o.Prompt(sanitize(changes + "\n" + diffTrees(trusted, old, staging, cur)))
+			if err != nil {
+				return fmt.Errorf("%s/ changed and needs approval: %w", Dir, err)
+			}
+			if !ok {
+				return ErrDeclined
+			}
 		}
 		if err := swapIn(trusted, staging); err != nil {
 			return fmt.Errorf("store the approved copy: %w", err)
@@ -185,17 +195,9 @@ func summarize(old, cur map[string]file) string {
 }
 
 // diffTrees shows the content of every change: `diff -ruN` between the
-// approved copy (or nothing, on the first launch) and the staging copy, so an
-// added file's content is shown too. Without diff, the added and changed
+// approved copy and the staging copy, so an added file's content is shown too. Without diff, the added and changed
 // files are printed whole.
 func diffTrees(oldRoot string, old map[string]file, staging string, cur map[string]file) string {
-	if old == nil {
-		empty, err := os.MkdirTemp("", "agent-sandbox-empty-")
-		if err == nil {
-			defer os.RemoveAll(empty)
-			oldRoot = empty
-		}
-	}
 	out, err := exec.Command("diff", "-ruN", oldRoot, staging).Output()
 	if errors.Is(err, exec.ErrNotFound) {
 		var b strings.Builder

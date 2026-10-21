@@ -43,17 +43,17 @@ go install github.com/ynny-github/agent-sandbox/cmd/...@latest
 
 This installs both `agent-sandbox` and `execd`; the launch script runs both from `PATH`.
 
-Or with [mise](https://mise.jdx.dev/):
+Or with [mise](https://mise.jdx.dev/), which installs the prebuilt binaries
+from GitHub Releases:
 
 ```toml
 # .mise.toml
 [tools]
-"go:github.com/ynny-github/agent-sandbox/cmd/agent-sandbox" = "latest"
-"go:github.com/ynny-github/agent-sandbox/cmd/execd" = "latest"
+"github:ynny-github/agent-sandbox" = "latest"
 ```
 
 **Install outside every path the command profile grants write access to** —
-a session will not start otherwise. `go install` already does this.
+a session will not start otherwise. `go install` and mise already do this.
 
 ## Quick start
 

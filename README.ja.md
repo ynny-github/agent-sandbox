@@ -43,17 +43,16 @@ go install github.com/ynny-github/agent-sandbox/cmd/...@latest
 
 `agent-sandbox` と `execd` の両方が入ります。起動スクリプトはどちらも `PATH` から実行します。
 
-[mise](https://mise.jdx.dev/) を使う場合:
+[mise](https://mise.jdx.dev/) を使う場合 (GitHub Releases のビルド済みバイナリが入ります):
 
 ```toml
 # .mise.toml
 [tools]
-"go:github.com/ynny-github/agent-sandbox/cmd/agent-sandbox" = "latest"
-"go:github.com/ynny-github/agent-sandbox/cmd/execd" = "latest"
+"github:ynny-github/agent-sandbox" = "latest"
 ```
 
 **コマンドプロファイルが書き込みを許可するどのパスの外にも置いてください** —
-そうでないとセッションが起動しません。`go install` の既定の挙動がこれにあたります。
+そうでないとセッションが起動しません。`go install` と mise の既定の挙動がこれにあたります。
 
 ## クイックスタート
 

@@ -22,7 +22,7 @@ export HERDR_AGENT=claude   # tells herdr the pane runs claude; drop if unused
 # readable inside the agent's sandbox.
 # In a git worktree, also grant the main repository's .git:
 #   --allow "$(git rev-parse --path-format=absolute --git-common-dir)"
-nono run --allow-cwd --profile "$here/claude-profile.json" \
+nono run --allow-cwd --no-diagnostics --profile "$here/claude-profile.json" \
   --read-file "$(realpath "$(command -v agent-sandbox)")" \
   --read-file "$(realpath "$(command -v execd)")" \
   --read-file "$here/bash" \

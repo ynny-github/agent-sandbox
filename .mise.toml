@@ -1,6 +1,8 @@
 [tools]
 go = "1.25"
 lefthook = "latest"
+node = "latest"
+nono = "0.80.0"
 
 # agent-sandbox is deliberately not pinned as a tool, and this project no
 # longer puts a working-tree bin/ on PATH either. Both would put the built

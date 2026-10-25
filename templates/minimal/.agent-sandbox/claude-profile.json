@@ -16,7 +16,37 @@
   // socket mediation off by default, so /var/run/docker.sock is reachable
   // without a grant. ~/.docker is only for registry credentials, and is not
   // what makes docker work.
-  "filesystem": { "allow": ["/tmp"] },
+  //
+  // ~/.config/ponytail/band is where the ponytail plugin's band writes its
+  // per-project task ledger (<project>.csv) and board.html after every turn.
+  // Without it every turn ends with "ponytail band: could not write the task
+  // ledger". Widens: the agent can rewrite those files, board.html included,
+  // which is a page opened in a browser. Drop the entry if you do not use
+  // ponytail.
+  //
+  // The plugin cache holds every installed plugin's hooks and scripts, which
+  // the agent runs. The nolabs-ai/claude pack already grants all of ~/.claude
+  // read+write (nono 0.80.0); this entry keeps the dependency visible should
+  // the pack narrow that grant.
+  "filesystem": {
+    "allow": ["/tmp", "~/.config/ponytail/band"],
+    "read": ["$HOME/.claude/plugins/cache"]
+  },
+
+  // Plugin hooks that run `node` (ponytail's do) run as the agent's direct
+  // children, under this profile. Without this group the real node under
+  // ~/.local/share/mise is unreadable, the PATH lookup falls through to mise's
+  // shim, and mise -- unable to read its trust records in ~/.local/state/mise
+  // -- refuses .mise.toml: every prompt shows "UserPromptSubmit hook error ...
+  // mise ERROR error parsing config file". The group grants read on
+  // ~/.local/share/mise, ~/.config/mise, /etc/mise and ~/.local/bin/mise; a
+  // read grant carries execute, so the real node on PATH runs and mise never
+  // does.
+  //
+  // Widens: hooks can run any mise-installed tool, and ~/.config/mise is
+  // readable -- keep secrets out of its [env]. Tools reached only through a
+  // mise shim (python3, for one) still fail.
+  "groups": { "include": ["mise_manager"] },
 
   // Network is deliberately NOT blocked here: Claude cannot reach its API
   // without it. The command side is what is confined.

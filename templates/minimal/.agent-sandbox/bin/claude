@@ -11,7 +11,11 @@ here=$(cd "$(dirname "$0")/.." && pwd)
 agent-sandbox doctor --command-profile "$here/command-profile.json" \
   --agent-profile "$here/claude-profile.json"
 
-sock=$(execd up --profile "$here/command-profile.json")
+# NONO_TRUST_PROXY_CA: on macOS, gh (Go) checks TLS only against the system
+# trust store, so nono's proxy CA must be in it for gh to reach GitHub. The
+# first run asks for a password; nono regenerates the CA daily.
+case $(uname) in Darwin) trust_ca=NONO_TRUST_PROXY_CA=1 ;; *) trust_ca= ;; esac
+sock=$(env $trust_ca execd up --profile "$here/command-profile.json")
 trap 'execd down "$sock"' EXIT
 
 export AGENT_SANDBOX_EXECD_SOCKET="$sock"

@@ -68,9 +68,11 @@ agent-sandbox init
 ```
 
 What it writes is a starting point, not a finished boundary. The command
-profile gives commands `$WORKDIR` read/write, an `allow_domain` list covering
-GitHub, six environment variables, and policies for `git` and `ssh` — with
-`ssh` reachable only through `git`. Widen it as you need to; the seeded
+profile gives commands `$WORKDIR` read/write, no network host, six
+environment variables, and policies for `git`, `gh` and `ssh`: `git` reaches
+GitHub, `gh` gets your `gh auth token` through nono's proxy without seeing it,
+and `ssh` is reachable only through `git`. On macOS the launch script adds
+nono's proxy CA to your trust store so `gh` accepts it. Widen it as you need to; the seeded
 `growing-a-nono-profile` skill walks through each change.
 
 **On NixOS the command profile needs one edit.** Executables live in

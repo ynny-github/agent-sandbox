@@ -11,18 +11,19 @@
   // --allow-cwd in non-interactive mode" before any command runs.
   "filesystem": { "allow": ["$WORKDIR"] },
 
-  // This is the floor for commands that have NO entry in command_policies
-  // below -- it is not a ceiling. A declared command carries its own network
-  // grant and is not bounded by this list. Measured: a policy with
-  // network.allow_all reaches the internet even when this says block.
+  // The floor for commands that have NO entry in command_policies below.
+  // It reaches no host: every domain a command needs goes in that command's
+  // own policy, which gets a proxy filtered by its own list (measured,
+  // nono 0.80.0). Not "block": true -- nono's proxy only exists when the
+  // session declares network, and without it every proxy-routed policy
+  // (git, gh) fails at sandbox init. The one entry is a reserved .invalid
+  // name, so it can never resolve.
   //
-  // It is an allow_domain list rather than "block": true because git's policy
-  // below is proxy-routed, and nono's proxy only exists when the session
-  // declares network. With "block": true, git fails at sandbox init with
-  // "proxy-routed network policy was granted but no loopback proxy env was
-  // present" -- every git command, local ones included.
+  // Residual: the floor still reaches api.github.com, without a token (401).
+  // nono adds a credential route's upstream to this list on its own, even
+  // for a route only gh's sandbox receives.
   "network": {
-    "allow_domain": ["github.com", "*.githubusercontent.com"]
+    "allow_domain": ["placeholder.invalid"]
   },
 
   // DO NOT DELETE THIS BLOCK. Without an allow_vars list nono forwards the
@@ -41,7 +42,61 @@
   },
 
   "command_policies": {
+    // gh's token, injected only into gh's sandbox (see gh below). The proxy
+    // runs `gh auth token` on the host and swaps it in on requests to
+    // api.github.com; gh itself only ever sees a phantom GH_TOKEN. The host
+    // needs `gh auth login` done once.
+    //
+    // The source runs when the session starts, and a failing source stops
+    // the session -- every command, not just gh (measured, nono 0.80.0).
+    // The `|| echo` keeps a host without gh, or not logged in, usable: gh
+    // then gets 401 and everything else runs.
+    //
+    // Needs nono 0.80.0 or later. Measured on 0.78.0: with this entry, a
+    // request to api.github.com from ANY command, sent with no token at all,
+    // came back authenticated as the user. 0.80.0 returns 401 to the same
+    // request.
+    "credentials": {
+      "github": {
+        "type": "proxy",
+        "upstream": "https://api.github.com",
+        "source": { "type": "command", "command": "sh", "args": ["-c", "gh auth token 2>/dev/null || echo unavailable"] },
+        "env_var": "GH_TOKEN",
+        "credential_format": "token {}"
+      }
+    },
     "commands": {
+      // gh gets the github credential above and nothing else. A credential
+      // route reaches its upstream without a network key or a session
+      // allow_domain entry (measured, nono 0.80.0).
+      //
+      // Residual: gh can call any GitHub API endpoint as the user -- the
+      // endpoint_policy allows everything. Narrow it with "allow" rules if
+      // that is too much.
+      "gh": {
+        // gh runs git to find the repository (`gh pr list` in a checkout).
+        "can_use": ["git"],
+        "from": {
+          "session": { "sandbox": {
+            // nono refuses a proxy credential granted without an
+            // endpoint_policy -- at run time, not in `profile validate`.
+            "credentials":  [{ "name": "github", "endpoint_policy": { "default": "allow" } }],
+            // nono's shim that hands off to git runs in THIS sandbox and must
+            // resolve the cwd. Measured on macOS, nono 0.80.0: without it
+            // `gh pr list` fails "command-mediation shim cwd failed".
+            "fs_read":      ["$WORKDIR"],
+            "environment":  {
+              "allow_vars": ["PATH", "HOME", "USER", "TERM", "LANG", "LC_ALL"],
+              // gh refuses to start when ~/.config/gh exists but is
+              // unreadable, and it must stay unreadable: hosts.yml can hold
+              // a plaintext token. A missing config dir is fine to gh.
+              // Costs gh aliases and settings.
+              "set_vars": { "GH_CONFIG_DIR": "/nonexistent/gh" }
+            }
+          } }
+        }
+      },
+
       // git gets its own child sandbox. Without an entry here git is not
       // merely unconfined, it is broken: at execd's own grants it cannot read
       // ~/.gitconfig and every invocation dies with
@@ -51,6 +106,13 @@
         // nono rejects the profile if the named command has no entry.
         "can_use": ["ssh"],
         "from": {
+          // Read-only and offline: enough for gh to read remotes and the
+          // current branch. Commands that make gh push or clone through git
+          // (`gh pr create` pushing, `gh repo clone`) are refused.
+          "gh": { "sandbox": {
+            "fs_read_file": ["@git:config-files"],
+            "fs_read":      ["$WORKDIR", "@git:common-dir"]
+          } },
           "session": { "sandbox": {
             // @git: tokens are resolved by nono per repository. Include
             // scopes are excluded, so a repository cannot grant itself host

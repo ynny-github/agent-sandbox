@@ -11,6 +11,13 @@
   // --allow-cwd in non-interactive mode" before any command runs.
   "filesystem": { "allow": ["$WORKDIR"] },
 
+  // mise-installed tools (node, go, ...) on PATH. Without it the real binary
+  // under ~/.local/share/mise is unreadable, PATH falls through to mise's
+  // shim, and mise fails "Operation not permitted". Same group, same reason as
+  // the agent profile. Widens: every command can run any mise-installed tool
+  // and read ~/.config/mise -- keep secrets out of its [env].
+  "groups": { "include": ["mise_manager"] },
+
   // The floor for commands that have NO entry in command_policies below.
   // It reaches no host: every domain a command needs goes in that command's
   // own policy, which gets a proxy filtered by its own list (measured,

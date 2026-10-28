@@ -30,7 +30,7 @@ func defaultRunCommand(ctx context.Context, name string, args ...string) ([]byte
 // values and group references; it does not look at what a profile grants.
 //
 // Warnings are returned rather than treated as failures. The command template
-// raises [allow_all_network] on ssh by design.
+// raises [unsafe_seatbelt_rules] on git by design.
 func Validate(ctx context.Context, fetched []Fetched) ([]string, error) {
 	dir, err := os.MkdirTemp("", "agent-sandbox-init-")
 	if err != nil {

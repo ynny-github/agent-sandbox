@@ -26,9 +26,9 @@
   // (git, gh) fails at sandbox init. The one entry is a reserved .invalid
   // name, so it can never resolve.
   //
-  // Residual: the floor still reaches api.github.com, without a token (401).
-  // nono adds a credential route's upstream to this list on its own, even
-  // for a route only gh's sandbox receives.
+  // Residual: the floor still reaches api.github.com and github.com, without
+  // a token (401). nono adds a credential route's upstream to this list on
+  // its own, even for a route only gh's or git's sandbox receives.
   "network": {
     "allow_domain": ["placeholder.invalid"]
   },
@@ -70,6 +70,19 @@
         "source": { "type": "command", "command": "sh", "args": ["-c", "gh auth token 2>/dev/null || echo unavailable"] },
         "env_var": "GH_TOKEN",
         "credential_format": "token {}"
+      },
+      // The same token for git's HTTPS remotes, injected only into git's
+      // sandbox (see git below). GitHub takes it as Basic auth with any
+      // username; a command credential has no basic_auth mode, so the source
+      // builds the base64 itself. git needs no credential helper: the proxy
+      // injects on every request through git's own proxy, which nothing else
+      // can reach (measured, nono 0.80.0).
+      "github_git": {
+        "type": "proxy",
+        "upstream": "https://github.com",
+        "source": { "type": "command", "command": "sh", "args": ["-c", "t=$(gh auth token 2>/dev/null) || t=unavailable; printf 'x-access-token:%s' \"$t\" | base64"] },
+        "env_var": "NONO_GITHUB_GIT_TOKEN",
+        "credential_format": "Basic {}"
       }
     },
     "commands": {
@@ -108,10 +121,12 @@
       // merely unconfined, it is broken: at execd's own grants it cannot read
       // ~/.gitconfig and every invocation dies with
       // "fatal: unknown error occurred while reading the configuration files".
+      //
+      // Remotes are HTTPS only, and only GitHub. SSH remotes are rewritten to
+      // HTTPS in this sandbox alone (GIT_CONFIG_* below); the host's own git
+      // config and the repository's remote URLs are untouched. ssh is denied
+      // outright below.
       "git": {
-        // ssh is reachable THROUGH git and only through git; see below.
-        // nono rejects the profile if the named command has no entry.
-        "can_use": ["ssh"],
         "from": {
           // Read-only and offline: enough for gh to read remotes and the
           // current branch. Commands that make gh push or clone through git
@@ -154,41 +169,62 @@
             // `git --exec-path` (here AND in fs_read above); these two cover
             // ordinary Linux.
             "exec_paths":   ["/usr/lib/git-core", "/usr/libexec/git-core"],
-            "network":      { "allow_domain": ["github.com", "*.githubusercontent.com"] },
+            // macOS ignores exec_paths: a child may exec only its own binary,
+            // so git cannot start git-remote-https and every HTTPS remote
+            // fails "cannot exec 'git-remote-https': Operation not permitted".
+            // These rules re-allow exec of git's helper directory for Xcode
+            // and the Command Line Tools; Linux ignores them. Do not add
+            // fs_read on the Xcode tree as well -- measured, that breaks
+            // /usr/bin/git's xcrun lookup ("unable to locate xcodebuild").
+            // `nono profile validate` warns [unsafe_seatbelt_rules] here.
+            "unsafe_macos_seatbelt_rules": [
+              "(allow process-exec* (subpath \"/Applications/Xcode.app/Contents/Developer/usr/libexec/git-core\"))",
+              "(allow process-exec* (subpath \"/Library/Developer/CommandLineTools/usr/libexec/git-core\"))"
+            ],
+            // The token reaches github.com through this route and git has no
+            // network key, so github.com is the only host git reaches.
+            //
+            // Residual: git can push to, and read, any repository the token
+            // can. The rules allow git's smart-HTTP endpoints only, not the
+            // rest of github.com; name repositories ("/<owner>/<repo>.git/
+            // info/refs", ...) to narrow further. A repository not named then
+            // fails 403 -- public clones included (measured, nono 0.80.0).
+            "credentials":  [{ "name": "github_git", "endpoint_policy": { "default": "deny", "allow": [
+              { "method": "GET",  "path": "/*/*/info/refs" },
+              { "method": "POST", "path": "/*/*/git-upload-pack" },
+              { "method": "POST", "path": "/*/*/git-receive-pack" }
+            ] } }],
             // The proxy variables are load-bearing HERE, unlike at session
             // level. Measured: without them `git ls-remote https://...` fails
             // with "unable to access"; with them it returns the ref.
-            "environment":  { "allow_vars": [
-              "PATH", "HOME", "USER", "TERM", "LANG", "LC_ALL",
-              "http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY",
-              "no_proxy", "NO_PROXY"
-            ] }
+            "environment":  {
+              "allow_vars": [
+                "PATH", "HOME", "USER", "TERM", "LANG", "LC_ALL",
+                "http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY",
+                "no_proxy", "NO_PROXY"
+              ],
+              // Config for this sandbox alone, layered over the user's. The
+              // empty helper clears inherited ones (osxkeychain cannot run
+              // here); the two rewrites send SSH remotes over HTTPS.
+              "set_vars": {
+                "GIT_CONFIG_COUNT": "3",
+                "GIT_CONFIG_KEY_0": "credential.helper",
+                "GIT_CONFIG_VALUE_0": "",
+                "GIT_CONFIG_KEY_1": "url.https://github.com/.insteadOf",
+                "GIT_CONFIG_VALUE_1": "git@github.com:",
+                "GIT_CONFIG_KEY_2": "url.https://github.com/.insteadOf",
+                "GIT_CONFIG_VALUE_2": "ssh://git@github.com/"
+              }
+            }
           } }
         }
       },
 
-      // ssh exists only so that git can use an SSH remote. "session": "deny"
-      // means the agent cannot invoke ssh itself -- only git can reach it.
-      "ssh": {
-        "from": {
-          "session": "deny",
-          "git": { "sandbox": {
-            // The whole key directory, reachable only through git.
-            "fs_read":       ["~/.ssh"],
-            // Host keys installed system-wide are read from here, not from
-            // ~/.ssh. Without it such a host fails "Host key verification
-            // failed" (measured, nono 0.78.0). Skipped if absent.
-            "fs_read_file":  ["/etc/ssh/ssh_known_hosts"],
-            "fs_write_file": ["~/.ssh/known_hosts"],
-            // `nono profile validate` warns [allow_all_network] here, and the
-            // warning is accepted: ssh cannot be routed through nono's HTTP
-            // proxy, and allow_domain without an enforceable proxy is
-            // rejected outright. There is no narrower form.
-            "network":       { "allow_all": true },
-            "environment":   { "allow_vars": ["PATH", "HOME", "USER", "LANG", "TERM"] }
-          } }
-        }
-      }
+      // No command reaches ssh. git's SSH remotes go over HTTPS (above), so
+      // nothing needs it; without this entry ssh would still run at the floor
+      // and fail on ~/.ssh and the network, with no reason given. A deny edge
+      // builds no sandbox.
+      "ssh": { "from": { "session": "deny" } }
     }
   }
 }
